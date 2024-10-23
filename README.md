@@ -7,6 +7,7 @@ You can install Otter by cloning the repository and installing the necessary dep
 git clone https://github.com/phonism/genesis.git
 cd genesis
 pip install -r requirements.txt
+pytest
 ```
 
 ## Usage
@@ -32,8 +33,23 @@ output = model(input_tensor)
 print(output)
 ```
 #### Running the Example
-+ On GPU: Simply run the script using `python sample.py`
-+ On CPU: Set the environment variable to use Torch as the backend for tensor computations by running `NDARRAY_BACKEND=TORCH python sample.py`
++ Simply run the script using `python sample.py`
+
+## Benchmark
+I conducted performance tests for some layers in the benchmark directory, and the results are as follows. A complete benchmark will be added later.
+```
+# Environment: A100, cuda12.3, torch==2.4.1, triton==3.0.0
+# MultiheadAttention
+torch                cost_time: 0.3594629764556885
+genesis_triton       cost_time: 1.7230677604675293
+genesis_fused_triton cost_time: 0.5845096111297607
+
+# LayerNorm
+torch                cost_time: 0.17989349365234375
+fused_torch          cost_time: 0.020430803298950195
+genesis_triton       cost_time: 0.9555635452270508
+genesis_fused_triton cost_time: 0.058998823165893555
+```
 
 ## Current Supported Features
 + Tensor operations: add, mul, matmul, transpose, split, etc.

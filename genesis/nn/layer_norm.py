@@ -5,12 +5,7 @@ from typing import Optional, List
 import numpy
 from ..autograd import Function, NDArray, Tensor
 from genesis import init
-
-# NOTE: we will numpy as the array_api
-# to backup our computations, this line will change in later homeworks
-#import numpy as array_api
-from ..backend_selection import array_api, NDArray
-
+from ..backend import array_api, NDArray
 import torch
 import triton
 import triton.language as tl
@@ -183,7 +178,6 @@ class FusedLayerNormFunction(Function):
         # also compute partial sums for DW and DB
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
-        # TODO!
         if dy.is_contiguous() is False:
             dy = dy.contiguous()
         _layer_norm_bwd_dx_kernel[(M, )](

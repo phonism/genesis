@@ -7,7 +7,7 @@ from ..autograd import Function, NDArray, Tensor
 from genesis import init
 
 import torch
-from ..backend_selection import array_api, NDArray
+from ..backend import array_api, NDArray
 try:
     # import fused ops
     from .layer_norm import (
@@ -351,7 +351,6 @@ class Matmul(Function):
         dim2 = len(b.shape)
         dim3 = len(out_grad.shape)
 
-        # 如果输出的shape比输入高，说明在前面做了broadcast，那么就要把这些broadcast给sum起来
         if dim3 > dim1:
             a_grad = array_api.sum(a_grad, tuple(range(dim3 - dim1)))
         if dim3 > dim2:
