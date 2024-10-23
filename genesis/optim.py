@@ -124,4 +124,5 @@ class AdamW(Optimizer):
             self.v[theta_id] = v_cur.detach()
             m_next_hat = m_cur / (1 - self.beta1 ** self.t)
             v_next_hat = v_cur / (1 - self.beta2 ** self.t)
-            theta.data -= self.lr * (m_next_hat.data / ((v_next_hat.data ** 0.5) + self.eps) + self.weight_decay * theta.data)
+            theta.data -= self.lr * (m_next_hat.data / ((v_next_hat.data ** 0.5) + self.eps) 
+                    + self.weight_decay * theta.data)

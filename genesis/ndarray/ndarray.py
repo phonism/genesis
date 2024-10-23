@@ -7,14 +7,9 @@ import numpy as np
 import genesis
 
 def prod(x):
-    """
-    prod
-    """
     return reduce(operator.mul, x, 1)
 
-class BackendDevice:
-    """A backend device, wraps the implementation module."""
-
+class Device:
     def __init__(self, name, mod):
         self.name = name
         self.mod = mod
@@ -32,17 +27,9 @@ class BackendDevice:
         return self.mod is not None
 
     def randn(self, *shape, dtype="float32"):
-        # note: numpy doesn't support types within standard random routines, and
-        # .astype("float32") does work if we're generating a singleton
-        # TODO 这里先用torch的rand, 同时暂时先rand在cpu吧,后面应该改成直接rand到gpu
-        #return NDArray(torch.randn(*shape, device="cuda"), device=self)
         return NDArray(torch.randn(*shape), device=self)
 
     def rand(self, *shape, dtype="float32"):
-        # note: numpy doesn't support types within standard random routines, and
-        # .astype("float32") does work if we're generating a singleton
-        # TODO 这里先用torch的rand, 同时暂时先rand在cpu吧,后面应该改成直接rand到gpu
-        #return NDArray(torch.rand(*shape, device="cuda"), device=self)
         return NDArray(torch.rand(*shape), device=self)
 
     def one_hot(self, n, i, dtype="float32"):
@@ -50,12 +37,10 @@ class BackendDevice:
 
     def empty(self, shape, dtype="float32"):
         dtype = "float32" if dtype is None else dtype
-        #assert dtype == "float32"
         return NDArray.make(shape, device=self)
 
     def full(self, shape, fill_value, dtype="float32"):
         dtype = "float32" if dtype is None else dtype
-        #assert dtype == "float32"
         arr = self.empty(shape, dtype)
         arr.fill(fill_value)
         return arr
@@ -63,12 +48,15 @@ class BackendDevice:
 def cpu():
     """Return cuda device"""
     from . import ndarray_ops_cpu
-    return BackendDevice("cpu", ndarray_ops_cpu)
+    return Device("cpu", ndarray_ops_cpu)
 
 def cuda():
     """Return cuda device"""
-    from . import ndarray_ops_gpu
-    return BackendDevice("cuda", ndarray_ops_gpu)
+    try:
+        from . import ndarray_ops_gpu
+        return Device("cuda", ndarray_ops_gpu)
+    except:
+        return Device("cuda", None)
 
 def default_device():
     return cpu()
@@ -100,9 +88,6 @@ class NDArray:
         array.data = array.device.array(shape)
         return array
 
-    def compact(self):
-        return NDArray(self.data.contiguous())
-
     def fill(self, value):
         """ Fill (in place) with a constant value. """
         self.data.fill_(value)
@@ -116,9 +101,6 @@ class NDArray:
     def numpy(self):
         return self.data.cpu().numpy()
 
-    def to_numpy(self):
-        return self.data.copy_to_host()
-
     @property
     def dtype(self):
         return self.data.dtype
@@ -126,13 +108,6 @@ class NDArray:
     @property
     def shape(self):
         return self.data.shape
-
-    @property
-    def stride(self):
-        return self.data.stride()
-
-    def stride(self, dim):
-        return self.data.stride(dim)
 
     @property
     def device(self):

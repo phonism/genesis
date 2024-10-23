@@ -6,10 +6,7 @@ import numpy as np
 from ..autograd import Function, NDArray, Tensor
 from genesis import init
 
-# NOTE: we will numpy as the array_api
-# to backup our computations, this line will change in later homeworks
-#import numpy as array_api
-from ..backend_selection import array_api, NDArray
+from ..backend import array_api, NDArray
 
 import torch
 import triton
@@ -69,28 +66,6 @@ def _attn_fwd_inner(
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
     return acc, l_i, m_i
 
-
-# We don't run auto-tuning every time to keep the tutorial fast. Keeping
-# the code below and commenting out the equivalent parameters is convenient for
-# re-tuning.
-configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w) \
-    for BM in [64, 128]\
-    for BN in [32, 64]\
-    for s in ([1] if is_hip() else [3, 4, 7])\
-    for w in [4, 8]\
-]
-
-
-def keep(conf):
-    BLOCK_M = conf.kwargs["BLOCK_M"]
-    BLOCK_N = conf.kwargs["BLOCK_N"]
-    if BLOCK_M * BLOCK_N < 128 * 128 and conf.num_warps == 8:
-        return False
-    return True
-
-
-#@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
 def _attn_fwd(Q, K, V, sm_scale, M, Out,
         stride_qz, stride_qh, stride_qm, stride_qk,

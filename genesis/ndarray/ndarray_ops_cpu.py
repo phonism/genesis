@@ -2,12 +2,6 @@ import torch
 import operator
 from functools import reduce
 
-def prod(x):
-    """
-    prod
-    """
-    return reduce(operator.mul, x, 1)
-
 def add(x, y):
     return x + y
 

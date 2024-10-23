@@ -3,9 +3,7 @@ from typing import List, Optional, NamedTuple, Tuple, Union
 
 import numpy
 from genesis import init
-#import numpy as array_api
-#NDArray = numpy.ndarray
-from .backend_selection import Device, array_api, NDArray, default_device
+from .backend import Device, array_api, NDArray, default_device
 import operator
 from functools import reduce
 

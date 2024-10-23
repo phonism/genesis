@@ -7,7 +7,6 @@ import genesis
 from ..autograd import Tensor
 import genesis.nn.functional as F
 from genesis import init
-import genesis.backend_ndarray as nd
 import numpy as np
 
 class Parameter(Tensor):
@@ -97,17 +96,17 @@ class Module:
             if isinstance(param, genesis.Tensor):
                 state_dict[prefix + name] = param
             elif isinstance(param, Module):
-                state_dict.update(param.state_dict(prefix + name + '.'))
+                state_dict.update(param.state_dict(prefix + name + "."))
             elif isinstance(param, (list, tuple)):
                 for idx, v in enumerate(param):
-                    state_dict.update(v.state_dict(prefix + name + '.' + str(idx) + "."))
+                    state_dict.update(v.state_dict(prefix + name + "." + str(idx) + "."))
         return state_dict
 
     def load_state_dict(self, state_dict, strict=True):
         missing_keys = []
         unexpected_keys = list(state_dict.keys())
 
-        def load(module, prefix=''):
+        def load(module, prefix=""):
             for name, param in module.__dict__.items():
                 full_name = prefix + name
 
@@ -118,16 +117,12 @@ class Module:
                         unexpected_keys.remove(full_name)
                     elif strict:
                         missing_keys.append(full_name)
-
-                # 如果是一个子模块，则递归调用
                 elif isinstance(param, Module):
-                    load(param, full_name + '.')
-
-                # 如果是列表或元组，递归地加载它们的元素
+                    load(param, full_name + ".")
                 elif isinstance(param, (list, tuple)):
                     for idx, sub_param in enumerate(param):
                         if isinstance(sub_param, Module):
-                            load(sub_param, full_name + '.' + str(idx) + '.')
+                            load(sub_param, full_name + "." + str(idx) + ".")
 
         load(self)
 
@@ -157,7 +152,6 @@ class Module:
             self._children()[idx].cuda()
 
     def forward(self, *args, **kwargs):
-        """定义forward方法。子类需要重写此方法。"""
         raise NotImplementedError("forward method not implemented.")
 
     def __call__(self, *args, **kwargs):
@@ -266,7 +260,7 @@ class LayerNorm(Module):
 
     def forward(self, x):
         if x.shape[-1] != self.dim:
-            raise RuntimeError('Input dims should be %d' % self.dim)
+            raise RuntimeError("Input dims should be %d" % self.dim)
         mean = F.summation(x, axis=-1) / x.shape[-1]
         mean = F.broadcast_to(F.reshape(mean, mean.shape + (1,)), x.shape)
         var = F.summation((x - mean) ** 2, axis=-1) / self.dim

@@ -6,50 +6,7 @@ import operator
 from functools import reduce
 
 def prod(x):
-    """
-    prod
-    """
     return reduce(operator.mul, x, 1)
-
-def get_cuda_autotune_config():
-    return [
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
-                      num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
-                      num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
-                      num_warps=2),
-        # Good config for fp8 inputs.
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=3,
-                      num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=3,
-                      num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4)
-    ]
-
-def get_autotune_config():
-    return get_cuda_autotune_config()
 
 @triton.jit
 def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -182,10 +139,6 @@ def sqrt_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     output = tl.sqrt(x)
     tl.store(output_ptr + offsets, output, mask=mask)
 
-#@triton.autotune(
-        #configs=get_autotune_config(),
-        #key=['M', 'N', 'K'],
-#)
 @triton.jit
 def matmul_kernel(
         a_ptr, b_ptr, c_ptr,
@@ -241,14 +194,13 @@ def sum_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.const
     """
     pid_m = tl.program_id(axis=0)
     m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    m_mask = m_offset < M  # 计算行掩码
+    m_mask = m_offset < M
     out = tl.zeros((BLOCK_M,), dtype=tl.float32) 
-    # 分块处理列数据
     for start in range(0, N, BLOCK_N):
         n_offset = start + tl.arange(0, BLOCK_N)
         offset = m_offset[:, None] * N + n_offset[None, :]
-        n_mask = n_offset < N  # 计算列掩码
-        mask = m_mask[:, None] & n_mask[None, :]  # 组合掩码
+        n_mask = n_offset < N
+        mask = m_mask[:, None] & n_mask[None, :]
         inp = tl.load(x_ptr + offset, mask=mask, other=0)
         out += tl.sum(inp, axis=1)
 
@@ -258,17 +210,16 @@ def sum_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.const
 def max_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     pid_m = tl.program_id(axis=0)
     m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    m_mask = m_offset < M  # 行掩码
+    m_mask = m_offset < M
     
-    # 初始化输出为最小的可能值
-    out = tl.full((BLOCK_M,), -float('inf'), dtype=tl.float32)
+    out = tl.full((BLOCK_M,), -float("inf"), dtype=tl.float32)
 
     for start in range(0, N, BLOCK_N):
         n_offset = start + tl.arange(0, BLOCK_N)
         offset = m_offset[:, None] * N + n_offset[None, :]
-        n_mask = n_offset < N  # 列掩码
-        mask = m_mask[:, None] & n_mask[None, :]  # 组合掩码
-        inp = tl.load(x_ptr + offset, mask=mask, other=-float('inf'))
+        n_mask = n_offset < N
+        mask = m_mask[:, None] & n_mask[None, :]
+        inp = tl.load(x_ptr + offset, mask=mask, other=-float("inf"))
         out = tl.maximum(out, tl.max(inp, axis=1))
                                                                                         
     tl.store(output_ptr + m_offset, out, mask=m_mask)
@@ -503,7 +454,7 @@ def matmul(a, b, activation=""):
         # Allocates output.
         c = torch.empty((M, N), device=torch.device("cuda"), dtype=a.dtype)
         # 1D launch kernel where each block gets its own program.
-        grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+        grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
         matmul_kernel[grid](
                 a, b, c,
                 M, N, K,
@@ -546,7 +497,7 @@ def matmul(a, b, activation=""):
         c = torch.empty((max(pre_a, pre_b), M, N), device=torch.device("cuda"), dtype=a.dtype)
 
         # 1D launch kernel where each block gets its own program.
-        grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+        grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
         for i in range(max(pre_a, pre_b)):
             matmul_kernel[grid](
                     aa[i], bb[i], c[i],
