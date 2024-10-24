@@ -143,13 +143,16 @@ class Module:
         for m in self._children():
             m.training = False
 
-    def cuda(self):
+    def to(self, device):
+        self.cuda(device)
+
+    def cuda(self, device_name="cuda"):
         for idx in range(len(self.parameters())):
-            self.parameters()[idx].set_device()
+            self.parameters()[idx].set_device(device_name)
         for idx in range(len(self.vars())):
-            self.vars()[idx].set_device()
+            self.vars()[idx].set_device(device_name)
         for idx in range(len(self._children())):
-            self._children()[idx].cuda()
+            self._children()[idx].cuda(device_name)
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError("forward method not implemented.")
@@ -180,24 +183,24 @@ class Linear(Module):
         self.bias = None
         if bias:
             self.bias = Parameter(
-                    F.transpose(init.kaiming_uniform(self.out_features, 1)),
+                    init.kaiming_uniform(self.out_features, 1).reshape(self.out_features),
                     device=device, dtype=dtype)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = F.matmul(x, self.weight)
+        x = x @ self.weight
         if self.bias:
-            x = x + F.broadcast_to(F.reshape(self.bias, (1,) * (len(x.shape) - 1) + (self.out_features,)), x.shape)
+            x = x + self.bias
         return x
 
 
 class Flatten(Module):
     def forward(self, x) -> Tensor:
-        return F.reshape(x, (x.shape[0], -1))
+        return x.reshape(x.shape[0], -1)
 
 
 class ReLU(Module):
     def forward(self, x: Tensor) -> Tensor:
-        x = F.relu(x)
+        x = genesis.relu(x)
         return x
 
 
@@ -237,17 +240,13 @@ class BatchNorm1d(Module):
             batch = x.shape[0]
             mean = F.summation(x, axis=0) / batch
             self.running_mean = (self.momentum * mean.detach() + (1 - self.momentum) * self.running_mean).detach()
-            mean = F.broadcast_to(F.reshape(mean, (1, self.dim)), x.shape)
             var = F.summation((x - mean) ** 2, axis=0) / batch
             self.running_var = (self.momentum * var.detach() + (1 - self.momentum) * self.running_var).detach()
-            var = F.broadcast_to(F.reshape(var, (1, self.dim)), x.shape)
         else:
-            mean = self.running_mean.reshape((1, self.dim)).broadcast_to(x.shape)
-            var = self.running_var.reshape((1, self.dim)).broadcast_to(x.shape)
+            mean = self.running_mean
+            var = self.running_var
         x = (x - mean) / (var + self.eps) ** 0.5
-        w = F.broadcast_to(F.reshape(self.weight, (1, self.dim)), x.shape)
-        b = F.broadcast_to(F.reshape(self.bias, (1, self.dim)), x.shape)
-        x = w * x + b
+        x = self.weight * x + self.bias
         return x
 
 class LayerNorm(Module):
@@ -261,14 +260,10 @@ class LayerNorm(Module):
     def forward(self, x):
         if x.shape[-1] != self.dim:
             raise RuntimeError("Input dims should be %d" % self.dim)
-        mean = F.summation(x, axis=-1) / x.shape[-1]
-        mean = F.broadcast_to(F.reshape(mean, mean.shape + (1,)), x.shape)
-        var = F.summation((x - mean) ** 2, axis=-1) / self.dim
-        var = F.broadcast_to(F.reshape(var, var.shape + (1,)), x.shape)
-        weight = F.broadcast_to(F.reshape(self.weight, (1, ) * (len(x.shape) - 1) + (self.dim,)), x.shape)
-        bias = F.broadcast_to(F.reshape(self.bias, (1, ) * (len(x.shape) - 1) + (self.dim,)), x.shape)
+        mean = F.summation(x, axis=-1, keepdims=True) / x.shape[-1]
+        var = F.summation((x - mean) ** 2, axis=-1, keepdims=True) / self.dim
         output = (x - mean) / F.sqrt(var + self.eps)
-        output = weight * output + bias
+        output = self.weight * output + self.bias
         return output
 
 class FusedLayerNorm(Module):
@@ -292,10 +287,8 @@ class RMSNorm(Module):
     def forward(self, x):
         x_square = x ** 2
         x_mean = F.summation(x_square, axis=-1) / x_square.shape[-1]
-        x_mean = F.broadcast_to(F.reshape(x_mean, x_mean.shape + (1,)), x.shape)
         rms = x / F.sqrt(x_mean + self.eps)
-        weight = F.broadcast_to(F.reshape(self.weight, (1, ) * (len(x.shape) - 1) + (self.dim,)), x.shape)
-        return rms * weight
+        return rms * self.weight
 
 class SoftmaxLoss(Module):
     def forward(self, logits: Tensor, y: Tensor) -> Tensor:
@@ -312,8 +305,8 @@ class Softmax(Module):
         self.dim = dim
 
     def forward(self, x: Tensor) -> Tensor:
-        x_exp = F.exp(x - F.broadcast_to(F.max(x, self.dim, keepdims=True), x.shape))
-        x = x_exp / F.broadcast_to(F.summation(x_exp, axis=self.dim, keepdims=True), x.shape)
+        x_exp = F.exp(x - F.max(x, self.dim, keepdims=True))
+        x = x_exp / F.summation(x_exp, axis=self.dim, keepdims=True)
         return x
 
 class Embedding(Module):
@@ -335,12 +328,12 @@ class RotaryEmbedding(Module):
 
         self.max_seq_len_cached = max_position_embeddings
         t = genesis.Tensor(np.arange(self.max_seq_len_cached, dtype="float32"))
-        t = F.reshape(t, (t.shape[0], 1))
-        self.inv_freq = F.reshape(self.inv_freq, (1, self.inv_freq.shape[0]))
+        t = t.reshape(t.shape[0], 1)
+        self.inv_freq = self.inv_freq.reshape(1, self.inv_freq.shape[0])
         freqs = t @ self.inv_freq
-        emb = F.reshape(F.stack((freqs, freqs), dim=-1).transpose(), (freqs.shape[0], freqs.shape[1] * 2))
-        self.cos_cached = F.reshape(emb.cos(), (1, 1) + (emb.shape))
-        self.sin_cached = F.reshape(emb.sin(), (1, 1) + (emb.shape))
+        emb = F.stack((freqs, freqs), dim=-1).transpose().reshape(freqs.shape[0], freqs.shape[1] * 2)
+        self.cos_cached = emb.cos().reshape((1, 1) + (emb.shape))
+        self.sin_cached = emb.sin().reshape((1, 1) + (emb.shape))
 
     def forward(self, x, seq_len=None):
         return (
@@ -385,12 +378,11 @@ class MultiheadAttention(Module):
         self.softmax = Softmax()
 
     def forward(self, x: Tensor) -> Tensor:
-        q, k, v = F.split(F.reshape(x @ self.w_qkv, (x.shape[0], x.shape[1], 3, self.dim)), axis=2)
-        q, k, v = [F.reshape(a, (x.shape[0], x.shape[1], self.heads, self.dim // self.heads)).transpose((1, 2)) for a in [q, k, v]]
+        q, k, v = F.split((x @ self.w_qkv).reshape(x.shape[0], x.shape[1], 3, self.dim), axis=2)
+        q, k, v = [a.reshape(x.shape[0], x.shape[1], self.heads, self.dim // self.heads).transpose((1, 2)) for a in [q, k, v]]
         mask = genesis.triu((-float("inf") * init.ones(x.shape[1], x.shape[1], device=x.device)), k=1, device=x.device)
-        mask = F.broadcast_to(F.reshape(mask, (1, 1,) + mask.shape), (k.shape[0], k.shape[1],) + mask.shape)
         atten = self.softmax(q @ F.transpose(k) / np.sqrt(self.dim // self.heads) + mask)
-        return F.reshape((atten @ v).transpose((1, 2)), (x.shape[0], x.shape[1], self.dim)) @ self.w_out, atten
+        return (atten @ v).transpose((1, 2)).reshape(x.shape[0], x.shape[1], self.dim) @ self.w_out, atten
 
 class FusedMultiheadAttention(Module):
     def __init__(self, dim=64, heads=1, device=None, dtype="float32"):
@@ -405,6 +397,6 @@ class FusedMultiheadAttention(Module):
         self.softmax = Softmax()
 
     def forward(self, x: Tensor) -> Tensor:
-        q, k, v = F.split(F.reshape(x @ self.w_qkv, (x.shape[0], x.shape[1], 3, self.dim)), axis=2)
-        q, k, v = [F.reshape(a, (x.shape[0], x.shape[1], self.heads, self.dim // self.heads)).transpose((1, 2)) for a in [q, k, v]]
-        return F.reshape(F.fused_attention(q, k, v).transpose((1, 2)), (x.shape[0], x.shape[1], self.dim)) @ self.w_out, None
+        q, k, v = F.split((x @ self.w_qkv).reshape(x.shape[0], x.shape[1], 3, self.dim), axis=2)
+        q, k, v = [a.reshape(x.shape[0], x.shape[1], self.heads, self.dim // self.heads).transpose((1, 2)) for a in [q, k, v]]
+        return F.fused_attention(q, k, v).transpose((1, 2)).reshape(x.shape[0], x.shape[1], self.dim) @ self.w_out, None

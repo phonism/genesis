@@ -133,6 +133,14 @@ class Tensor:
         self.data = data
         self.requires_grad = requires_grad
         self.creator = None
+        self.hooks = []
+
+    def register_hook(self, hook):
+        self.hooks.append(hook)
+
+    def apply_hooks(self, grad):
+        for hook in self.hooks:
+            hook(grad)
 
     def __del__(self):
         global TENSOR_COUNTER
@@ -178,12 +186,14 @@ class Tensor:
     def backward(self, out_grad=None):
         out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)
         self.grad = out_grad
+        self.apply_hooks(self.grad)
         node_to_output_grads_list: Dict[Tensor, List[Tensor]] = {}
         node_to_output_grads_list[self] = [out_grad]
 
         topo_order = topo_sort(self)
         for node in reversed(topo_order):
             node.grad = reduce(operator.add, node_to_output_grads_list[node])
+            node.apply_hooks(node.grad)
             if node.creator is not None:
                 for nd in node.creator.inputs:
                     if nd not in node_to_output_grads_list:
@@ -208,8 +218,12 @@ class Tensor:
         data = self.data
         return data.device
 
-    def set_device(self):
-        self.data = array_api.array(self.data, device=genesis.cuda())
+    def to(self, device):
+        tensor = Tensor(self, device=genesis.device(device))
+        return tensor
+
+    def set_device(self, device_name):
+        self.data = array_api.array(self.data, device=genesis.device(device_name))
 
     def __repr__(self):
         return "Id:" + str(id(self)) + " Tensor(" + str(self.data) + ")"
@@ -285,7 +299,9 @@ class Tensor:
     def transpose(self, axis=None):
         return genesis.nn.functional.transpose(self, axis)
 
-    def reshape(self, shape):
+    def reshape(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = shape[0]
         return genesis.nn.functional.reshape(self, shape)
 
     def summation(self, axis=None, keepdims=False):

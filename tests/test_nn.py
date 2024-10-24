@@ -60,6 +60,27 @@ def test_batchnorm1d(shape, device):
     TC.sum().backward()
     np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=1e-5, rtol=1e-5)
 
+@pytest.mark.parametrize("shape", NN_BASE_SHAPES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_linear(shape, device):
+    _A = np.random.randn(*shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device)
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    T_linear = torch.nn.Linear(shape[1], 10)
+    TC = T_linear(TA)
+    linear = genesis.nn.Linear(shape[1], 10)
+    linear.weight = genesis.nn.Parameter(T_linear.weight.detach().numpy().T)
+    linear.bias = genesis.nn.Parameter(T_linear.bias.detach().numpy())
+    if device == genesis.cuda():
+        linear.cuda()
+    C = linear(A)
+    np.testing.assert_allclose(TC.detach().numpy(), C.detach().numpy(), atol=1e-5, rtol=1e-5)
+
+    C.sum().backward()
+    TC.sum().backward()
+    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=1e-5, rtol=1e-5)
+
 @pytest.mark.parametrize("shape", SOFTMAX_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_layernorm(shape, device):

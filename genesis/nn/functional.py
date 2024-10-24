@@ -17,6 +17,17 @@ try:
 except:
     pass
 
+def sum_to_shape(data, shape):
+    """Sum the array `data` to match the target `shape`."""
+    # Calculate which axes need to be summed
+    while len(data.shape) > len(shape):
+        data = data.sum(axis=0)
+                                
+    for i, (dim, target_dim) in enumerate(zip(data.shape, shape)):
+        if target_dim == 1:
+            data = data.sum(axis=i, keepdims=True) 
+    return data
+
 class EWiseAdd(Function):
     @staticmethod
     def forward(ctx, a, b):
@@ -25,9 +36,12 @@ class EWiseAdd(Function):
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
-        grad_a = Tensor(out_grad.data, requires_grad=False)
-        grad_b = Tensor(out_grad.data, requires_grad=False)
-        return (grad_a, grad_b)
+        a, b = ctx.saved_tensors
+        grad_a = out_grad.data
+        grad_b = out_grad.data
+        grad_a = sum_to_shape(grad_a, a.shape)
+        grad_b = sum_to_shape(grad_b, b.shape)
+        return (Tensor(grad_a, requires_grad=False), Tensor(grad_b, requires_grad=False))
 
 def add(a, b):
     return EWiseAdd.apply(a, b)
@@ -75,9 +89,12 @@ class EWiseMul(Function):
     @staticmethod
     def backward(ctx, out_grad: Tensor):
         a, b = ctx.saved_tensors
-        grad_a = Tensor(out_grad.data * b.data, requires_grad=False)
-        grad_b = Tensor(out_grad.data * a.data, requires_grad=False)
-        return (grad_a, grad_b)
+        grad_a = out_grad.data * b.data
+        grad_b = out_grad.data * a.data
+
+        grad_a = sum_to_shape(grad_a, a.shape)
+        grad_b = sum_to_shape(grad_b, b.shape)
+        return (Tensor(grad_a, requires_grad=False), Tensor(grad_b, requires_grad=False))
 
 
 def multiply(a, b):
@@ -110,9 +127,11 @@ class EWiseDiv(Function):
     @staticmethod
     def backward(ctx, out_grad):
         a, b = ctx.saved_tensors
-        grad_a = Tensor(out_grad.data / b.data, requires_grad=False)
-        grad_b = Tensor(out_grad.data * (-1) * a.data / b.data / b.data, requires_grad=False)
-        return (grad_a, grad_b)
+        grad_a = out_grad.data / b.data
+        grad_b = out_grad.data * (-1) * a.data / b.data / b.data
+        grad_a = sum_to_shape(grad_a, a.shape)
+        grad_b = sum_to_shape(grad_b, b.shape)
+        return (Tensor(grad_a, requires_grad=False), Tensor(grad_b, requires_grad=False))
 
 def divide(a, b):
     return EWiseDiv.apply(a, b)
@@ -325,7 +344,6 @@ class Summation(Function):
 
         grad = Tensor(array_api.broadcast_to(
             array_api.reshape(out_grad.data, grad_shape), hs.shape), requires_grad=False)
-        #grad = Tensor(hs.data, requires_grad=False)
         return (grad, )
 
 def summation(a, axis=None, keepdims=False):
