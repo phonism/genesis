@@ -68,11 +68,11 @@ def ge(x, y):
 def matmul(a, b, activation=""):
     return a @ b
 
-def from_numpy(data):
+def from_numpy(data, device_id=None):
     return torch.from_numpy(data)
 
-def from_tensor(data):
+def from_tensor(data, device_id=None):
     return data
 
-def array(shape):
+def array(shape, device_id=None):
     return torch.empty(shape, device=torch.device("cpu"), dtype=torch.float32)

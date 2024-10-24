@@ -10,9 +10,10 @@ def prod(x):
     return reduce(operator.mul, x, 1)
 
 class Device:
-    def __init__(self, name, mod):
+    def __init__(self, name, mod, device_id=None):
         self.name = name
         self.mod = mod
+        self.device_id = device_id
 
     def __eq__(self, other):
         return self.name == other.name
@@ -45,16 +46,27 @@ class Device:
         arr.fill(fill_value)
         return arr
 
+def device(device_name):
+    if isinstance(device_name, int):
+        return cuda(device_name)
+    if device_name == "cuda":
+        return cuda(0)
+    elif device_name == "cpu":
+        return cpu()
+    elif device_name.find("cuda") != -1:
+        device_id = int(device_name.split("cuda:")[-1])
+        return cuda(device_id)
+
 def cpu():
     """Return cuda device"""
     from . import ndarray_ops_cpu
     return Device("cpu", ndarray_ops_cpu)
 
-def cuda():
+def cuda(index=0):
     """Return cuda device"""
     try:
         from . import ndarray_ops_gpu
-        return Device("cuda", ndarray_ops_gpu)
+        return Device("cuda", ndarray_ops_gpu, index)
     except:
         return Device("cuda", None)
 
@@ -70,16 +82,16 @@ class NDArray:
         if isinstance(data, np.ndarray):
             device = device if device is not None else default_device()
             self._device = device
-            self.data = self._device.from_numpy(data)
+            self.data = self._device.from_numpy(data, device_id=self._device.device_id)
         elif isinstance(data, NDArray):
             self._device = device
-            self.data = self._device.from_tensor(data.data)
+            self.data = self._device.from_tensor(data.data, device_id=self._device.device_id)
         elif isinstance(data, torch.Tensor):
             self._device = device
-            self.data = self._device.from_tensor(data)
+            self.data = self._device.from_tensor(data, device_id=self._device.device_id)
         else:
             self._device = device
-            self.data = self._device.from_numpy(np.array(data, dtype=np.float32))
+            self.data = self._device.from_numpy(np.array(data, dtype=np.float32), device_id=self._device.device_id)
 
     @staticmethod
     def make(shape, device=None):

@@ -4,6 +4,7 @@ from .ndarray import (
         all_devices,
         cpu,
         cuda,
+        device,
         default_device,
         Device,
 )
