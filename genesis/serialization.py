@@ -1,4 +1,5 @@
 import pickle
+import dill as pickle
 import os
 import shutil
 
