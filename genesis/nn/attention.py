@@ -11,6 +11,7 @@ from ..backend import array_api, NDArray
 import torch
 import triton
 import triton.language as tl
+import os
 
 
 def is_hip():
@@ -424,13 +425,14 @@ class FusedAttention(Function):
         HEAD_DIM_V = v.shape[-1]
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
         assert HEAD_DIM_K in {4, 8, 16, 32, 64, 128, 256}
-        o = torch.empty_like(q)
+        o = torch.empty_like(q, device=q.device)
         stage = 3 if causal else 1
         extra_kern_args = {}
         sm_scale = 1 / np.sqrt(HEAD_DIM_K)
 
         grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+
         _attn_fwd[grid](
                 q, k, v, sm_scale, M, o,
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),
@@ -472,9 +474,9 @@ class FusedAttention(Function):
         if M.is_contiguous() is False:
             M = M.contiguous()
 
-        dq = torch.empty_like(q)
-        dk = torch.empty_like(k)
-        dv = torch.empty_like(v)
+        dq = torch.empty_like(q, device=q.device)
+        dk = torch.empty_like(k, device=q.device)
+        dv = torch.empty_like(v, device=q.device)
         BATCH, N_HEAD, N_CTX = q.shape[:3]
         NUM_WARPS, NUM_STAGES = 4, 5
         BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 32, 32, 32
@@ -485,7 +487,7 @@ class FusedAttention(Function):
         PRE_BLOCK = 32
         assert N_CTX % PRE_BLOCK == 0
         pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-        delta = torch.empty_like(M)
+        delta = torch.empty_like(M, device=q.device)
         _attn_bwd_preprocess[pre_grid](
                 o, do,
                 delta,

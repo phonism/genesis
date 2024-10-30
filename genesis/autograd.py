@@ -181,7 +181,7 @@ class Tensor:
     def copy_(self, value):
         assert isinstance(value, Tensor)
         assert value.dtype == self.dtype, "%s %s" % (value.dtype, self.dtype)
-        self.data = value.data
+        self.data = value.data.clone()
 
     def backward(self, out_grad=None):
         out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)

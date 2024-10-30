@@ -387,7 +387,7 @@ def reduce_sum(x, axis=None, keepdims=False):
         axis = (axis,)
     else:
         axis = tuple(axis)
-
+    
     # Create a permutation that moves all axes to be reduced to the end
     axes_to_keep = tuple(i for i in range(ndim) if i not in axis)
     new_order = axes_to_keep + axis
@@ -407,7 +407,7 @@ def reduce_sum(x, axis=None, keepdims=False):
         for i in axis:
             output_shape[i] = 1
         output_shape = tuple(output_shape)
-    output = torch.empty(output_shape, device=torch.device("cuda"), dtype=x.dtype)
+    output = torch.empty(output_shape, device=x.device, dtype=x.dtype)
 
     if x.is_contiguous() is False:
         x = x.contiguous()
@@ -450,7 +450,7 @@ def reduce_max(x, axis=None, keepdims=False):
         for i in axis:
             output_shape[i] = 1
         output_shape = tuple(output_shape)
-    output = torch.empty(output_shape, device=torch.device("cuda"), dtype=x.dtype)
+    output = torch.empty(output_shape, device=x.device, dtype=x.dtype)
 
     block_m = 4
     block_n = min(triton.next_power_of_2(n), 1024)
@@ -532,6 +532,7 @@ def matmul(a, b, activation=""):
             if pre_b == 1:
                 bb = bb.broadcast_to(aa.shape[0], bb.shape[1], bb.shape[2])
 
+
         M = a_shape[-2]
         N = b_shape[-1]
         K = a_shape[-1]
@@ -555,8 +556,13 @@ def matmul(a, b, activation=""):
             )
         if pre_a > pre_b:
             c = c.reshape(tuple(pre_shape_a) + (M, N))
-        else:
+        elif pre_a < pre_b:
             c = c.reshape(tuple(pre_shape_b) + (M, N))
+        else:
+            if len(pre_shape_a) > len(pre_shape_b):
+                c = c.reshape(tuple(pre_shape_a) + (M, N))
+            else:
+                c = c.reshape(tuple(pre_shape_b) + (M, N))
         return c
     else:
         return None

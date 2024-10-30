@@ -51,6 +51,6 @@ def benchmark(B, S, H, D, provider):
     torch.cuda.synchronize()
     print(provider, "cost_time:", all_time)
 
-benchmark(1, 512, 4, 128, "torch               ")
-benchmark(1, 512, 4, 128, "genesis_triton      ")
-benchmark(1, 512, 4, 128, "genesis_fused_triton")
+benchmark(1, 512, 8, 64, "torch               ")
+benchmark(1, 512, 8, 64, "genesis_triton      ")
+benchmark(1, 512, 8, 64, "genesis_fused_triton")

@@ -22,3 +22,14 @@ class DistributedDataParallel(genesis.nn.Module):
     def forward(self, *inputs, **kwargs):
         return self.model(*inputs, **kwargs)
 
+    def state_dict(self, prefix=""):
+        return self.model.state_dict(prefix=prefix)
+
+    def load_state_dict(self, state_dict, strict=True):
+        return self.model.load_state_dict(state_dict, strict=strict)
+
+    def parameters(self):
+        return self.model.parameters()
+    
+    def num_parameters(self):
+        return self.model.num_parameters()

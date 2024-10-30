@@ -173,7 +173,7 @@ class FusedLayerNormFunction(Function):
         dw = torch.empty((N, ), dtype=w.dtype, device=w.device)
         db = torch.empty((N, ), dtype=w.dtype, device=w.device)
         dy = out_grad.data.data
-        dx = torch.empty_like(dy)
+        dx = torch.empty_like(dy, device=dy.device)
         # enqueue kernel using forward pass heuristics
         # also compute partial sums for DW and DB
         x_arg = x.reshape(-1, x.shape[-1])

@@ -97,7 +97,7 @@ class NDArray:
     def make(shape, device=None):
         array = NDArray.__new__(NDArray)
         array._device = device if device is not None else default_device()
-        array.data = array.device.array(shape)
+        array.data = array.device.array(shape, device_id=array._device.device_id)
         return array
 
     def fill(self, value):

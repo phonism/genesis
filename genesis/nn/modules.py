@@ -94,12 +94,14 @@ class Module:
         state_dict = {}
         for name, param in self.__dict__.items():
             if isinstance(param, genesis.Tensor):
-                state_dict[prefix + name] = param
+                # TODO: we need to dump genesis.Tensor
+                state_dict[prefix + name] = param.data.data
             elif isinstance(param, Module):
                 state_dict.update(param.state_dict(prefix + name + "."))
             elif isinstance(param, (list, tuple)):
                 for idx, v in enumerate(param):
-                    state_dict.update(v.state_dict(prefix + name + "." + str(idx) + "."))
+                    if isinstance(v, Module):
+                        state_dict.update(v.state_dict(prefix + name + "." + str(idx) + "."))
         return state_dict
 
     def load_state_dict(self, state_dict, strict=True):
@@ -113,7 +115,7 @@ class Module:
                 # 如果是一个 Tensor，则直接从 state_dict 中加载
                 if isinstance(param, genesis.Tensor):
                     if full_name in state_dict:
-                        param.copy_(state_dict[full_name])
+                        param.data.data.copy_(state_dict[full_name])
                         unexpected_keys.remove(full_name)
                     elif strict:
                         missing_keys.append(full_name)
@@ -286,7 +288,7 @@ class RMSNorm(Module):
 
     def forward(self, x):
         x_square = x ** 2
-        x_mean = F.summation(x_square, axis=-1) / x_square.shape[-1]
+        x_mean = F.summation(x_square, axis=-1, keepdims=True) / x_square.shape[-1]
         rms = x / F.sqrt(x_mean + self.eps)
         return rms * self.weight
 
@@ -394,7 +396,6 @@ class FusedMultiheadAttention(Module):
         self.w_out = Parameter(
                 init.kaiming_uniform(self.dim, self.dim),
                 device=device, dtype=dtype)
-        self.softmax = Softmax()
 
     def forward(self, x: Tensor) -> Tensor:
         q, k, v = F.split((x @ self.w_qkv).reshape(x.shape[0], x.shape[1], 3, self.dim), axis=2)
