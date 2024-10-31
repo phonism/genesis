@@ -242,6 +242,39 @@ def add(x, y):
         add_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     return output
 
+def iadd(x, y):
+    # 确保 x 是在当前使用的 CUDA 设备上
+    if torch.cuda.current_device() != x.device:
+        torch.cuda.set_device(x.device)
+    
+    if isinstance(y, torch.Tensor):
+        output_shape = torch.broadcast_shapes(x.shape, y.shape)
+        x, y = torch.broadcast_tensors(x, y)
+    else:
+        output_shape = x.shape
+    
+    assert x.is_cuda
+    if not x.is_contiguous():
+        x = x.contiguous()
+
+    if isinstance(y, torch.Tensor):
+        assert y.is_cuda
+        if not y.is_contiguous():
+            y = y.contiguous()
+
+    if x.shape != output_shape:
+        raise ValueError("In-place addition requires x to have the same shape as the output.")
+
+    n_elements = x.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+
+    if isinstance(y, torch.Tensor):
+        add_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
+    else:
+        add_scalar_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
+    return x
+
+
 def mul(x, y):
     if torch.cuda.current_device() != x.device:
         torch.cuda.set_device(x.device)

@@ -108,8 +108,6 @@ class Tensor:
         else:
             device = device if device else default_device()
             data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
-        self.creator = None
-        self.grad = None
 
         self.init([], data=data, requires_grad=requires_grad)
 
@@ -133,6 +131,7 @@ class Tensor:
         self.data = data
         self.requires_grad = requires_grad
         self.creator = None
+        self.grad = None
         self.hooks = []
 
     def register_hook(self, hook):
@@ -185,14 +184,16 @@ class Tensor:
 
     def backward(self, out_grad=None):
         out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)
-        self.grad = out_grad
         self.apply_hooks(self.grad)
         node_to_output_grads_list: Dict[Tensor, List[Tensor]] = {}
         node_to_output_grads_list[self] = [out_grad]
 
         topo_order = topo_sort(self)
         for node in reversed(topo_order):
-            node.grad = reduce(operator.add, node_to_output_grads_list[node])
+            if node.grad is None:
+                node.grad = reduce(operator.add, node_to_output_grads_list[node])
+            else:
+                node.grad += reduce(operator.add, node_to_output_grads_list[node])
             node.apply_hooks(node.grad)
             if node.creator is not None:
                 for nd in node.creator.inputs:
