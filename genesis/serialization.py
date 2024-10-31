@@ -11,6 +11,9 @@ def save(state_dict, file_path):
 
         with open(file_path, "wb") as f:
             pickle.dump(state_dict, f)
+
+        for key in list(state_dict.keys()):
+            del state_dict[key]
             
         if os.path.exists(backup_file_path):
             os.remove(backup_file_path)

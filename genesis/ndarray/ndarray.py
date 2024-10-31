@@ -28,13 +28,19 @@ class Device:
         return self.mod is not None
 
     def randn(self, *shape, dtype="float32"):
-        return NDArray(torch.randn(*shape), device=self)
+        if self.name == "cuda":
+            return NDArray(torch.randn(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
+        else:
+            return NDArray(torch.randn(*shape), device=self)
 
     def rand(self, *shape, dtype="float32"):
-        return NDArray(torch.rand(*shape), device=self)
+        if self.name == "cuda":
+            return NDArray(torch.rand(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
+        else:
+            return NDArray(torch.rand(*shape), device=self)
 
     def one_hot(self, n, i, dtype="float32"):
-        return NDArray(np.eye(n, dtype=dtype)[np.array(i).astype(int)], device=self)
+        return NDArray(torch.nn.functional.one_hot(i.data.data.long(), num_classes=n).float(), device=self)
 
     def empty(self, shape, dtype="float32"):
         dtype = "float32" if dtype is None else dtype
@@ -154,6 +160,14 @@ class NDArray:
             out.data = self.device.add(self.data, y.data)
         else:
             out.data = self.device.add(self.data, y)
+        return out
+
+    def __iadd__(self, y):
+        out = NDArray.make(self.shape, device=self.device)
+        if isinstance(y, NDArray):
+            out.data = self.device.iadd(self.data, y.data)
+        else:
+            out.data = self.device.iadd(self.data, y)
         return out
 
     __radd__ = __add__

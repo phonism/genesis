@@ -4,6 +4,7 @@ from numbers import Number
 from typing import Optional, List
 import numpy
 from ..autograd import Function, NDArray, Tensor
+import genesis
 from genesis import init
 
 import torch
@@ -32,7 +33,8 @@ class EWiseAdd(Function):
     @staticmethod
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
-        return Tensor(a.data + b.data)
+        requires_grad = a.requires_grad or b.requires_grad
+        return Tensor(a.data + b.data, requires_grad=requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
@@ -51,7 +53,7 @@ class AddScalar(Function):
     @staticmethod
     def forward(ctx, a, scalar):
         ctx.save_for_backward(a)
-        return Tensor(a.data + scalar)
+        return Tensor(a.data + scalar, requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
@@ -66,7 +68,7 @@ class Negate(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.negative(a.data))
+        return Tensor(array_api.negative(a.data), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -83,7 +85,8 @@ class EWiseMul(Function):
     @staticmethod
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
-        result = Tensor(a.data * b.data)
+        requires_grad = a.requires_grad or b.requires_grad
+        result = Tensor(a.data * b.data, requires_grad=requires_grad)
         return result
 
     @staticmethod
@@ -105,7 +108,7 @@ class MulScalar(Function):
     @staticmethod
     def forward(ctx, a, scalar):
         ctx.save_for_backward(a, scalar)
-        return Tensor(a.data * scalar)
+        return Tensor(a.data * scalar, requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -122,7 +125,8 @@ class EWiseDiv(Function):
     @staticmethod
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
-        return Tensor(array_api.divide(a.data, b.data, dtype=a.dtype))
+        requires_grad = a.requires_grad or b.requires_grad
+        return Tensor(array_api.divide(a.data, b.data, dtype=a.dtype), requires_grad=requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -141,7 +145,7 @@ class DivScalar(Function):
     @staticmethod
     def forward(ctx, a, scalar):
         ctx.save_for_backward(a, scalar)
-        return Tensor(array_api.divide(a.data, scalar, dtype=a.dtype))
+        return Tensor(array_api.divide(a.data, scalar, dtype=a.dtype), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -158,12 +162,12 @@ class PowScalar(Function):
     @staticmethod
     def forward(ctx, a, scalar):
         ctx.save_for_backward(a, scalar)
-        return Tensor(array_api.power(a.data, scalar))
+        return Tensor(array_api.power(a.data, scalar), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
         a, scalar = ctx.saved_tensors
-        grad = Tensor(scalar * out_grad.data * pow_scalar(a, scalar - 1).data, require_grad=False)
+        grad = Tensor(scalar * out_grad.data * pow_scalar(a, scalar - 1).data, requires_grad=False)
         return (grad, )
 
 
@@ -174,7 +178,7 @@ class Sin(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.sin(a.data))
+        return Tensor(array_api.sin(a.data), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -189,7 +193,7 @@ class Cos(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.cos(a.data))
+        return Tensor(array_api.cos(a.data), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -205,7 +209,7 @@ class Log(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.log(a.data))
+        return Tensor(array_api.log(a.data), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -221,7 +225,7 @@ class Exp(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.exp(a.data))
+        return Tensor(array_api.exp(a.data), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -236,7 +240,7 @@ class Sqrt(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.sqrt(a.data))
+        return Tensor(array_api.sqrt(a.data), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -253,7 +257,7 @@ class Transpose(Function):
         ctx.save_for_backward(a, axis)
         if axis is None:
             return Tensor(array_api.swapaxes(a.data, -1, -2))
-        return Tensor(array_api.swapaxes(a.data, axis[0], axis[1]))
+        return Tensor(array_api.swapaxes(a.data, axis[0], axis[1]), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -273,7 +277,7 @@ class Reshape(Function):
     @staticmethod
     def forward(ctx, a, shape):
         ctx.save_for_backward(a)
-        return Tensor(array_api.reshape(a.data, shape))
+        return Tensor(array_api.reshape(a.data, shape), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -293,7 +297,7 @@ class BroadcastTo(Function):
     @staticmethod
     def forward(ctx, a, shape):
         ctx.save_for_backward(a, shape)
-        return Tensor(array_api.broadcast_to(a.data, shape))
+        return Tensor(array_api.broadcast_to(a.data, shape), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -321,7 +325,7 @@ class Summation(Function):
         ctx.save_for_backward(a)
         ctx.axis = axis
         ctx.keepdims = keepdims
-        output = Tensor(array_api.sum(a.data, axis=axis, keepdims=keepdims))
+        output = Tensor(array_api.sum(a.data, axis=axis, keepdims=keepdims), requires_grad=a.requires_grad)
         return output
 
     @staticmethod
@@ -357,12 +361,13 @@ class Matmul(Function):
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
         c = a.data @ b.data
-        return Tensor(c, device=a.device)
+        requires_grad = a.requires_grad or b.requires_grad
+        return Tensor(c, device=a.device, requires_grad=requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
         a, b = ctx.saved_tensors
-        a_grad = out_grad.data @ array_api.swapaxes(b.data, -1, -2)
+        a_grad = out_grad.data @ array_api.transpose(b.data, (-1, -2))
         b_grad = array_api.transpose(a.data, (-1, -2)) @ out_grad.data
 
         dim1 = len(a.shape)
@@ -388,13 +393,13 @@ class ReLU(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.maximum(a.data, 0))
+        return Tensor(array_api.maximum(a.data, 0), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
         input_relu = array_api.maximum(a.data, 0)
-        grad = Tensor(out_grad.data * (input_relu > 0), require_grad=False)
+        grad = Tensor(out_grad.data * (input_relu > 0), requires_grad=False)
         return (grad, )
 
 def relu(a):
@@ -402,16 +407,16 @@ def relu(a):
 
 class LogSumExp(Function):
     @staticmethod
-    def forward(ctx, Z, axis=None):
-        ctx.save_for_backward(Z)
-        Z = Z.data
+    def forward(ctx, a, axis=None):
+        ctx.save_for_backward(a)
+        Z = a.data
         ctx.axis = axis
         ctx.max_value = Z.max(axis, keepdims=True)
         max_z = array_api.broadcast_to(ctx.max_value, Z.shape)
         Z = array_api.exp(Z - max_z)
         Z = array_api.sum(Z, axis)
         Z = array_api.log(Z)
-        return Tensor(Z + array_api.reshape(ctx.max_value, Z.shape))
+        return Tensor(Z + array_api.reshape(ctx.max_value, Z.shape), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -438,7 +443,8 @@ class Equal(Function):
     @staticmethod
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
-        return Tensor(a.data == b.data)
+        requires_grad = a.requires_grad or b.requires_grad
+        return Tensor(a.data == b.data, requires_grad=requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -461,7 +467,7 @@ class Max(Function):
             axis = (axis,)
         ctx.axis = axis
         ctx.keepdims = keepdims
-        return Tensor(array_api.max(a.data, axis, keepdims=keepdims))
+        return Tensor(array_api.max(a.data, axis, keepdims=keepdims), requires_grad=a.requires_grad)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -496,7 +502,11 @@ class Stack(Function):
     def forward(ctx, tensors, dim):
         ctx.dim = dim
         data = torch.stack([t.data.data for t in tensors], axis=dim)
-        return Tensor(data)
+        requires_grad = False
+        for t in tensors:
+            if t.requires_grad:
+                requires_grad = True
+        return Tensor(data, requires_grad=requires_grad)
     
     @staticmethod
     def backward(ctx, out_grad):
