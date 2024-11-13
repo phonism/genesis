@@ -15,8 +15,22 @@ class DistributedDataParallel(genesis.nn.Module):
 
     def _make_hook(self, param):
         def hook(grad):
-            dist.all_reduce(grad.data.data, op=dist.ReduceOp.SUM)
             grad.data.data /= self.world_size
+            dist.all_reduce(grad.data.data, op=dist.ReduceOp.SUM)
+            retry_count = 0
+            max_retries = 5
+            while retry_count <= max_retries:
+                try:
+                    dist.all_reduce(grad.data.data, op=dist.ReduceOp.SUM)
+                    break
+                except Exception as e:
+                    retry_count += 1
+                    print(f"all_reduce failed (attempt {retry_count}): {e}") 
+                    if retry_count > max_retries:
+                        print("Max retries reached. Proceeding without successful all_reduce.")
+                        break
+                    else:
+                        print("Retrying all_reduce operation...")
         return hook
 
     def forward(self, *inputs, **kwargs):

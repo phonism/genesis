@@ -174,6 +174,33 @@ class Sequential(Module):
         return x
 
 
+class ModuleList(Module):
+    def __init__(self, modules):
+        super().__init__()
+        self._modules = []
+        if modules is not None:
+            self.extend(list(modules))
+    
+    def append(self, module):
+        if not isinstance(module, Module):
+            raise ValueError("All elements must be instances of nn.Module")
+        self._modules.append(module)
+
+    def extend(self, modules: List[Module]):
+        if not all(isinstance(module, Module) for module in modules):
+            raise ValueError("All elements must be instances of nn.Module")
+        for module in modules:
+            self.append(module) 
+
+    def __getitem__(self, idx):
+        return self._modules[idx] 
+
+    def __len__(self):
+        return len(self._modules) 
+
+    def __iter__(self):
+        return iter(self._modules) 
+
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True, device=None, dtype="float32"):
         super().__init__()

@@ -211,6 +211,15 @@ class Tensor:
         return self.data.shape
 
     @property
+    def size(self):
+        return self.data.size
+
+    def size(self, dim=None):
+        if dim is not None:
+            return self.data.size(dim)
+        return self.data.shape
+
+    @property
     def dtype(self):
         return self.data.dtype
 
@@ -223,6 +232,10 @@ class Tensor:
         tensor = Tensor(self, device=genesis.device(device))
         return tensor
 
+    def contiguous(self):
+        self.data = self.data.contiguous()
+        return self
+
     def set_device(self, device_name):
         self.data = array_api.array(self.data, device=genesis.device(device_name))
 
@@ -233,9 +246,10 @@ class Tensor:
         return self.data.shape[0]
 
     def __getitem__(self, index):
-        tensor = Tensor.__new__(Tensor)
-        tensor.init([], data=self.data[index], requires_grad=self.requires_grad)
-        return tensor
+        return genesis.nn.functional.getitem(self, index)
+
+    def __setitem__(self, index, value):
+        return genesis.nn.functional.setitem(self, index, value)
 
     def __str__(self):
         return str(self.data)
@@ -270,11 +284,23 @@ class Tensor:
         else:
             return genesis.nn.functional.divide_scalar(self, other)
 
+    def __rtruediv__(self, other):
+        if isinstance(other, Tensor):
+            return genesis.nn.functional.divide(other, self)
+        else:
+            return genesis.nn.functional.divide_scalar(self, other, reverse=True)
+
     def __pow__(self, other):
         if isinstance(other, Tensor):
             raise TypeError("pow value must be a scalar")
         else:
             return genesis.nn.functional.pow_scalar(self, other)
+
+    def __rpow__(self, other):
+        if isinstance(other, Tensor):
+            raise TypeError("pow value must be a scalar")
+        else:
+            return genesis.nn.functional.pow_scalar(self, other, reverse=True)
 
     def __neg__(self):
         return genesis.nn.functional.negate(self)
@@ -297,7 +323,11 @@ class Tensor:
     def exp(self):
         return genesis.nn.functional.exp(self)
 
-    def transpose(self, axis=None):
+    def transpose(self, *axis):
+        if not axis:
+            axis = None
+        elif len(axis) == 1 and isinstance(axis[0], (tuple, list)):
+            axis = axis[0]
         return genesis.nn.functional.transpose(self, axis)
 
     def reshape(self, *shape):
@@ -322,6 +352,20 @@ class Tensor:
 
     def sqrt(self):
         return genesis.nn.functional.sqrt(self)
+
+    def view(self, *new_shape):
+        if len(new_shape) == 1 and isinstance(new_shape[0], (tuple, list)):
+            new_shape = new_shape[0]
+        return genesis.nn.functional.view(self, new_shape)
+
+    def flatten(self, start_dim=0, end_dim=None):
+        return genesis.nn.functional.flatten(self, start_dim=start_dim, end_dim=end_dim)
+
+    def split(self, dim=-1):
+        return genesis.nn.functional.split(self, dim)
+
+
+
 
     __radd__ = __add__
     __rsub__ = __sub__

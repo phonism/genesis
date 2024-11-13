@@ -407,13 +407,13 @@ def _attn_bwd(
 
 class FusedAttention(Function):
     @staticmethod
-    def forward(ctx, q, k, v):
+    def forward(ctx, qq, kk, vv):
         # shape constraints
-        device = q.device
+        device = qq.device
         causal = True
-        q = q.data.data
-        k = k.data.data
-        v = v.data.data
+        q = qq.data.data
+        k = kk.data.data
+        v = vv.data.data
         if q.is_contiguous() is False:
             q = q.contiguous()
         if k.is_contiguous() is False:
@@ -447,7 +447,7 @@ class FusedAttention(Function):
                 BLOCK_N=min(HEAD_DIM_K, 32),
                 **extra_kern_args)
 
-        ctx.save_for_backward(q, k, v, M, o)
+        ctx.save_for_backward(qq, kk, vv, M, o)
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
@@ -457,6 +457,7 @@ class FusedAttention(Function):
     @staticmethod
     def backward(ctx, out_grad):
         q, k, v, M, o = ctx.saved_tensors
+        device = q.device
         q = q.data.data
         k = k.data.data
         v = v.data.data
@@ -505,7 +506,10 @@ class FusedAttention(Function):
                 HEAD_DIM=ctx.HEAD_DIM,
                 num_warps=NUM_WARPS,
                 num_stages=NUM_STAGES)
-        return (Tensor(dq, requires_grad=False), Tensor(dk, requires_grad=False), Tensor(dv, requires_grad=False))
+        return (Tensor(dq, device=device, requires_grad=False), Tensor(dk, device=device, requires_grad=False), Tensor(dv, device=device, requires_grad=False))
 
 def fused_attention(q, k, v):
+    return FusedAttention.apply(q, k, v)
+
+def scaled_dot_product_attention(q, k, v):
     return FusedAttention.apply(q, k, v)
