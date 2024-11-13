@@ -59,6 +59,16 @@ def div_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.cons
     tl.store(output_ptr + offsets, output, mask=mask)
 
 @triton.jit
+def rdiv_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    output = scalar / x
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+@triton.jit
 def div_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
@@ -212,7 +222,6 @@ def max_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.const
                                                                                         
     tl.store(output_ptr + m_offset, out, mask=m_mask)
 
-
 def add(x, y):
     if torch.cuda.current_device() != x.device:
         torch.cuda.set_device(x.device)
@@ -274,7 +283,6 @@ def iadd(x, y):
         add_scalar_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
     return x
 
-
 def mul(x, y):
     if torch.cuda.current_device() != x.device:
         torch.cuda.set_device(x.device)
@@ -327,6 +335,33 @@ def truediv(x, y):
         div_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     else:
         div_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+def rtruediv(x, y):
+    if torch.cuda.current_device() != x.device:
+        torch.cuda.set_device(x.device)
+    if isinstance(y, torch.Tensor):
+        output_shape = torch.broadcast_shapes(x.shape, y.shape)
+    else:
+        output_shape = x.shape
+    output = torch.empty(output_shape, dtype=x.dtype, device=x.device)
+    assert x.is_cuda and output.is_cuda
+    if x.is_contiguous() is False:
+        x = x.contiguous()
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    if isinstance(y, torch.Tensor):
+        assert y.is_cuda
+        if y.is_contiguous() is False:
+            y = y.contiguous()
+        x, y = torch.broadcast_tensors(x, y)
+        if x.is_contiguous() is False:
+            x = x.contiguous()
+        if y.is_contiguous() is False:
+            y = y.contiguous()
+        div_kernel[grid](y, x, output, n_elements, BLOCK_SIZE=1024)
+    else:
+        rdiv_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     return output
 
 def pow(x, scalar):
@@ -497,6 +532,11 @@ def reduce_max(x, axis=None, keepdims=False):
 def reshape(x, new_shape):
     return x.reshape(new_shape)
 
+def view(x, new_shape):
+    if x.is_contiguous() is False:
+        x = x.contiguous()
+    return x.view(new_shape)
+
 def permute(x, new_axis):
     return x.permute(new_axis)
 
@@ -565,7 +605,6 @@ def matmul(a, b, activation=""):
             if pre_b == 1:
                 bb = bb.broadcast_to(aa.shape[0], bb.shape[1], bb.shape[2])
 
-
         M = a_shape[-2]
         N = b_shape[-1]
         K = a_shape[-1]
@@ -600,13 +639,15 @@ def matmul(a, b, activation=""):
     else:
         return None
 
-
 def from_numpy(data, device_id=0):
     arr = torch.from_numpy(data).to(torch.device("cuda:" + str(device_id)))
     return arr
 
 def from_tensor(data, device_id=0):
-    arr = data.to(torch.device("cuda:" + str(device_id)))
+    device = torch.device("cuda:" + str(device_id))
+    if data.is_cuda and data.device == device:
+        return data
+    arr = data.to(device)
     return arr
 
 def array(shape, device_id=0):

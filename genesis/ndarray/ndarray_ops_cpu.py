@@ -11,6 +11,9 @@ def mul(x, y):
 def truediv(x, y):
     return x.__truediv__(y)
 
+def rtruediv(x, y):
+    return x.__rtruediv__(y)
+
 def pow(x, scalar):
     return x ** scalar
 
@@ -46,6 +49,9 @@ def reduce_max(x, axis=None, keepdims=False):
 
 def reshape(x, new_shape):
     return x.reshape(new_shape)
+
+def view(x, new_shape):
+    return x.view(new_shape)
 
 def permute(x, new_axis):
     return x.permute(new_axis)

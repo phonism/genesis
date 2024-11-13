@@ -31,13 +31,13 @@ class Device:
         if self.name == "cuda":
             return NDArray(torch.randn(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
         else:
-            return NDArray(torch.randn(*shape), device=self)
+            return NDArray(torch.randn(*shape, device=torch.device("cuda")).cpu(), device=self)
 
     def rand(self, *shape, dtype="float32"):
         if self.name == "cuda":
             return NDArray(torch.rand(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
         else:
-            return NDArray(torch.rand(*shape), device=self)
+            return NDArray(torch.rand(*shape, device=torch.device("cuda")).cpu(), device=self)
 
     def one_hot(self, n, i, dtype="float32"):
         return NDArray(torch.nn.functional.one_hot(i.data.data.long(), num_classes=n).float(), device=self)
@@ -131,9 +131,11 @@ class NDArray:
     def device(self):
         return self._device
 
-    @property
-    def size(self):
+    def numel(self):
         return prod(self.shape)
+
+    def size(self, dim):
+        return self.data.size(dim)
 
     def triu(self, k=0):
         out = NDArray.make(self.shape, device=self.device)
@@ -151,7 +153,7 @@ class NDArray:
     @property
     def flat(self):
         out = NDArray.make(self.shape, device=self.device)
-        out.data = self.device.reshape(self.data, (self.size,))
+        out.data = self.device.reshape(self.data, (self.numel(),))
         return out
 
     def __add__(self, y):
@@ -190,6 +192,14 @@ class NDArray:
             out.data = self.device.truediv(self.data, y)
         return out
 
+    def __rtruediv__(self, y):
+        out = NDArray.make(self.shape, device=self.device)
+        if isinstance(y, NDArray):
+            out.data = self.device.rtruediv(self.data, y.data)
+        else:
+            out.data = self.device.rtruediv(self.data, y)
+        return out
+
     def maximum(self, y):
         out = NDArray.make(self.shape, device=self.device)
         if isinstance(y, NDArray):
@@ -223,6 +233,11 @@ class NDArray:
         out.data = self.device.pow(self.data, scalar)
         return out
 
+    def __rpow__(self, scalar):
+        out = NDArray.make(self.shape, device=self.device)
+        out.data = self.device.pow(scalar, self.data)
+        return out
+
     def log(self):
         out = NDArray.make(self.shape, device=self.device)
         out.data = self.device.log(self.data)
@@ -253,9 +268,28 @@ class NDArray:
         out.data = self.device.reshape(self.data, new_shape)
         return out
 
+    def view(self, new_shape):
+        if -1 in new_shape:
+            unknown_dim = -1
+            known_dim_product = 1
+            for dim in new_shape:
+                if dim != -1:
+                    known_dim_product *= dim
+                else:
+                    unknown_dim = dim
+            inferred_dim = int(np.prod(self.shape) / known_dim_product)
+            new_shape = tuple(inferred_dim if dim == -1 else dim for dim in new_shape)
+        self.data = self.device.view(self.data, new_shape)
+        return self
+
     def permute(self, new_axis):
         out = NDArray.make(self.shape, device=self.device)
         out.data = self.device.permute(self.data, new_axis)
+        return out
+
+    def contiguous(self):
+        out = NDArray.make(self.shape, device=self.device)
+        out.data = self.data.contiguous()
         return out
 
     def broadcast_to(self, new_shape):
@@ -270,7 +304,10 @@ class NDArray:
 
     def __setitem__(self, idxs, other):
         out = NDArray.make(self.shape, device=self.device)
-        out.data = self.device.setitem(self.data, idxs, other.data)
+        if isinstance(other, NDArray):
+            out.data = self.device.setitem(self.data, idxs, other.data)
+        else:
+            out.data = self.device.setitem(self.data, idxs, other)
         return out
 
     def __eq__(self, other):
@@ -400,6 +437,16 @@ def max(a, axis=None, keepdims=False):
     return a
 
 def reshape(array, new_shape):
+    if -1 in new_shape:
+        unknown_dim = -1
+        known_dim_product = 1
+        for dim in new_shape:
+            if dim != -1:
+                known_dim_product *= dim
+            else:
+                unknown_dim = dim
+        inferred_dim = int(np.prod(array.shape) / known_dim_product)
+        new_shape = tuple(inferred_dim if dim == -1 else dim for dim in new_shape)
     return array.reshape(new_shape)
 
 def negative(array):
@@ -440,3 +487,6 @@ def sqrt(a):
 
 def split(a, cnt, dim=None):
     return a.split(cnt, dim=dim)
+
+def view(a, new_shape):
+    return a.view(new_shape)

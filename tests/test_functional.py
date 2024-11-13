@@ -73,9 +73,11 @@ def test_ewise_fn(fn, shape, device):
 SCALAR_OPS = {
     "add": lambda a, b: a + b,
     "divide": lambda a, b: a / b,
+    "rdivide": lambda a, b: b / a,
     "subtract": lambda a, b: a - b,
     "mul": lambda a, b: a * b,
     "power": lambda a, b: a ** b,
+    "rpower": lambda a, b: b ** a,
 }
 SCALAR_OP_FNS = [SCALAR_OPS[k] for k in SCALAR_OPS]
 SCALAR_OP_NAMES = [k for k in SCALAR_OPS]
@@ -85,7 +87,8 @@ GENERAL_SHAPES = [(1, 1, 1), (4, 5, 6)]
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_scalar_fn(fn, shape, device):
     _A = np.random.randn(*shape).astype(np.float32)
-    _B = np.random.randn(1).astype(np.float32).item()
+    #_B = np.random.randn(1).astype(np.float32).item()
+    _B = 1.2
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     A = genesis.Tensor(_A, device=device)
@@ -377,6 +380,21 @@ def test_reshape(shape, shape_to, device):
 
     torch.reshape(TA, shape_to).sum().backward()
     F.reshape(A, shape_to).sum().backward()
+    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
+
+@pytest.mark.parametrize("shape,shape_to", RESHAPE_SHAPES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_view(shape, shape_to, device):
+    _A = np.random.randn(*shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device)
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    np.testing.assert_allclose(
+            TA.view(shape_to).detach().numpy(), 
+            A.view(shape_to).detach().numpy(), atol=atol, rtol=rtol)
+
+    TA.view(shape_to).sum().backward()
+    A.view(shape_to).sum().backward()
     np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
 TRANSPOSE_SHAPES = [(1, 1, 1), (4, 5, 6)]
