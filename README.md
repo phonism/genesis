@@ -51,6 +51,9 @@ genesis_triton       cost_time: 0.9555635452270508
 genesis_fused_triton cost_time: 0.058998823165893555
 ```
 
+## Applications
++ Implemented a 0.5B LLM model in the `apps/llm` directory.
+
 ## Current Supported Features
 + Tensor operations: add, mul, matmul, transpose, split, etc.
 + Neural network layers: Linear, ReLU, MultiheadAttention, etc.
