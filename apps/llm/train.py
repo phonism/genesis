@@ -43,7 +43,7 @@ else:
     model.cuda()
 
 
-optimizer = genesis.optim.AdamW(model.parameters(), lr=0.0001)
+optimizer = genesis.optim.AdamW(model.parameters(), lr=8e-5)
 print("num_parameters:", model.num_parameters())
 
 def get_batch(bs):

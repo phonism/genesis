@@ -3,6 +3,7 @@ import triton
 import triton.language as tl
 
 import operator
+import genesis
 from functools import reduce
 
 def prod(x):
@@ -106,7 +107,7 @@ def log_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    output = tl.log(x)
+    output = tl.log(x.to(tl.float32))
     tl.store(output_ptr + offsets, output, mask=mask)
 
 @triton.jit
@@ -116,7 +117,7 @@ def exp_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    output = tl.exp(x)
+    output = tl.exp(x.to(tl.float32))
     tl.store(output_ptr + offsets, output, mask=mask)
 
 @triton.jit
@@ -193,7 +194,7 @@ def sum_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.const
     pid_m = tl.program_id(axis=0)
     m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     m_mask = m_offset < M
-    out = tl.zeros((BLOCK_M,), dtype=tl.float32) 
+    out = tl.zeros((BLOCK_M,), dtype=tl.float32)
     for start in range(0, N, BLOCK_N):
         n_offset = start + tl.arange(0, BLOCK_N)
         offset = m_offset[:, None] * N + n_offset[None, :]
@@ -370,38 +371,38 @@ def pow(x, scalar):
 def log(x):
     if torch.cuda.current_device() != x.device:
         torch.cuda.set_device(x.device)
-    output = torch.empty_like(x, dtype=x.dtype)
+    output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
         x = x.contiguous()
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     log_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
-    return output
+    return output.to(x.dtype)
 
 def exp(x):
     if torch.cuda.current_device() != x.device:
         torch.cuda.set_device(x.device)
-    output = torch.empty_like(x, dtype=x.dtype)
+    output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
         x = x.contiguous()
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     exp_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
-    return output
+    return output.to(x.dtype)
 
 def sin(x):
     if torch.cuda.current_device() != x.device:
         torch.cuda.set_device(x.device)
-    output = torch.empty_like(x, dtype=x.dtype)
+    output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
         x = x.contiguous()
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     sin_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
-    return output
+    return output.to(x.dtype)
 
 def cos(x):
     if torch.cuda.current_device() != x.device:
@@ -413,7 +414,7 @@ def cos(x):
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     cos_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
-    return output
+    return output.to(x.dtype)
 
 def sqrt(x):
     if torch.cuda.current_device() != x.device:
@@ -484,7 +485,7 @@ def reduce_sum(x, axis=None, keepdims=False):
     block_n = min(triton.next_power_of_2(n), 1024)
     grid = (triton.cdiv(m, block_m), 1, 1)
     sum_kernel[grid](x, output, m, n, block_m, block_n)
-    return output
+    return output.to(x.dtype)
 
 def reduce_max(x, axis=None, keepdims=False):
     if torch.cuda.current_device() != x.device:
@@ -527,7 +528,7 @@ def reduce_max(x, axis=None, keepdims=False):
     if x.is_contiguous() is False:
         x = x.contiguous()
     max_kernel[grid](x, output, m, n, block_m, block_n)
-    return output
+    return output.to(x.dtype)
 
 def reshape(x, new_shape):
     return x.reshape(new_shape)
@@ -582,7 +583,7 @@ def matmul(a, b, activation=""):
                 GROUP_SIZE_M=8,
                 ACTIVATION=activation
         )
-        return c
+        return c.to(a.dtype)
     elif len(a.shape) > 2 or len(b.shape) > 2:
         pre_shape_a = []
         pre_shape_b = []
@@ -635,21 +636,33 @@ def matmul(a, b, activation=""):
                 c = c.reshape(tuple(pre_shape_a) + (M, N))
             else:
                 c = c.reshape(tuple(pre_shape_b) + (M, N))
-        return c
+        return c.to(a.dtype)
     else:
         return None
 
-def from_numpy(data, device_id=0):
-    arr = torch.from_numpy(data).to(torch.device("cuda:" + str(device_id)))
+def from_numpy(data, device_id=0, dtype=None):
+    torch_dtype = None
+    if dtype is None or dtype == genesis.float32:
+        torch_dtype = torch.float32
+    elif dtype == genesis.float16:
+        torch_dtype = torch.float16
+    elif dtype == genesis.bfloat16:
+        torch_dtype = torch.bfloat16
+    arr = torch.from_numpy(data).to(torch.device("cuda:" + str(device_id))).to(torch_dtype)
     return arr
 
-def from_tensor(data, device_id=0):
+def from_tensor(data, device_id=0, dtype=None):
     device = torch.device("cuda:" + str(device_id))
     if data.is_cuda and data.device == device:
         return data
     arr = data.to(device)
     return arr
 
-def array(shape, device_id=0):
-    arr = torch.empty(shape, device=torch.device("cuda:" + str(device_id)), dtype=torch.float32)
+def array(shape, device_id=0, dtype=None):
+    if dtype is None or dtype == genesis.float32:
+        arr = torch.empty(shape, device=torch.device("cuda:" + str(device_id)), dtype=torch.float32)
+    elif dtype == genesis.float16:
+        arr = torch.empty(shape, device=torch.device("cuda:" + str(device_id)), dtype=torch.float16)
+    elif dtype == genesis.bfloat16:
+        arr = torch.empty(shape, device=torch.device("cuda:" + str(device_id)), dtype=torch.bfloat16)
     return arr
