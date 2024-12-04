@@ -1,6 +1,5 @@
 import genesis
 from typing import List, Optional, NamedTuple, Tuple, Union
-
 import numpy
 from genesis import init
 from .backend import Device, array_api, NDArray, default_device
@@ -24,6 +23,32 @@ class Context:
     def saved_tensors(self, tensors):
         self._saved_tensors = tensors
 
+def _cast(value, dtype):
+    if isinstance(value, Tensor):
+        if value.is_floating_point():
+            if dtype == genesis.float16:
+                return value.half()
+            else:
+                return value.float()
+        else:
+            return value
+    elif isinstance(value, dict):
+        return {_cast(k, dtype): _cast(v, dtype) for k, v in value.items()}
+    elif isinstance(value, list) or isinstance(value, tuple):
+        return type(value)(_cast(v, dtype) for v in value)
+    else:
+        return value
+
+def check_dtype(value, dtype): 
+    if isinstance(value, Tensor):
+        return value.dtype == dtype
+    elif isinstance(value, dict):
+        return any(check_dtype(k, dtype) or check_dtype(v, dtype) for k, v in value.items())
+    elif isinstance(value, list) or isinstance(value, tuple):
+        return any(check_dtype(v, dtype) for v in value)
+    else:
+        return False
+
 class Function:
     """
     operator definitions
@@ -33,7 +58,7 @@ class Function:
         self.ctx = Context()
 
     @staticmethod
-    def forward(ctx, *args, **kwarge):
+    def forward(ctx, *args, **kwargs):
 
         """
         Calculate forward pass of operator.
@@ -61,9 +86,19 @@ class Function:
         raise NotImplementedError()
 
     @classmethod
-    def apply(cls, *args, **kwarge):
+    def apply(cls, *args, **kwargs):
         instance = cls()  # Create a new instance for each call
-        result = cls.forward(instance.ctx, *args, **kwarge)
+
+        if genesis.enable_autocast and genesis.upgrade is False:
+            result = cls.forward(
+                    instance.ctx, *_cast(args, genesis.float16), **_cast(kwargs, genesis.float16))
+        else:
+            has_float32 = check_dtype(args, genesis.float32) or check_dtype(kwargs, genesis.float32)
+            has_float16 = check_dtype(args, genesis.float16) or check_dtype(kwargs, genesis.float16)
+            if has_float32 and has_float16:
+                result = cls.forward(instance.ctx, *_cast(args, genesis.float32), **_cast(kwargs, genesis.float32))
+            else:
+                result = cls.forward(instance.ctx, *args, **kwargs)
         instance.is_tuple_result = isinstance(result, tuple)
 
         if instance.is_tuple_result:
@@ -190,6 +225,8 @@ class Tensor:
 
         topo_order = topo_sort(self)
         for node in reversed(topo_order):
+            if node.requires_grad is False:
+                continue
             if node.grad is None:
                 node.grad = reduce(operator.add, node_to_output_grads_list[node])
             else:
@@ -199,12 +236,18 @@ class Tensor:
                 for nd in node.creator.inputs:
                     if nd not in node_to_output_grads_list:
                         node_to_output_grads_list[nd] = []
-                if node.creator.is_tuple_result is False:
-                    backward_grad = node.creator.backward(node.creator.ctx, node.grad)
+                if check_dtype(node.creator.ctx.saved_tensors, genesis.float16):
+                    grad = node.grad.half()
                 else:
-                    backward_grad = node.creator.backward(node.creator.ctx, node.grad, node.idx)
+                    grad = node.grad
+                if node.creator.is_tuple_result is False:
+                    backward_grad = node.creator.backward(node.creator.ctx, grad)
+                else:
+                    backward_grad = node.creator.backward(node.creator.ctx, grad, node.idx)
                 for i, nd in enumerate(node.creator.inputs):
-                    node_to_output_grads_list[nd].append(backward_grad[i])
+                    if nd.requires_grad is False:
+                        continue
+                    node_to_output_grads_list[nd].append(backward_grad[i].float())
 
     @property
     def shape(self):
@@ -228,6 +271,16 @@ class Tensor:
         data = self.data
         return data.device
 
+    def float(self):
+        tensor = Tensor.__new__(Tensor)
+        tensor.init([], data=self.data.float(), requires_grad=self.requires_grad)
+        return tensor
+
+    def half(self):
+        tensor = Tensor.__new__(Tensor)
+        tensor.init([], data=self.data.half(), requires_grad=self.requires_grad)
+        return tensor
+
     def to(self, device):
         tensor = Tensor(self, device=genesis.device(device))
         return tensor
@@ -242,8 +295,14 @@ class Tensor:
     def __repr__(self):
         return "Id:" + str(id(self)) + " Tensor(" + str(self.data) + ")"
 
+    def __hash__(self):
+        return id(self)
+
+    def __bool__(self):
+        return bool(self.data)
+
     def __len__(self):
-        return self.data.shape[0]
+        return self.data.size
 
     def __getitem__(self, index):
         return genesis.nn.functional.getitem(self, index)
@@ -307,9 +366,18 @@ class Tensor:
 
     def equal(self, other):
         if isinstance(other, Tensor):
-            return genesis.nn.functional.equal(self, other)
+            return Tensor(self.data == other.data, device=self.device, requires_grad=False)
         else:
-            return genesis.nn.functional.equal(self, other)
+            return Tensor(self.data == other, device=self.device, requires_grad=False)
+
+    def __eq__(self, other):
+        return self.equal(other)
+
+    def __ne__(self, other):
+        if isinstance(other, Tensor):
+            return Tensor(self.data != other.data, device=self.device, requires_grad=False)
+        else:
+            return Tensor(self.data != other, device=self.device, requires_grad=False)
 
     def sin(self):
         return genesis.nn.functional.sin(self)
@@ -322,6 +390,7 @@ class Tensor:
 
     def exp(self):
         return genesis.nn.functional.exp(self)
+
 
     def transpose(self, *axis):
         if not axis:
@@ -364,13 +433,13 @@ class Tensor:
     def split(self, dim=-1):
         return genesis.nn.functional.split(self, dim)
 
-
-
-
     __radd__ = __add__
     __rsub__ = __sub__
     __rmul__ = __mul__
     __rmatmul__ = __matmul__
+
+    def is_floating_point(self):
+        return self.data.is_floating_point()
 
 def topo_sort(node):
     visited = set()

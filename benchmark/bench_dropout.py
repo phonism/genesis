@@ -30,6 +30,8 @@ def benchmark(M, N, provider):
             tln(TA)
         if provider.lower() == "genesis_triton      ":
             ln(A)
+        if provider.lower() == "genesis_fused_triton":
+            genesis.triton_dropout(A, 0.1)
         
     start_time = time.time()
     all_time = 0
@@ -40,10 +42,12 @@ def benchmark(M, N, provider):
             tln(TA)
         if provider.lower() == "genesis_triton      ":
             ln(A)
+        if provider.lower() == "genesis_fused_triton":
+            genesis.triton_dropout(A, 0.1)
         all_time += time.time() - start_time
     torch.cuda.synchronize()
     print(provider, "cost_time:", all_time)
 
 benchmark(1280, 748, "torch               ")
 benchmark(1280, 748, "genesis_triton      ")
-
+benchmark(1280, 748, "genesis_fused_triton")

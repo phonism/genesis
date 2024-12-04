@@ -322,11 +322,15 @@ class RMSNorm(Module):
 class SoftmaxLoss(Module):
     def forward(self, logits: Tensor, y: Tensor) -> Tensor:
         num, classes = logits.shape
-        y_one_hot = init.one_hot(classes, y, dtype=logits.dtype, device=logits.device)
-        logsum = F.logsumexp(logits, axis=(1,))
-        logits_y = F.summation(logits * y_one_hot, axis=(1,))
+        mask = (y != -1)
+        valid_logits = logits[mask] 
+        valid_y = y[mask]
+
+        y_one_hot = init.one_hot(classes, valid_y, dtype=logits.dtype, device=logits.device)
+        logsum = F.logsumexp(valid_logits, axis=(1,))
+        logits_y = F.summation(valid_logits * y_one_hot, axis=(1,))
         loss = logsum - logits_y
-        return F.summation(loss) / logits.shape[0]
+        return F.summation(loss) / valid_logits.shape[0]
 
 class Softmax(Module):
     def __init__(self, dim=-1):

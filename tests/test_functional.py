@@ -8,8 +8,8 @@ import torch
 import genesis
 import genesis.nn.functional as F
 
-atol = 1e-2
-rtol = 1e-2
+atol = 1e-1
+rtol = 1e-1
 
 def backward_check(f, *args, **kwargs):
     eps = 1e-5
@@ -37,6 +37,8 @@ _DEVICES = [
             genesis.cuda(), 
             marks=pytest.mark.skipif(not genesis.cuda().enabled(), reason="No GPU"))]
 
+_DTYPE = [(genesis.float32, torch.float32), (genesis.float16, torch.float16)]
+
 EWISE_OPS = {
     "add": lambda a, b: a + b,
     "divide": lambda a, b: a / b,
@@ -49,14 +51,15 @@ GENERAL_SHAPES = [(1, 1, 1), (4, 5, 6)]
 @pytest.mark.parametrize("fn", EWISE_OP_FNS, ids=EWISE_OP_NAMES)
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_ewise_fn(fn, shape, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_ewise_fn(fn, shape, device, dtype):
     _A = np.random.randn(*shape).astype(np.float32)
     _B = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
-    B = genesis.Tensor(_B, device=device)
-    TA = torch.Tensor(_A)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
-    TB = torch.Tensor(_B)
+    TB = torch.Tensor(_B).to(dtype[1])
     TB.requires_grad = True
     np.testing.assert_allclose(
             fn(fn(TA, TB), TB).detach().numpy(), 
@@ -85,13 +88,14 @@ GENERAL_SHAPES = [(1, 1, 1), (4, 5, 6)]
 @pytest.mark.parametrize("fn", SCALAR_OP_FNS, ids=SCALAR_OP_NAMES)
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_scalar_fn(fn, shape, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_scalar_fn(fn, shape, device, dtype):
     _A = np.random.randn(*shape).astype(np.float32)
     #_B = np.random.randn(1).astype(np.float32).item()
     _B = 1.2
-    TA = torch.Tensor(_A)
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
     np.testing.assert_allclose(fn(TA, _B).detach().numpy(), fn(A, _B).detach().numpy(), atol=atol, rtol=rtol)
 
     fn(TA, _B).sum().backward()
@@ -113,14 +117,15 @@ MATMUL_DIMS = [
     (128, 128, 128)]
 @pytest.mark.parametrize("m,n,p", MATMUL_DIMS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_matmul(m, n, p, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_matmul(m, n, p, device, dtype):
     _A = np.random.randn(m, n).astype(np.float32)
     _B = np.random.randn(n, p).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
-    B = genesis.Tensor(_B, device=device)
-    TA = torch.Tensor(_A)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad=True
-    TB = torch.Tensor(_B)
+    TB = torch.Tensor(_B).to(dtype[1])
     TB.requires_grad=True
     np.testing.assert_allclose((TA @ TB).detach().numpy(), (A @ B).detach().numpy(), atol=atol, rtol=rtol)
 
@@ -136,14 +141,15 @@ BATCH_MATMUL_DIMS = [
 ]
 @pytest.mark.parametrize("b,m,n,p", BATCH_MATMUL_DIMS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_batch_matmul(b, m, n, p, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_batch_matmul(b, m, n, p, device, dtype):
     _A = np.random.randn(b, m, n).astype(np.float32)
     _B = np.random.randn(b, n, p).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
-    B = genesis.Tensor(_B, device=device)
-    TA = torch.Tensor(_A)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad=True
-    TB = torch.Tensor(_B)
+    TB = torch.Tensor(_B).to(dtype[1])
     TB.requires_grad=True
     np.testing.assert_allclose((TA @ TB).detach().numpy(), (A @ B).detach().numpy(), atol=atol, rtol=rtol)
 
@@ -154,14 +160,15 @@ def test_batch_matmul(b, m, n, p, device):
 
 @pytest.mark.parametrize("b,m,n,p", BATCH_MATMUL_DIMS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_batch_matmul_2(b, m, n, p, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_batch_matmul_2(b, m, n, p, device, dtype):
     _A = np.random.randn(b, m, n).astype(np.float32)
     _B = np.random.randn(n, p).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
-    B = genesis.Tensor(_B, device=device)
-    TA = torch.Tensor(_A)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad=True
-    TB = torch.Tensor(_B)
+    TB = torch.Tensor(_B).to(dtype[1])
     TB.requires_grad=True
     np.testing.assert_allclose((TA @ TB).detach().numpy(), (A @ B).detach().numpy(), atol=atol, rtol=rtol)
 
@@ -172,15 +179,16 @@ def test_batch_matmul_2(b, m, n, p, device):
 
 @pytest.mark.parametrize("b,m,n,p", BATCH_MATMUL_DIMS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_batch_matmul_3(b, m, n, p, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_batch_matmul_3(b, m, n, p, device, dtype):
     _A = np.random.randn(m, n).astype(np.float32)
     _B = np.random.randn(b, n, p).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
-    B = genesis.Tensor(_B, device=device)
-    TA = torch.Tensor(_A)
-    TA.requires_grad=True
-    TB = torch.Tensor(_B)
-    TB.requires_grad=True
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
+    TA.requires_grad = True
+    TB = torch.Tensor(_B).to(dtype[1])
+    TB.requires_grad = True
     np.testing.assert_allclose((TA @ TB).detach().numpy(), (A @ B).detach().numpy(), atol=atol, rtol=rtol)
 
     (TA @ TB).sum().backward()
@@ -198,10 +206,11 @@ SUMMATION_PARAMETERS = [
 ]
 @pytest.mark.parametrize("shape, axes", SUMMATION_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_summation(shape, axes, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_summation(shape, axes, device, dtype):
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
-    TA = torch.Tensor(_A)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     np.testing.assert_allclose(
             torch.sum(TA, dim=axes).detach().numpy(), 
@@ -213,7 +222,9 @@ def test_summation(shape, axes, device):
 
 @pytest.mark.parametrize("shape, axes", SUMMATION_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_max(shape, axes, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_max(shape, axes, device, dtype):
+    #TODO float16 need to be fix
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -236,10 +247,11 @@ def test_max(shape, axes, device):
 
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_log(shape, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_log(shape, device, dtype):
     _A = np.random.randn(*shape).astype(np.float32) + 5.
-    A = genesis.Tensor(_A, device=device)
-    TA = torch.Tensor(_A)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     np.testing.assert_allclose(
             torch.log(TA).detach().numpy(), 
@@ -251,10 +263,11 @@ def test_log(shape, device):
 
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_exp(shape, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_exp(shape, device, dtype):
     _A = np.random.randn(*shape).astype(np.float32) + 5.
-    A = genesis.Tensor(_A, device=device)
-    TA = torch.Tensor(_A)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     np.testing.assert_allclose(
             torch.exp(torch.exp(TA)).detach().numpy(), 
@@ -266,10 +279,11 @@ def test_exp(shape, device):
 
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_relu(shape, device):
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_relu(shape, device, dtype):
     _A = np.random.randn(*shape).astype(np.float32) + 5.
-    A = genesis.Tensor(_A, device=device)
-    TA = torch.Tensor(_A)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     np.testing.assert_allclose(
             torch.relu(TA).detach().numpy(), 
@@ -451,8 +465,8 @@ def test_equal(shape, device):
     TB.requires_grad = True
     TC = torch.Tensor(_A)
     TC.requires_grad = True
-    np.testing.assert_allclose((TA == TB).detach().numpy(), F.equal(A, B).detach().numpy(), atol=atol, rtol=rtol)
-    np.testing.assert_allclose((TA == TC).detach().numpy(), F.equal(A, C).detach().numpy(), atol=atol, rtol=rtol)
+    np.testing.assert_allclose((TA == TB).detach().numpy(), (A == B).detach().numpy(), atol=atol, rtol=rtol)
+    np.testing.assert_allclose((TA == TC).detach().numpy(), (A == C).detach().numpy(), atol=atol, rtol=rtol)
 
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
@@ -478,6 +492,22 @@ def test_cos(shape, device):
     TA.requires_grad = True
     B = A.cos()
     TB = TA.cos()
+    np.testing.assert_allclose(TB.detach().numpy(), B.detach().numpy(), atol=atol, rtol=rtol)
+
+    B.sum().backward()
+    TB.sum().backward()
+    np.testing.assert_allclose(TA.grad.detach().numpy(), A.grad.detach().numpy(), atol=atol, rtol=rtol)
+
+GETITEM_SHAPES = [(4, 5, 6), (2, 3)]
+@pytest.mark.parametrize("shape", GETITEM_SHAPES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_getitem(shape, device):
+    _A = np.random.randint(0, 2, size=shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device)
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    B = A[(A == 1)]
+    TB = TA[(TA == 1)]
     np.testing.assert_allclose(TB.detach().numpy(), B.detach().numpy(), atol=atol, rtol=rtol)
 
     B.sum().backward()

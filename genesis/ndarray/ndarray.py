@@ -27,27 +27,27 @@ class Device:
     def enabled(self):
         return self.mod is not None
 
-    def randn(self, *shape, dtype="float32"):
+    def randn(self, *shape, dtype=genesis.float32):
         if self.name == "cuda":
             return NDArray(torch.randn(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
         else:
             return NDArray(torch.randn(*shape, device=torch.device("cuda")).cpu(), device=self)
 
-    def rand(self, *shape, dtype="float32"):
+    def rand(self, *shape, dtype=genesis.float32):
         if self.name == "cuda":
             return NDArray(torch.rand(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
         else:
             return NDArray(torch.rand(*shape, device=torch.device("cuda")).cpu(), device=self)
 
-    def one_hot(self, n, i, dtype="float32"):
+    def one_hot(self, n, i, dtype=genesis.float32):
         return NDArray(torch.nn.functional.one_hot(i.data.data.long(), num_classes=n).float(), device=self)
 
-    def empty(self, shape, dtype="float32"):
-        dtype = "float32" if dtype is None else dtype
-        return NDArray.make(shape, device=self)
+    def empty(self, shape, dtype=genesis.float32):
+        dtype = genesis.float32 if dtype is None else dtype
+        return NDArray.make(shape, device=self, dtype=dtype)
 
-    def full(self, shape, fill_value, dtype="float32"):
-        dtype = "float32" if dtype is None else dtype
+    def full(self, shape, fill_value, dtype=genesis.float32):
+        dtype = genesis.float32 if dtype is None else dtype
         arr = self.empty(shape, dtype)
         arr.fill(fill_value)
         return arr
@@ -85,10 +85,11 @@ def all_devices():
 
 class NDArray:
     def __init__(self, data, device=None, dtype=None):
+        self._dtype = dtype
         if isinstance(data, np.ndarray):
             device = device if device is not None else default_device()
             self._device = device
-            self.data = self._device.from_numpy(data, device_id=self._device.device_id)
+            self.data = self._device.from_numpy(data, device_id=self._device.device_id, dtype=dtype)
         elif isinstance(data, NDArray):
             self._device = device
             self.data = self._device.from_tensor(data.data, device_id=self._device.device_id)
@@ -97,13 +98,14 @@ class NDArray:
             self.data = self._device.from_tensor(data, device_id=self._device.device_id)
         else:
             self._device = device
-            self.data = self._device.from_numpy(np.array(data, dtype=np.float32), device_id=self._device.device_id)
+            self.data = self._device.from_numpy(np.array(data, dtype=np.float32), device_id=self._device.device_id, dtype=dtype)
 
     @staticmethod
-    def make(shape, device=None):
+    def make(shape, device=None, dtype=genesis.float32):
         array = NDArray.__new__(NDArray)
         array._device = device if device is not None else default_device()
-        array.data = array.device.array(shape, device_id=array._device.device_id)
+        array._dtype = dtype
+        array.data = array.device.array(shape, device_id=array._device.device_id, dtype=dtype)
         return array
 
     def fill(self, value):
@@ -121,7 +123,7 @@ class NDArray:
 
     @property
     def dtype(self):
-        return self.data.dtype
+        return self._dtype
 
     @property
     def shape(self):
@@ -292,18 +294,28 @@ class NDArray:
         out.data = self.data.contiguous()
         return out
 
+    def float(self):
+        out = NDArray.make(self.shape, dtype=genesis.float32, device=self.device)
+        out.data = self.data.float()
+        return out
+
+    def half(self):
+        out = NDArray.make(self.shape, dtype=genesis.float16, device=self.device)
+        out.data = self.data.to(torch.float16)
+        return out
+
     def broadcast_to(self, new_shape):
-        out = NDArray.make(new_shape, device=self.device)
+        out = NDArray.make(new_shape, dtype=self.dtype, device=self.device)
         out.data = self.device.broadcast_to(self.data, new_shape)
         return out
 
     def __getitem__(self, idxs):
-        out = NDArray.make(self.shape, device=self.device)
+        out = NDArray.make(self.shape, dtype=self.dtype, device=self.device)
         out.data = self.device.getitem(self.data, idxs)
         return out
 
     def __setitem__(self, idxs, other):
-        out = NDArray.make(self.shape, device=self.device)
+        out = NDArray.make(self.shape, dtype=self.dtype, device=self.device)
         if isinstance(other, NDArray):
             out.data = self.device.setitem(self.data, idxs, other.data)
         else:
@@ -339,12 +351,12 @@ class NDArray:
         return 1 - (self > other)
 
     def __matmul__(self, b, activation=""):
-        out = NDArray.make(self.shape, device=self.device)
+        out = NDArray.make(self.shape, dtype=self.dtype, device=self.device)
         out.data = self.device.matmul(self.data, b.data, activation=activation)
         return out
 
     def sum(self, axis=None, keepdims=False):
-        out = NDArray.make(self.shape, device=self.device)
+        out = NDArray.make(self.shape, dtype=self.dtype, device=self.device)
         out.data = self.device.reduce_sum(self.data, axis=axis, keepdims=keepdims)
         return out
 
@@ -353,19 +365,21 @@ class NDArray:
         out.data = self.device.reduce_max(self.data, axis=axis, keepdims=keepdims)
         return out
 
-def array(a, dtype="float32", device=None):
+    def is_floating_point(self):
+        return self.data.is_floating_point()
+
+def array(a, dtype=genesis.float32, device=None):
     """ Convenience methods to match numpy a bit more closely."""
-    dtype = "float32" if dtype is None else dtype
-    #assert dtype == "float32"
+    dtype = genesis.float32 if dtype is None else dtype
     return NDArray(a, device=device, dtype=dtype)
 
 
-def empty(shape, dtype="float32", device=None):
+def empty(shape, dtype=genesis.float32, device=None):
     device = device if device is not None else default_device()
     return devie.empty(shape, dtype)
 
 
-def full(shape, fill_value, dtype="float32", device=None):
+def full(shape, fill_value, dtype=genesis.float32, device=None):
     device = device if device is not None else default_device()
     return device.full(shape, fill_value, dtype)
 
@@ -419,6 +433,9 @@ def sum(a, axis=None, keepdims=False):
             a = a.sum(axis=ax - pre, keepdims=keepdims)
         pre += 1
     return a
+
+def reduce_sum(a, axis=None, keepdims=False):
+    return sum(a, axis=axis, keepdims=keepdims)
 
 def max(a, axis=None, keepdims=False):
     if type(axis) is int:

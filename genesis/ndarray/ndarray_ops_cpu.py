@@ -1,4 +1,5 @@
 import torch
+import genesis
 import operator
 from functools import reduce
 
@@ -74,11 +75,24 @@ def ge(x, y):
 def matmul(a, b, activation=""):
     return a @ b
 
-def from_numpy(data, device_id=None):
-    return torch.from_numpy(data)
+def from_numpy(data, device_id=None, dtype=None):
+    torch_dtype = None
+    if dtype is None or dtype == genesis.float32:
+        torch_dtype = torch.float32
+    elif dtype == genesis.float16:
+        torch_dtype = torch.float16
+    elif dtype == genesis.bfloat16:
+        torch_dtype = torch.bfloat16
+    return torch.from_numpy(data).to(torch_dtype)
 
 def from_tensor(data, device_id=None):
     return data
 
-def array(shape, device_id=None):
-    return torch.empty(shape, device=torch.device("cpu"), dtype=torch.float32)
+def array(shape, device_id=None, dtype=None):
+    if dtype is None or dtype == genesis.float32:
+        arr = torch.empty(shape, device=torch.device("cpu"), dtype=torch.float32)
+    elif dtype == genesis.float16:
+        arr = torch.empty(shape, device=torch.device("cpu"), dtype=torch.float16)
+    elif dtype == genesis.bfloat16:
+        arr = torch.empty(shape, device=torch.device("cpu"), dtype=torch.bfloat16)
+    return arr

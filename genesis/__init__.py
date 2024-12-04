@@ -1,3 +1,10 @@
+
+float32 = "float32"
+bfloat16 = "bfloat16"
+float16 = "float16"
+enable_autocast = False
+upgrade = False
+
 from . import utils
 from .init import (
         rand,
