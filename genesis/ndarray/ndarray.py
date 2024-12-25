@@ -73,7 +73,8 @@ def cuda(index=0):
     try:
         from . import ndarray_ops_gpu
         return Device("cuda", ndarray_ops_gpu, index)
-    except:
+    except Exception as e:
+        print(f"An error occurred: {e}")
         return Device("cuda", None)
 
 def default_device():
@@ -113,7 +114,7 @@ class NDArray:
         self.data.fill_(value)
 
     def __repr__(self):
-        return "NDArray:" + self.data.__repr__()
+        return "Gensis::" + self.data.__repr__()
 
     def __str__(self):
         return self.__repr__()

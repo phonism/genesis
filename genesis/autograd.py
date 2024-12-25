@@ -254,6 +254,10 @@ class Tensor:
         return self.data.shape
 
     @property
+    def ndim(self):
+        return len(self.shape)
+
+    @property
     def size(self):
         return self.data.size
 
@@ -379,6 +383,18 @@ class Tensor:
         else:
             return Tensor(self.data != other, device=self.device, requires_grad=False)
 
+    def __lt__(self, other):
+        if isinstance(other, Tensor):
+            return Tensor(self.data < other.data, device=self.device, requires_grad=False)
+        else:
+            return Tensor(self.data < other, device=self.device, requires_grad=False)
+
+    def __gt__(self, other):
+        if isinstance(other, Tensor):
+            return Tensor(self.data > other.data, device=self.device, requires_grad=False)
+        else:
+            return Tensor(self.data > other, device=self.device, requires_grad=False)
+
     def sin(self):
         return genesis.nn.functional.sin(self)
 
@@ -432,6 +448,7 @@ class Tensor:
 
     def split(self, dim=-1):
         return genesis.nn.functional.split(self, dim)
+
 
     __radd__ = __add__
     __rsub__ = __sub__

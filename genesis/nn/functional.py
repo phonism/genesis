@@ -9,16 +9,17 @@ from genesis import init
 import math
 import torch
 from ..backend import array_api, NDArray
-try:
+#try:
+if True:
     # import fused ops
     from .layer_norm import (
             FusedLayerNormFunction, fused_layer_norm,
     )
     from .attention import FusedAttention, fused_attention, scaled_dot_product_attention
-    from .triton_layers import dropout
-except:
-    print("Triton layers do not imported!")
-    pass
+    from .triton_ops import dropout, softmax, safe_softmax
+#except:
+    #print("Triton layers do not imported!")
+    #pass
 
 def sum_to_shape(data, shape):
     """Sum the array `data` to match the target `shape`."""
