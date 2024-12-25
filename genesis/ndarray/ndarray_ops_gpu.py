@@ -224,8 +224,6 @@ def max_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.const
     tl.store(output_ptr + m_offset, out, mask=m_mask)
 
 def add(x, y):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
     else:
@@ -246,17 +244,14 @@ def add(x, y):
             x = x.contiguous()
         if y.is_contiguous() is False:
             y = y.contiguous()
-        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
-        #torch.cuda.synchronize(device=x.device)
+        with torch.cuda.device(x.device):
+            add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     else:
-        add_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            add_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     return output
 
 def iadd(x, y):
-    # 确保 x 是在当前使用的 CUDA 设备上
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
-    
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
         x, y = torch.broadcast_tensors(x, y)
@@ -279,14 +274,14 @@ def iadd(x, y):
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
 
     if isinstance(y, torch.Tensor):
-        add_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            add_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
     else:
-        add_scalar_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            add_scalar_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
     return x
 
 def mul(x, y):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
     else:
@@ -306,14 +301,14 @@ def mul(x, y):
             x = x.contiguous()
         if y.is_contiguous() is False:
             y = y.contiguous()
-        mul_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            mul_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     else:
-        mul_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            mul_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     return output
 
 def truediv(x, y):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
     else:
@@ -333,14 +328,14 @@ def truediv(x, y):
             x = x.contiguous()
         if y.is_contiguous() is False:
             y = y.contiguous()
-        div_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            div_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     else:
-        div_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            div_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     return output
 
 def rtruediv(x, y):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
     else:
@@ -360,77 +355,72 @@ def rtruediv(x, y):
             x = x.contiguous()
         if y.is_contiguous() is False:
             y = y.contiguous()
-        div_kernel[grid](y, x, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            div_kernel[grid](y, x, output, n_elements, BLOCK_SIZE=1024)
     else:
-        rdiv_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            rdiv_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     return output
 
 def pow(x, scalar):
     return x ** scalar
 
 def log(x):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
         x = x.contiguous()
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-    log_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    with torch.cuda.device(x.device):
+        log_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
     return output.to(x.dtype)
 
 def exp(x):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
         x = x.contiguous()
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-    exp_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    with torch.cuda.device(x.device):
+        exp_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
     return output.to(x.dtype)
 
 def sin(x):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
         x = x.contiguous()
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-    sin_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    with torch.cuda.device(x.device):
+        sin_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
     return output.to(x.dtype)
 
 def cos(x):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     output = torch.empty_like(x, dtype=x.dtype)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
         x = x.contiguous()
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-    cos_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    with torch.cuda.device(x.device):
+        cos_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
     return output.to(x.dtype)
 
 def sqrt(x):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     output = torch.empty_like(x, dtype=x.dtype)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
         x = x.contiguous()
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-    sqrt_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    with torch.cuda.device(x.device):
+        sqrt_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
     return output
 
 def maximum(x, y):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     output = torch.zeros(x.shape, device=torch.device("cuda"), dtype=x.dtype)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
@@ -440,14 +430,14 @@ def maximum(x, y):
     if isinstance(y, torch.Tensor):
         if y.is_contiguous() is False:
             y = y.contiguous()
-        maximum_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            maximum_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     else:
-        maximum_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        with torch.cuda.device(x.device):
+            maximum_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     return output
 
 def reduce_sum(x, axis=None, keepdims=False):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     shape = x.shape
     ndim = len(shape)
     if axis is None:
@@ -484,12 +474,11 @@ def reduce_sum(x, axis=None, keepdims=False):
     block_m = 4
     block_n = min(triton.next_power_of_2(n), 1024)
     grid = (triton.cdiv(m, block_m), 1, 1)
-    sum_kernel[grid](x, output, m, n, block_m, block_n)
+    with torch.cuda.device(x.device):
+        sum_kernel[grid](x, output, m, n, block_m, block_n)
     return output.to(x.dtype)
 
 def reduce_max(x, axis=None, keepdims=False):
-    if torch.cuda.current_device() != x.device:
-        torch.cuda.set_device(x.device)
     shape = x.shape
     ndim = len(shape)
     if axis is None:
@@ -527,7 +516,8 @@ def reduce_max(x, axis=None, keepdims=False):
 
     if x.is_contiguous() is False:
         x = x.contiguous()
-    max_kernel[grid](x, output, m, n, block_m, block_n)
+    with torch.cuda.device(x.device):
+        max_kernel[grid](x, output, m, n, block_m, block_n)
     return output.to(x.dtype)
 
 def reshape(x, new_shape):
@@ -557,8 +547,6 @@ def ge(x, y):
     return x.__ge__(y)
 
 def matmul(a, b, activation=""):
-    if torch.cuda.current_device() != a.device:
-        torch.cuda.set_device(a.device)
     assert a.shape[-1] == b.shape[-2], "Incompatible dimensions"
     if a.is_contiguous() is False:
         a = a.contiguous()
@@ -571,18 +559,19 @@ def matmul(a, b, activation=""):
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
-        matmul_kernel[grid](
-                a, b, c,
-                M, N, K,
-                a.stride(0), a.stride(1),
-                b.stride(0), b.stride(1),
-                c.stride(0), c.stride(1),
-                BLOCK_SIZE_M=64,
-                BLOCK_SIZE_N=64,
-                BLOCK_SIZE_K=32,
-                GROUP_SIZE_M=8,
-                ACTIVATION=activation
-        )
+        with torch.cuda.device(a.device):
+            matmul_kernel[grid](
+                    a, b, c,
+                    M, N, K,
+                    a.stride(0), a.stride(1),
+                    b.stride(0), b.stride(1),
+                    c.stride(0), c.stride(1),
+                    BLOCK_SIZE_M=64,
+                    BLOCK_SIZE_N=64,
+                    BLOCK_SIZE_K=32,
+                    GROUP_SIZE_M=8,
+                    ACTIVATION=activation
+            )
         return c.to(a.dtype)
     elif len(a.shape) > 2 or len(b.shape) > 2:
         pre_shape_a = []
@@ -615,18 +604,19 @@ def matmul(a, b, activation=""):
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
         for i in range(max(pre_a, pre_b)):
-            matmul_kernel[grid](
-                    aa[i], bb[i], c[i],
-                    M, N, K,
-                    a.stride(-2), a.stride(-1),
-                    b.stride(-2), b.stride(-1),
-                    c.stride(-2), c.stride(-1),
-                    BLOCK_SIZE_M=64,
-                    BLOCK_SIZE_N=64,
-                    BLOCK_SIZE_K=32,
-                    GROUP_SIZE_M=8,
-                    ACTIVATION=activation
-            )
+            with torch.cuda.device(a.device):
+                matmul_kernel[grid](
+                        aa[i], bb[i], c[i],
+                        M, N, K,
+                        a.stride(-2), a.stride(-1),
+                        b.stride(-2), b.stride(-1),
+                        c.stride(-2), c.stride(-1),
+                        BLOCK_SIZE_M=64,
+                        BLOCK_SIZE_N=64,
+                        BLOCK_SIZE_K=32,
+                        GROUP_SIZE_M=8,
+                        ACTIVATION=activation
+                )
         if pre_a > pre_b:
             c = c.reshape(tuple(pre_shape_a) + (M, N))
         elif pre_a < pre_b:

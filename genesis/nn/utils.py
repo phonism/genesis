@@ -1,6 +1,6 @@
 import genesis
 
-def norm(data, p):
+def norm(data, p=2):
     powered_elements = data ** p
     sum_of_powers = genesis.sum(powered_elements)
     norm_value = sum_of_powers ** (1 / p)
@@ -18,7 +18,7 @@ def clip_grad_norm_(parameters, max_norm, norm_type=2):
 
     for param in parameters:
         if param.grad is not None:
-            param_norm = norm(param.grad.data)
+            param_norm = norm(param.grad)
             total_norm += param_norm ** norm_type
 
     total_norm = total_norm ** (1. / norm_type)
@@ -27,5 +27,5 @@ def clip_grad_norm_(parameters, max_norm, norm_type=2):
     if clip_coef < 1:
         for param in parameters:
             if param.grad is not None:
-                param.grad.data.mul *= clip_coef
+                param.grad *= clip_coef
     return total_norm

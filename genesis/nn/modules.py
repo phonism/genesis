@@ -12,6 +12,7 @@ import numpy as np
 class Parameter(Tensor):
     """A special kind of tensor that represents parameters."""
 
+
 def _unpack_params(value: object) -> List[Tensor]:
     if isinstance(value, Parameter):
         return [value]
@@ -30,6 +31,7 @@ def _unpack_params(value: object) -> List[Tensor]:
     else:
         return []
 
+
 def _unpack_vars(value: object) -> List[Tensor]:
     if isinstance(value, Tensor):
         return [value]
@@ -47,6 +49,7 @@ def _unpack_vars(value: object) -> List[Tensor]:
         return var_list
     else:
         return []
+
 
 def _child_modules(value: object) -> List["Module"]:
     if isinstance(value, Module):
@@ -112,7 +115,6 @@ class Module:
             for name, param in module.__dict__.items():
                 full_name = prefix + name
 
-                # 如果是一个 Tensor，则直接从 state_dict 中加载
                 if isinstance(param, genesis.Tensor):
                     if full_name in state_dict:
                         param.data.data.copy_(state_dict[full_name])
@@ -125,15 +127,12 @@ class Module:
                     for idx, sub_param in enumerate(param):
                         if isinstance(sub_param, Module):
                             load(sub_param, full_name + "." + str(idx) + ".")
-
         load(self)
-
         if strict:
             if len(missing_keys) > 0:
                 raise KeyError(f"Missing keys in state_dict: {missing_keys}")
             if len(unexpected_keys) > 0:
                 raise KeyError(f"Unexpected keys in state_dict: {unexpected_keys}")
-
 
     def train(self):
         self.training = True
@@ -201,6 +200,7 @@ class ModuleList(Module):
     def __iter__(self):
         return iter(self._modules) 
 
+
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True, device=None, dtype="float32"):
         super().__init__()
@@ -244,6 +244,7 @@ class Dropout(Module):
             x = x * mask / (1 - self.p)
         return x
 
+
 class Residual(Module):
     def __init__(self, fn: Module):
         super().__init__()
@@ -251,6 +252,7 @@ class Residual(Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self.fn(x) + x
+
 
 class BatchNorm1d(Module):
     def __init__(self, dim: int, eps=1e-5, momentum=0.1, device=None, dtype="float32"):
@@ -278,6 +280,7 @@ class BatchNorm1d(Module):
         x = self.weight * x + self.bias
         return x
 
+
 class LayerNorm(Module):
     def __init__(self, dim, eps=1e-5, device=None, dtype="float32"):
         super().__init__()
@@ -295,6 +298,7 @@ class LayerNorm(Module):
         output = self.weight * output + self.bias
         return output
 
+
 class FusedLayerNorm(Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -305,6 +309,7 @@ class FusedLayerNorm(Module):
 
     def forward(self, x):
         return F.fused_layer_norm(x, self.weight, self.bias, self.eps)
+
 
 class RMSNorm(Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -319,6 +324,7 @@ class RMSNorm(Module):
         rms = x / F.sqrt(x_mean + self.eps)
         return rms * self.weight
 
+
 class SoftmaxLoss(Module):
     def forward(self, logits: Tensor, y: Tensor) -> Tensor:
         num, classes = logits.shape
@@ -332,15 +338,20 @@ class SoftmaxLoss(Module):
         loss = logsum - logits_y
         return F.summation(loss) / valid_logits.shape[0]
 
+
 class Softmax(Module):
     def __init__(self, dim=-1):
         super().__init__()
         self.dim = dim
 
     def forward(self, x: Tensor) -> Tensor:
-        x_exp = F.exp(x - F.max(x, self.dim, keepdims=True))
-        x = x_exp / F.summation(x_exp, axis=self.dim, keepdims=True)
-        return x
+        if x.device == genesis.cpu() or genesis.use_triton is False:
+            x_exp = F.exp(x - F.max(x, self.dim, keepdims=True))
+            x = x_exp / F.summation(x_exp, axis=self.dim, keepdims=True)
+            return x
+        else:
+            return F.softmax(x, dim=self.dim)
+
 
 class Embedding(Module):
     def __init__(self, num_embeddings, embedding_dim):
@@ -353,6 +364,7 @@ class Embedding(Module):
         x_one_hot = init.one_hot(self.num_embeddings, x.data.flat, device=x.device)
         res = x_one_hot @ self.weight
         return res.reshape((*x.shape, self.embedding_dim))
+
     
 class RotaryEmbedding(Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000):
@@ -374,12 +386,14 @@ class RotaryEmbedding(Module):
             self.sin_cached[:, :, :seq_len, :],
         )
 
+
 class SiLU(Module):
     def __init__(self):
         super().__init__()
 
     def forward(self, x):
         return x / (F.exp(-x) + 1)
+
 
 class FeedFowardSwiGLU(Module):
     """ 
@@ -416,6 +430,7 @@ class MultiheadAttention(Module):
         mask = genesis.triu((-float("inf") * init.ones(x.shape[1], x.shape[1], device=x.device)), k=1, device=x.device)
         atten = self.softmax(q @ F.transpose(k) / np.sqrt(self.dim // self.heads) + mask)
         return (atten @ v).transpose((1, 2)).reshape(x.shape[0], x.shape[1], self.dim) @ self.w_out, atten
+
 
 class FusedMultiheadAttention(Module):
     def __init__(self, dim=64, heads=1, device=None, dtype="float32"):
