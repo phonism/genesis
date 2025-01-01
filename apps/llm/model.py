@@ -32,23 +32,25 @@ class ModelArgs:
     block_size: int = 2048
     vocab_size: int = 151936
     n_layer: int = 24
-    n_head: int = 14
-    dim: int = 896
-    intermediate_size: int = None
+    num_attention_heads: int = 14
+    hidden_size: int = 896
+    intermediate_size: int = 4864
     n_local_heads: int = -1
+    num_key_value_heads: int = 2
     head_dim: int = 64
-    rope_base: float = 10000
-    norm_eps: float = 1e-5
+    rope_base: float = 1000000.
+    max_position_embeddings: int = 32768
+    norm_eps: float = 1e-6
     rope_scaling: Optional[dict] = None
 
     def __post_init__(self):
         if self.n_local_heads == -1:
-            self.n_local_heads = self.n_head
+            self.n_local_heads = self.num_attention_heads
         if self.intermediate_size is None:
-            hidden_dim = 4 * self.dim
+            hidden_dim = 4 * self.hidden_size
             n_hidden = int(2 * hidden_dim / 3)
             self.intermediate_size = find_multiple(n_hidden, 256)
-        self.head_dim = self.dim // self.n_head
+        self.head_dim = self.hidden_size // self.num_attention_heads
 
     @classmethod
     def from_name(cls, name: str):
@@ -87,12 +89,12 @@ class Transformer(nn.Module):
         super().__init__()
         self.config = config
 
-        self.tok_embeddings = nn.Embedding(config.vocab_size, config.dim)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList(TransformerBlock(config) for _ in range(config.n_layer))
-        self.norm = nn.RMSNorm(config.dim, eps=config.norm_eps)
-        self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
+        self.norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        #self.lm_head.weight = self.embed_tokens.weight
 
-        self.freqs_cis: Optional[Tensor] = None
         self.mask_cache: Optional[Tensor] = None
         self.max_batch_size = -1
         self.max_seq_length = -1
@@ -100,147 +102,144 @@ class Transformer(nn.Module):
     def setup_caches(self, max_batch_size, max_seq_length):
         if self.max_seq_length >= max_seq_length and self.max_batch_size >= max_batch_size:
             return
-        head_dim = self.config.dim // self.config.n_head
+        head_dim = self.config.hidden_size // self.config.num_attention_heads
         max_seq_length = find_multiple(max_seq_length, 8)
         self.max_seq_length = max_seq_length
         self.max_batch_size = max_batch_size
-        dtype = self.output.weight.dtype
+        dtype = self.lm_head.weight.dtype
         # For quantized layers, dtype is encoded in scales
-        if hasattr(self.output, "scales"):
-            dtype = self.output.scales.dtype
-        elif hasattr(self.output, "scales_and_zeros"):
-            dtype = self.output.scales_and_zeros.dtype
+        if hasattr(self.lm_head, "scales"):
+            dtype = self.lm_head.scales.dtype
+        elif hasattr(self.lm_head, "scales_and_zeros"):
+            dtype = self.lm_head.scales_and_zeros.dtype
         #for b in self.layers:
             #b.attention.kv_cache = KVCache(max_batch_size, max_seq_length, self.config.n_local_heads, head_dim, dtype)
-        self.freqs_cis = precompute_freqs_cis(self.config.block_size, self.config.dim // self.config.n_head, self.config.rope_base, self.config.rope_scaling)
 
-    def forward(self, idx: Tensor, input_pos: Optional[Tensor] = None) -> Tensor:
-        assert self.freqs_cis is not None, "Caches must be initialized first"
+    def forward(self, idx: Tensor, position_ids: Optional[Tensor] = None) -> Tensor:
         batch_size, sequence_length = idx.size()
-        if input_pos is None:
-            input_pos = genesis.arange(0, sequence_length, device=idx.device)
-            input_pos = input_pos + genesis.zeros(batch_size, sequence_length, device=idx.device)
+        if position_ids is None:
+            position_ids = genesis.arange(0, sequence_length, device=idx.device)
+            position_ids = position_ids + genesis.zeros(batch_size, sequence_length, device=idx.device)
         mask = None
-        freqs_cis = self.freqs_cis[input_pos.data.data.long()]
-        x = self.tok_embeddings(idx)
+        x = self.embed_tokens(idx)
 
         for i, layer in enumerate(self.layers):
-            x = layer(x, input_pos, freqs_cis, mask)
+            x = layer(x, position_ids, position_ids, mask)
         x = self.norm(x)
-        logits = self.output(x)
+        logits = self.lm_head(x)
         return logits
 
     @classmethod
     def from_name(cls, name: str):
         return cls(ModelArgs.from_name(name))
 
+class RotaryEmbedding(genesis.nn.Module):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000):
+        super().__init__()
+        self.inv_freq = genesis.Tensor(1.0 / (base ** (np.arange(0, dim, 2).astype(np.float32) / dim))) 
+        self.max_seq_len_cached = max_position_embeddings
+        t = genesis.Tensor(np.arange(self.max_seq_len_cached, dtype="float32"))
+        t = t.reshape(t.shape[0], 1)
+        self.inv_freq = self.inv_freq.reshape(1, self.inv_freq.shape[0])
+        freqs = t @ self.inv_freq
+        emb = genesis.stack((freqs, freqs), dim=-1).transpose().reshape(freqs.shape[0], freqs.shape[1] * 2)
+        self.cos_cached = emb.cos()
+        self.sin_cached = emb.sin()
+    
+    def forward(self, x, seq_len=None):
+        return (
+                self.cos_cached[:seq_len],
+                self.sin_cached[:seq_len],
+        )
+
 class TransformerBlock(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
         super().__init__()
-        self.attention = Attention(config)
-        self.feed_forward = FeedForward(config)
-        self.ffn_norm = nn.RMSNorm(config.dim, config.norm_eps)
-        self.attention_norm = nn.RMSNorm(config.dim, config.norm_eps) 
+        self.self_attn = Attention(config)
+        self.mlp = FeedForward(config)
+        self.input_layernorm = nn.RMSNorm(config.hidden_size, config.norm_eps)
+        self.post_attention_layernorm = nn.RMSNorm(config.hidden_size, config.norm_eps) 
         
-    def forward(self, x: Tensor, input_pos: Tensor, freqs_cis: Tensor, mask: Tensor = None) -> Tensor:
-        h = x + self.attention(self.attention_norm(x), freqs_cis, mask, input_pos)
-        out = h + self.feed_forward(self.ffn_norm(h))
+    def forward(self, x: Tensor, input_pos: Tensor, position_ids: Tensor, mask: Tensor = None) -> Tensor:
+        h = x + self.self_attn(self.input_layernorm(x), position_ids, mask, input_pos)
+        out = h + self.mlp(self.post_attention_layernorm(h))
         return out
 
 class Attention(nn.Module):
     def __init__(self, config: ModelArgs):
         super().__init__()
-        assert config.dim % config.n_head == 0
+        assert config.hidden_size % config.num_attention_heads == 0
 
-        total_head_dim = 3 * config.n_head * config.head_dim
-        # key, query, value projections for all heads, but in a batch
-        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=False)
-        self.wo = nn.Linear(config.dim, config.dim, bias=False)
-        self.kv_cache = None
-
-        self.n_head = config.n_head
         self.head_dim = config.head_dim
-        self.dim = config.dim
 
-    def forward(self, x: Tensor, freqs_cis: Tensor, mask: Tensor = None, input_pos: Optional[Tensor] = None) -> Tensor:
+        self.q_proj = nn.Linear(config.hidden_size, config.num_attention_heads * self.head_dim, bias=True)
+        self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True)
+        self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True)
+        self.o_proj = nn.Linear(config.num_attention_heads * self.head_dim, config.hidden_size, bias=False)
+        self.rotary_emb = RotaryEmbedding(self.head_dim, 
+                max_position_embeddings=config.max_position_embeddings,
+                base=config.rope_base)
+
+        self.kv_cache = None
+        self.num_key_value_heads = config.num_key_value_heads
+        self.num_attention_heads = config.num_attention_heads
+        self.hidden_size = config.hidden_size
+
+    def forward(self, x: Tensor, position_ids: Tensor, mask: Tensor = None, input_pos: Optional[Tensor] = None) -> Tensor:
         bsz, seqlen, _ = x.shape
 
-        kv_size = self.n_head * self.head_dim
-        # TODO
-        q, k, v = F.split(self.wqkv(x).reshape(x.shape[0], x.shape[1], 3, self.dim), axis=2)
+        kv_size = self.num_attention_heads * self.head_dim
 
-        q = q.reshape(bsz, seqlen, self.n_head, self.head_dim)
-        k = k.reshape(bsz, seqlen, self.n_head, self.head_dim)
-        v = v.reshape(bsz, seqlen, self.n_head, self.head_dim)
+        hidden_shape = (*x.shape[:-1], -1, self.head_dim)
 
-        q = apply_rotary_emb(q, freqs_cis)
-        k = apply_rotary_emb(k, freqs_cis)
 
-        q, k, v = map(lambda x: x.transpose(1, 2), (q, k, v))
+        q = self.q_proj(x).view(hidden_shape).transpose(1, 2)
+        k = self.k_proj(x).view(hidden_shape).transpose(1, 2)
+        v = self.v_proj(x).view(hidden_shape).transpose(1, 2)
+
+        cos, sin = self.rotary_emb(v, seq_len=k.shape[-2])
+        q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
+
 
         if self.kv_cache is not None:
             k, v = self.kv_cache.update(input_pos, k, v)
 
+
+        batch, num_key_value_heads, slen, head_dim = k.shape
+        n_rep = self.num_attention_heads // self.num_key_value_heads
+        k = k[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+        k = k.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+        v = v[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+        v = v.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
         y = F.scaled_dot_product_attention(q, k, v)
-        y = y.transpose(1, 2).reshape(bsz, seqlen, self.dim)
-        y = self.wo(y)
+        y = y.transpose(1, 2).contiguous().reshape(bsz, seqlen, self.hidden_size)
+        y = self.o_proj(y)
         return y
 
 
 class FeedForward(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
         super().__init__()
-        self.w1 = nn.Linear(config.dim, config.intermediate_size, bias=False)
-        self.w3 = nn.Linear(config.dim, config.intermediate_size, bias=False)
-        self.w2 = nn.Linear(config.intermediate_size, config.dim, bias=False)
+        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
         self.silu = nn.SiLU()
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.w2(self.silu(self.w1(x)) * self.w3(x))
+        return self.down_proj(self.silu(self.gate_proj(x)) * self.up_proj(x))
 
-def apply_rope_scaling(freqs: genesis.Tensor, rope_scaling: Optional[dict] = None):
-    factor = rope_scaling["factor"]
-    low_freq_factor = rope_scaling["low_freq_factor"]
-    high_freq_factor = rope_scaling["high_freq_factor"]
-    old_context_len = rope_scaling["original_max_position_embeddings"]
-    
-    low_freq_wavelen = old_context_len / low_freq_factor
-    high_freq_wavelen = old_context_len / high_freq_factor
-    new_freqs = []
-    for freq in freqs:
-        wavelen = 2 * math.pi / freq
-        if wavelen < high_freq_wavelen:
-            new_freqs.append(freq)
-        elif wavelen > low_freq_wavelen:
-            new_freqs.append(freq / factor)
-        else:
-            assert low_freq_wavelen != high_freq_wavelen
-            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
-            new_freqs.append((1 - smooth) * freq / factor + smooth * freq)
-    return genesis.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+def rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return genesis.cat((-x2, x1), dim=-1)
 
-def precompute_freqs_cis(
-        seq_len: int, n_elem: int, base: int = 10000,
-        rope_scaling: Optional[dict] = None,) -> Tensor:
-    freqs = 1.0 / (base ** (genesis.arange(0, n_elem, 2)[: (n_elem // 2)] / n_elem))
-    if rope_scaling is not None:
-        freqs = apply_rope_scaling(freqs, rope_scaling)
-    t = genesis.arange(seq_len, device=freqs.device).reshape(seq_len, 1)
-    freqs = freqs.reshape(1, freqs.shape[0])
-    freqs = t @ freqs
-    #freqs_cis = genesis.polar(genesis.ones_like(freqs), freqs)
-    real = freqs.cos()
-    imag = freqs.sin()
-    cache = genesis.stack([real, imag], dim=-1)
-    cache.requires_grad = True
-    return cache
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    # TODO 
+    cos = cos[position_ids.data.data.long()].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids.data.data.long()].unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
 
-def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
-    xshaped = x.reshape(*x.shape[:-1], -1, 2)
-    freqs_cis = freqs_cis.reshape(1, xshaped.size(1), 1, xshaped.size(3), 2)
-    x_out2 = genesis.stack(
-            [xshaped[..., 0] * freqs_cis[..., 0] - xshaped[..., 1] * freqs_cis[..., 1],
-            xshaped[..., 1] * freqs_cis[..., 0] + xshaped[..., 0] * freqs_cis[..., 1],],
-            -1,)
-    x_out2 = x_out2.flatten(3)
-    return x_out2

@@ -329,6 +329,27 @@ def test_stack(shape, dim, l, device):
     for i in range(l):
         np.testing.assert_allclose(TA[i].grad.numpy(), A[i].grad.numpy(), atol=atol, rtol=rtol)
 
+STACK_PARAMETERS = [
+    ((5, 5), 0, 1),
+    ((5, 5), 0, 2),
+    ((1, 5, 7), 2, 5)]
+@pytest.mark.parametrize("shape, dim, l", STACK_PARAMETERS)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_cat(shape, dim, l, device):
+    _A = [np.random.randn(*shape).astype(np.float32) for i in range(l)]
+    A = [genesis.Tensor(_A[i], device=device) for i in range(l)]
+    TA = [torch.Tensor(_A[i]) for i in range(l)]
+    for torch_a in TA:
+        torch_a.requires_grad = True
+    np.testing.assert_allclose(
+            torch.cat(TA, dim=dim).detach().numpy(), 
+            F.cat(A, dim=dim).detach().numpy(), atol=atol, rtol=rtol)
+
+    torch.cat(TA, dim=dim).sum().backward()
+    F.cat(A, dim=dim).sum().backward()
+    for i in range(l):
+        np.testing.assert_allclose(TA[i].grad.numpy(), A[i].grad.numpy(), atol=atol, rtol=rtol)
+
 SPLIT_PARAMETERS = [
     ((10, 5), 0, [2, 3, 5]),
     ((10, 5), 1, [1, 4]),
@@ -409,6 +430,23 @@ def test_view(shape, shape_to, device):
 
     TA.view(shape_to).sum().backward()
     A.view(shape_to).sum().backward()
+    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
+
+EXPAND_SHAPES = [
+    ((2, 1, 3), (2, 4, 3))]
+@pytest.mark.parametrize("shape,shape_to", EXPAND_SHAPES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_expand(shape, shape_to, device):
+    _A = np.random.randn(*shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device)
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    np.testing.assert_allclose(
+            TA.expand(shape_to).detach().numpy(), 
+            A.expand(shape_to).detach().numpy(), atol=atol, rtol=rtol)
+
+    TA.expand(shape_to).sum().backward()
+    A.expand(shape_to).sum().backward()
     np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
 TRANSPOSE_SHAPES = [(1, 1, 1), (4, 5, 6)]
@@ -513,6 +551,39 @@ def test_getitem(shape, device):
     B.sum().backward()
     TB.sum().backward()
     np.testing.assert_allclose(TA.grad.detach().numpy(), A.grad.detach().numpy(), atol=atol, rtol=rtol)
+
+UNSQUEEZE_SHAPES = [((4, 5, 6), 1)]
+@pytest.mark.parametrize("shape,dim", UNSQUEEZE_SHAPES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_unsqueeze(shape, dim, device):
+    _A = np.random.randn(*shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device)
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    B = A.unsqueeze(dim=dim)
+    TB = TA.unsqueeze(dim=dim)
+    np.testing.assert_allclose(TB.detach().numpy(), B.detach().numpy(), atol=atol, rtol=rtol)
+
+    B.sum().backward()
+    TB.sum().backward()
+    np.testing.assert_allclose(TA.grad.detach().numpy(), A.grad.detach().numpy(), atol=atol, rtol=rtol)
+
+SQUEEZE_SHAPES = [((4, 1, 6), 1)]
+@pytest.mark.parametrize("shape,dim", SQUEEZE_SHAPES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_squeeze(shape, dim, device):
+    _A = np.random.randn(*shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device)
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    B = A.squeeze(dim=dim)
+    TB = TA.squeeze(dim=dim)
+    np.testing.assert_allclose(TB.detach().numpy(), B.detach().numpy(), atol=atol, rtol=rtol)
+
+    B.sum().backward()
+    TB.sum().backward()
+    np.testing.assert_allclose(TA.grad.detach().numpy(), A.grad.detach().numpy(), atol=atol, rtol=rtol)
+
 
 if __name__ == "__main__":
     pytest.main()

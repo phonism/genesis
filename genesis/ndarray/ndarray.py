@@ -285,6 +285,11 @@ class NDArray:
         self.data = self.device.view(self.data, new_shape)
         return self
 
+    def expand(self, new_shape):
+        out = NDArray.make(new_shape, device=self.device)
+        out.data = self.device.expand(self.data, new_shape)
+        return out
+
     def permute(self, new_axis):
         out = NDArray.make(self.shape, device=self.device)
         out.data = self.device.permute(self.data, new_axis)
@@ -466,6 +471,9 @@ def reshape(array, new_shape):
         inferred_dim = int(np.prod(array.shape) / known_dim_product)
         new_shape = tuple(inferred_dim if dim == -1 else dim for dim in new_shape)
     return array.reshape(new_shape)
+
+def expand(array, new_shape):
+    return array.expand(new_shape)
 
 def negative(array):
     return -array

@@ -54,6 +54,9 @@ def reshape(x, new_shape):
 def view(x, new_shape):
     return x.view(new_shape)
 
+def expand(x, new_shape):
+    return x.expand(new_shape)
+
 def permute(x, new_axis):
     return x.permute(new_axis)
 

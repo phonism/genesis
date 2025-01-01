@@ -407,7 +407,6 @@ class Tensor:
     def exp(self):
         return genesis.nn.functional.exp(self)
 
-
     def transpose(self, *axis):
         if not axis:
             axis = None
@@ -435,6 +434,12 @@ class Tensor:
     def matmul(self, other):
         return genesis.nn.functional.matmul(self, other)
 
+    def unsqueeze(self, dim):
+        return genesis.nn.functional.unsqueeze(self, dim)
+
+    def squeeze(self, dim):
+        return genesis.nn.functional.squeeze(self, dim)
+
     def sqrt(self):
         return genesis.nn.functional.sqrt(self)
 
@@ -442,6 +447,11 @@ class Tensor:
         if len(new_shape) == 1 and isinstance(new_shape[0], (tuple, list)):
             new_shape = new_shape[0]
         return genesis.nn.functional.view(self, new_shape)
+
+    def expand(self, *new_shape):
+        if len(new_shape) == 1 and isinstance(new_shape[0], (tuple, list)):
+            new_shape = new_shape[0]
+        return genesis.nn.functional.expand(self, new_shape)
 
     def flatten(self, start_dim=0, end_dim=None):
         return genesis.nn.functional.flatten(self, start_dim=start_dim, end_dim=end_dim)

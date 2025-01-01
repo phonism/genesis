@@ -93,7 +93,7 @@ class Module:
     def _children(self) -> List["Module"]:
         return _child_modules(self.__dict__)
 
-    def state_dict(self, prefix=""):
+    def state_dict(self, prefix="model."):
         state_dict = {}
         for name, param in self.__dict__.items():
             if isinstance(param, genesis.Tensor):
@@ -104,14 +104,14 @@ class Module:
             elif isinstance(param, (list, tuple)):
                 for idx, v in enumerate(param):
                     if isinstance(v, Module):
-                        state_dict.update(v.state_dict(prefix + name + "." + str(idx) + "."))
+                        state_dict.update(v.state_dict(prefix + str(idx) + "."))
         return state_dict
 
     def load_state_dict(self, state_dict, strict=True):
         missing_keys = []
         unexpected_keys = list(state_dict.keys())
 
-        def load(module, prefix=""):
+        def load(module, prefix="model."):
             for name, param in module.__dict__.items():
                 full_name = prefix + name
 
@@ -126,7 +126,7 @@ class Module:
                 elif isinstance(param, (list, tuple)):
                     for idx, sub_param in enumerate(param):
                         if isinstance(sub_param, Module):
-                            load(sub_param, full_name + "." + str(idx) + ".")
+                            load(sub_param, prefix + str(idx) + ".")
         load(self)
         if strict:
             if len(missing_keys) > 0:
@@ -206,17 +206,22 @@ class Linear(Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
+        #self.weight = Parameter(
+                #init.kaiming_uniform(self.out_features, self.in_features),
+                #device=device, dtype=dtype)
         self.weight = Parameter(
-                init.kaiming_uniform(self.in_features, self.out_features),
+                init.randn(self.out_features, self.in_features, std=0.02),
                 device=device, dtype=dtype)
+
         self.bias = None
         if bias:
-            self.bias = Parameter(
-                    init.kaiming_uniform(self.out_features, 1).reshape(self.out_features),
-                    device=device, dtype=dtype)
+            #self.bias = Parameter(
+                    #init.kaiming_uniform(self.out_features, 1).reshape(self.out_features),
+                    #device=device, dtype=dtype)
+            self.bias = Parameter(init.zeros(self.out_features), device=device, dtype=dtype)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = x @ self.weight
+        x = x @ self.weight.transpose(0, 1)
         if self.bias:
             x = x + self.bias
         return x
@@ -358,7 +363,7 @@ class Embedding(Module):
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.weight = Parameter(init.randn(num_embeddings, embedding_dim))
+        self.weight = Parameter(init.randn(num_embeddings, embedding_dim, std=0.02))
 
     def forward(self, x):
         x_one_hot = init.one_hot(self.num_embeddings, x.data.flat, device=x.device)

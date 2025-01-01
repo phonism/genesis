@@ -70,7 +70,7 @@ def test_linear(shape, device):
     T_linear = torch.nn.Linear(shape[1], 10)
     TC = T_linear(TA)
     linear = genesis.nn.Linear(shape[1], 10)
-    linear.weight = genesis.nn.Parameter(T_linear.weight.detach().numpy().T)
+    linear.weight = genesis.nn.Parameter(T_linear.weight.detach().numpy())
     linear.bias = genesis.nn.Parameter(T_linear.bias.detach().numpy())
     if device == genesis.cuda():
         linear.cuda()
@@ -237,6 +237,36 @@ def test_fused_multihead_attention(shape, device):
     genesis_out[0].sum().backward()
     torch_out[0].sum().backward()
     np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=1e-2, rtol=1e-2)
+
+QKV_SHAPES = [
+    (1, 16, 12, 64),
+]
+@pytest.mark.parametrize("shape", QKV_SHAPES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_scaled_dot_product_attention(shape, device):
+    if device == genesis.cpu():
+        pytest.skip("Skipping CPU tests, only testing CUDA")
+    _Q = np.random.randn(*shape).astype(np.float32)
+    Q = genesis.Tensor(_Q, device=device)
+    TQ = torch.Tensor(_Q)
+    TQ.requires_grad = True
+    _K = np.random.randn(*shape).astype(np.float32)
+    K = genesis.Tensor(_K, device=device)
+    TK = torch.Tensor(_K)
+    TK.requires_grad = True
+    _V = np.random.randn(*shape).astype(np.float32)
+    V = genesis.Tensor(_V, device=device)
+    TV = torch.Tensor(_V)
+    TV.requires_grad = True
+
+    genesis_out = F.scaled_dot_product_attention(Q, K, V)
+    
+    torch_out = torch.nn.functional.scaled_dot_product_attention(
+            TQ, TK, TV, attn_mask=None, dropout_p=0.0, is_causal=True)
+    np.testing.assert_allclose(
+            genesis_out.detach().numpy(), 
+            torch_out.detach().numpy(), 
+            atol=1e-2, rtol=1e-2)
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_embedding(device):

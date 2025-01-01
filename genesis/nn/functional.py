@@ -328,6 +328,26 @@ class Reshape(Function):
 def reshape(a, shape):
     return Reshape.apply(a, shape)
 
+class Expand(Function):
+    @staticmethod
+    def forward(ctx, a, new_shape):
+        ctx.a_shape = a.shape
+        ctx.new_shape = new_shape
+        return Tensor(array_api.expand(a.data, new_shape), requires_grad=a.requires_grad, device=a.device, dtype=a.dtype)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        grad_input = out_grad 
+        for i, (a_dim, new_dim) in enumerate(zip(ctx.a_shape, ctx.new_shape)):
+            if a_dim == 1 and new_dim > 1:
+                grad_input = array_api.reduce_sum(grad_input.data, axis=i, keepdims=True) 
+        grad_input = Tensor(grad_input.view(ctx.a_shape), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        return grad_input, None
+
+def expand(a, shape):
+    return Expand.apply(a, shape)
+
+
 class View(Function):
     @staticmethod
     def forward(ctx, a, shape):
@@ -620,6 +640,60 @@ class Stack(Function):
 
 def stack(tensors, dim=0):
     return Stack.apply(tensors, dim=dim)
+
+class Cat(Function):
+    @staticmethod 
+    def forward(ctx, tensors, dim):
+        ctx.dim = dim
+        ctx.save_for_backward(*tensors)
+        data = torch.cat([t.data.data for t in tensors], dim=dim)
+        requires_grad = False
+        for t in tensors:
+            if t.requires_grad:
+                requires_grad = True
+        return Tensor(data, device=tensors[0].device, requires_grad=requires_grad, dtype=tensors[0].dtype) 
+    
+    @staticmethod
+    def backward(ctx, out_grad):
+        sizes = [t.data.data.shape[ctx.dim] for t in ctx.saved_tensors]
+        grads = torch.split(out_grad.data.data, sizes, dim=ctx.dim)
+        result = tuple(Tensor(g, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype) for g in grads)
+        return result 
+
+def cat(tensors, dim=0):
+    return Cat.apply(tensors, dim=dim)
+
+class Squeeze(Function):
+    @staticmethod
+    def forward(ctx, tensor, dim):
+        ctx.dim = dim
+        data = tensor.data.data.squeeze(dim)
+        requires_grad = tensor.requires_grad
+        return Tensor(data, device=tensor.device, requires_grad=requires_grad, dtype=tensor.dtype) 
+    
+    @staticmethod
+    def backward(ctx, out_grad):
+        grad = out_grad.data.data.unsqueeze(ctx.dim)
+        return (Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype), ) 
+
+def squeeze(tensor, dim):
+    return Squeeze.apply(tensor, dim)
+
+class Unsqueeze(Function):
+    @staticmethod
+    def forward(ctx, tensor, dim):
+        ctx.dim = dim
+        data = tensor.data.data.unsqueeze(dim)
+        requires_grad = tensor.requires_grad
+        return Tensor(data, device=tensor.device, requires_grad=requires_grad, dtype=tensor.dtype) 
+    
+    @staticmethod
+    def backward(ctx, out_grad):
+        grad = out_grad.data.data.squeeze(ctx.dim)
+        return (Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype), )
+
+def unsqueeze(tensor, dim):
+    return Unsqueeze.apply(tensor, dim)
 
 class Split(Function):
     @staticmethod

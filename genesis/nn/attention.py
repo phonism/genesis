@@ -5,6 +5,7 @@ from typing import Optional, List
 import numpy as np
 from ..autograd import Function, NDArray, Tensor
 from genesis import init
+import genesis
 
 from ..backend import array_api, NDArray
 
@@ -512,4 +513,14 @@ def fused_attention(q, k, v):
     return FusedAttention.apply(q, k, v)
 
 def scaled_dot_product_attention(q, k, v):
-    return FusedAttention.apply(q, k, v)
+    #return FusedAttention.apply(q, k, v)
+    batch_size, head_num, seq_len, head_dim = q.shape
+    if seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192] or head_dim not in [32, 64, 128, 256]:
+        mask = genesis.triu(
+                (-float("inf") * init.ones(q.shape[2], q.shape[2], device=q.device)), 
+                k=1, device=q.device)
+        atten = genesis.nn.Softmax()(q @ k.transpose(-1, -2) / np.sqrt(head_dim) + mask)
+        y = atten @ v
+    else:
+        y = FusedAttention.apply(q, k, v)
+    return y
