@@ -200,11 +200,8 @@ class Attention(nn.Module):
         cos, sin = self.rotary_emb(v, seq_len=k.shape[-2])
         q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
 
-
         if self.kv_cache is not None:
             k, v = self.kv_cache.update(input_pos, k, v)
-
-
         batch, num_key_value_heads, slen, head_dim = k.shape
         n_rep = self.num_attention_heads // self.num_key_value_heads
         k = k[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
