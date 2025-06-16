@@ -549,6 +549,15 @@ def eq(x, y):
 def ge(x, y):
     return x.__ge__(y)
 
+def gt(x, y):
+    return x.__gt__(y)
+
+def le(x, y):
+    return x.__le__(y)
+
+def lt(x, y):
+    return x.__lt__(y)
+
 def matmul(a, b, activation=""):
     assert a.shape[-1] == b.shape[-2], "Incompatible dimensions"
     if a.is_contiguous() is False:
