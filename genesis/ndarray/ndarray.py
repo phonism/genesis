@@ -348,13 +348,18 @@ class NDArray:
         return 1 - (self == other)
 
     def __gt__(self, other):
-        return (self >= other) * (self != other)
+        out = NDArray.make(self.shape, device=self.device)
+        if isinstance(other, NDArray):
+            out.data = self.device.gt(self.data, other.data)
+        else:
+            out.data = self.device.gt(self.data, other)
+        return out
 
     def __lt__(self, other):
-        return 1 - (self >= other)
+        return (self < other) * (self != other)
 
     def __le__(self, other):
-        return 1 - (self > other)
+        return (self <= other) * (self != other)
 
     def __matmul__(self, b, activation=""):
         out = NDArray.make(self.shape, dtype=self.dtype, device=self.device)
