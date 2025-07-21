@@ -185,6 +185,9 @@ class Tensor:
         generate a const Tensor
         """
         return Tensor.make_const(self.data)
+    
+    def cpu(self):
+        return Tensor(self.data.cpu(), device=genesis.cpu())
 
     @staticmethod
     def _array_from_numpy(numpy_array, device, dtype):
@@ -284,9 +287,16 @@ class Tensor:
         tensor = Tensor.__new__(Tensor)
         tensor.init([], data=self.data.half(), requires_grad=self.requires_grad)
         return tensor
+    
+    def long(self):
+        tensor = Tensor.__new__(Tensor)
+        tensor.init([], data=self.data.long(), requires_grad=self.requires_grad)
+        return tensor
 
     def to(self, device):
-        tensor = Tensor(self, device=genesis.device(device))
+        if type(device) == str:
+            device = genesis.device(device)
+        tensor = Tensor(self, device=device)
         return tensor
 
     def contiguous(self):

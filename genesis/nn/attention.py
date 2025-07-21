@@ -512,7 +512,7 @@ class FusedAttention(Function):
 def fused_attention(q, k, v):
     return FusedAttention.apply(q, k, v)
 
-def scaled_dot_product_attention(q, k, v):
+def scaled_dot_product_attention(q, k, v, is_causal=True):
     #return FusedAttention.apply(q, k, v)
     batch_size, head_num, seq_len, head_dim = q.shape
     if seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192] or head_dim not in [32, 64, 128, 256]:

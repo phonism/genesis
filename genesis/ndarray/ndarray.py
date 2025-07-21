@@ -5,48 +5,63 @@ import math
 from functools import reduce
 import numpy as np
 import genesis
+from typing import Optional, Any
 
 def prod(x):
+    """
+    Return the product of all elements in a list.
+    """
     return reduce(operator.mul, x, 1)
 
 class Device:
-    def __init__(self, name, mod, device_id=None):
+    """
+    Device class.
+    """
+    def __init__(
+        self, 
+        name: str, 
+        mod: Any, 
+        device_id: Optional[int] = None
+    ) -> None:
         self.name = name
         self.mod = mod
         self.device_id = device_id
 
-    def __eq__(self, other):
+    def __eq__(self, other: "Device") -> bool:
         return self.name == other.name
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.name + "()"
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str):
         return getattr(self.mod, name)
 
-    def enabled(self):
+    def enabled(self) -> bool:
+        """
+        Return True if the device is enabled.
+        """
         return self.mod is not None
 
-    def randn(self, *shape, dtype=genesis.float32):
+    def randn(self, *shape, dtype: Optional[str] = genesis.float32) -> "NDArray":
         if self.name == "cuda":
             return NDArray(torch.randn(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
         else:
             return NDArray(torch.randn(*shape, device=torch.device("cuda")).cpu(), device=self)
 
-    def rand(self, *shape, dtype=genesis.float32):
+    def rand(self, *shape, dtype: Optional[str] = genesis.float32) -> "NDArray":
         if self.name == "cuda":
             return NDArray(torch.rand(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
         else:
             return NDArray(torch.rand(*shape, device=torch.device("cuda")).cpu(), device=self)
 
-    def one_hot(self, n, i, dtype=genesis.float32):
+    def one_hot(self, n, i, dtype: Optional[str] = genesis.float32) -> "NDArray":
         return NDArray(torch.nn.functional.one_hot(i.data.data.long(), num_classes=n).float(), device=self)
 
-    def empty(self, shape, dtype=genesis.float32):
+    def empty(self, shape, dtype: Optional[str] = genesis.float32) -> "NDArray":
         dtype = genesis.float32 if dtype is None else dtype
         return NDArray.make(shape, device=self, dtype=dtype)
 
-    def full(self, shape, fill_value, dtype=genesis.float32):
+    def full(self, shape, fill_value, dtype: Optional[str] = genesis.float32) -> "NDArray":
         dtype = genesis.float32 if dtype is None else dtype
         arr = self.empty(shape, dtype)
         arr.fill(fill_value)
@@ -118,6 +133,9 @@ class NDArray:
 
     def __str__(self):
         return self.__repr__()
+    
+    def cpu(self):
+        return self.data.cpu()
 
     def numpy(self):
         return self.data.cpu().numpy()
@@ -309,6 +327,10 @@ class NDArray:
         out = NDArray.make(self.shape, dtype=genesis.float16, device=self.device)
         out.data = self.data.to(torch.float16)
         return out
+    
+    def long(self):
+        # TODO: implement long
+        return self
 
     def broadcast_to(self, new_shape):
         out = NDArray.make(new_shape, dtype=self.dtype, device=self.device)
