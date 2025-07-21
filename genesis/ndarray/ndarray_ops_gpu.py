@@ -6,11 +6,17 @@ import operator
 import genesis
 from functools import reduce
 
-def prod(x):
+def prod(x: list[int]):
+    """
+    Product of all elements in x.
+    """
     return reduce(operator.mul, x, 1)
 
 @triton.jit
 def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Add kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -22,6 +28,9 @@ def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def add_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Add scalar kernel.
+    """
     pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
@@ -31,6 +40,9 @@ def add_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.cons
 
 @triton.jit
 def mul_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Mul scalar kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -41,6 +53,9 @@ def mul_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.cons
 
 @triton.jit
 def mul_kernel(x_ptr, y_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
+    """
+    Mul kernel.
+    """
     pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < N
@@ -51,6 +66,9 @@ def mul_kernel(x_ptr, y_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def div_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Div scalar kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -61,6 +79,9 @@ def div_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.cons
 
 @triton.jit
 def rdiv_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Rdiv scalar kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -71,6 +92,9 @@ def rdiv_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.con
 
 @triton.jit
 def div_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Div kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -82,6 +106,9 @@ def div_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def maximum_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Maximum scalar kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -92,6 +119,9 @@ def maximum_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.
 
 @triton.jit
 def maximum_kernel(x_ptr, y_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
+    """
+    Maximum kernel.
+    """
     pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < N
@@ -102,6 +132,9 @@ def maximum_kernel(x_ptr, y_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def log_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Log kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -112,6 +145,9 @@ def log_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def exp_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Exp kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -122,6 +158,9 @@ def exp_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def cos_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Cos kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -132,6 +171,9 @@ def cos_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def sin_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Sin kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -142,6 +184,9 @@ def sin_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def sqrt_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Sqrt kernel.
+    """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -152,15 +197,19 @@ def sqrt_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 @triton.jit
 def matmul_kernel(
-        a_ptr, b_ptr, c_ptr,
-        M, N, K,
-        stride_am, stride_ak,
-        stride_bk, stride_bn,
-        stride_cm, stride_cn,
-        # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-        GROUP_SIZE_M: tl.constexpr,
-        ACTIVATION: tl.constexpr):
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    # Meta-parameters
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
+    ACTIVATION: tl.constexpr
+):
+    """
+    Matmul kernel.
+    """
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -191,6 +240,9 @@ def matmul_kernel(
 
 @triton.jit
 def sum_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    """
+    Sum kernel.
+    """
     pid_m = tl.program_id(axis=0)
     m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     m_mask = m_offset < M
@@ -207,6 +259,9 @@ def sum_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.const
 
 @triton.jit
 def max_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    """
+    Max kernel.
+    """
     pid_m = tl.program_id(axis=0)
     m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     m_mask = m_offset < M
@@ -224,6 +279,9 @@ def max_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.const
     tl.store(output_ptr + m_offset, out, mask=m_mask)
 
 def add(x, y):
+    """
+    Add kernel.
+    """
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
     else:
@@ -252,6 +310,9 @@ def add(x, y):
     return output
 
 def iadd(x, y):
+    """
+    Inplace add kernel.
+    """
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
         x, y = torch.broadcast_tensors(x, y)
@@ -282,6 +343,9 @@ def iadd(x, y):
     return x
 
 def mul(x, y):
+    """
+    Mul kernel.
+    """
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
     else:
@@ -309,6 +373,9 @@ def mul(x, y):
     return output
 
 def truediv(x, y):
+    """
+    True div kernel.
+    """
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
     else:
@@ -336,6 +403,9 @@ def truediv(x, y):
     return output
 
 def rtruediv(x, y):
+    """
+    Right true div kernel.
+    """
     if isinstance(y, torch.Tensor):
         output_shape = torch.broadcast_shapes(x.shape, y.shape)
     else:
@@ -363,9 +433,15 @@ def rtruediv(x, y):
     return output
 
 def pow(x, scalar):
+    """
+    Pow kernel.
+    """
     return x ** scalar
 
 def log(x):
+    """
+    Log kernel.
+    """
     output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
@@ -377,6 +453,9 @@ def log(x):
     return output.to(x.dtype)
 
 def exp(x):
+    """
+    Exp kernel.
+    """
     output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
@@ -388,6 +467,9 @@ def exp(x):
     return output.to(x.dtype)
 
 def sin(x):
+    """
+    Sin kernel.
+    """
     output = torch.empty_like(x, dtype=torch.float32)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
@@ -399,6 +481,9 @@ def sin(x):
     return output.to(x.dtype)
 
 def cos(x):
+    """
+    Cos kernel.
+    """
     output = torch.empty_like(x, dtype=x.dtype)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
@@ -410,6 +495,9 @@ def cos(x):
     return output.to(x.dtype)
 
 def sqrt(x):
+    """
+    Sqrt kernel.
+    """
     output = torch.empty_like(x, dtype=x.dtype)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
@@ -421,6 +509,9 @@ def sqrt(x):
     return output
 
 def maximum(x, y):
+    """
+    Maximum kernel.
+    """
     output = torch.zeros(x.shape, device=torch.device("cuda"), dtype=x.dtype)
     assert x.is_cuda and output.is_cuda
     if x.is_contiguous() is False:
@@ -438,6 +529,9 @@ def maximum(x, y):
     return output
 
 def reduce_sum(x, axis=None, keepdims=False):
+    """
+    Reduce sum kernel.
+    """
     shape = x.shape
     ndim = len(shape)
     if axis is None:
@@ -479,6 +573,9 @@ def reduce_sum(x, axis=None, keepdims=False):
     return output.to(x.dtype)
 
 def reduce_max(x, axis=None, keepdims=False):
+    """
+    Reduce max kernel.
+    """
     shape = x.shape
     ndim = len(shape)
     if axis is None:
@@ -521,44 +618,83 @@ def reduce_max(x, axis=None, keepdims=False):
     return output.to(x.dtype)
 
 def reshape(x, new_shape):
+    """
+    Reshape kernel.
+    """
     return x.reshape(new_shape)
 
 def view(x, new_shape):
+    """
+    View kernel.
+    """
     if x.is_contiguous() is False:
         x = x.contiguous()
     return x.view(new_shape)
 
 def expand(x, new_shape):
+    """
+    Expand kernel.
+    """
     return x.expand(new_shape)
 
 def permute(x, new_axis):
+    """
+    Permute kernel.
+    """
     return x.permute(new_axis)
 
 def broadcast_to(x, new_shape):
+    """
+    Broadcast to kernel.
+    """
     return x.broadcast_to(new_shape)
 
 def getitem(x, idxs):
+    """
+    Getitem kernel.
+    """
     return x.__getitem__(idxs)
 
 def setitem(x, idxs, other):
+    """
+    Setitem kernel.
+    """
     return x.__setitem__(idxs, other)
 
 def eq(x, y):
+    """
+    Eq kernel.
+    """
     return x.__eq__(y)
 
 def ge(x, y):
+    """
+    Ge kernel.
+    """
     return x.__ge__(y)
 
 def gt(x, y):
+    """
+    Gt kernel.
+    """
     return x.__gt__(y)
 
 def le(x, y):
+    """
+    Le kernel.
+    """
     return x.__le__(y)
 
 def lt(x, y):
+    """
+    Lt kernel.
+    """
     return x.__lt__(y)
 
 def matmul(a, b, activation=""):
+    """
+    Matmul kernel.
+    """
     assert a.shape[-1] == b.shape[-2], "Incompatible dimensions"
     if a.is_contiguous() is False:
         a = a.contiguous()
@@ -643,6 +779,9 @@ def matmul(a, b, activation=""):
         return None
 
 def from_numpy(data, device_id=0, dtype=None):
+    """
+    From numpy
+    """
     torch_dtype = None
     if dtype is None or dtype == genesis.float32:
         torch_dtype = torch.float32
@@ -654,6 +793,9 @@ def from_numpy(data, device_id=0, dtype=None):
     return arr
 
 def from_tensor(data, device_id=0, dtype=None):
+    """
+    From tensor
+    """
     device = torch.device("cuda:" + str(device_id))
     if data.is_cuda and data.device == device:
         return data
@@ -661,6 +803,9 @@ def from_tensor(data, device_id=0, dtype=None):
     return arr
 
 def array(shape, device_id=0, dtype=None):
+    """
+    Array
+    """
     if dtype is None or dtype == genesis.float32:
         arr = torch.empty(shape, device=torch.device("cuda:" + str(device_id)), dtype=torch.float32)
     elif dtype == genesis.float16:
