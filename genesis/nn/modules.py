@@ -207,6 +207,7 @@ class Module:
             self.vars()[idx].set_device(device_name)
         for idx in range(len(self._children())):
             self._children()[idx].cuda(device_name)
+        return self
 
     def forward(self, *args, **kwargs) -> Tensor:
         """
