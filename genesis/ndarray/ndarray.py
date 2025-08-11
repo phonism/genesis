@@ -55,7 +55,29 @@ class Device:
             return NDArray(torch.rand(*shape, device=torch.device("cuda")).cpu(), device=self)
 
     def one_hot(self, n, i, dtype: Optional[str] = genesis.float32) -> "NDArray":
-        return NDArray(torch.nn.functional.one_hot(i.data.data.long(), num_classes=n).float(), device=self)
+        # Pure Genesis implementation of one_hot
+        # i is an NDArray containing indices
+        indices = i.data  # CUDATensor or PyTorch Tensor containing indices
+        
+        # Create output tensor with shape (*indices.shape, n)
+        output_shape = indices.shape + (n,)
+        output = NDArray.make(output_shape, device=self, dtype=dtype)
+        
+        # Fill with zeros first
+        output.fill(0.0)
+        
+        # Convert indices to numpy for easier indexing
+        indices_np = indices.detach().cpu().numpy().astype(np.int64)
+        
+        # Create one-hot encoding
+        one_hot_np = np.eye(n, dtype=np.float32)[indices_np]
+        
+        # Copy result back to output tensor
+        # Create a new NDArray from numpy data and copy its data
+        temp_array = NDArray(one_hot_np, device=self, dtype=dtype)
+        output.data = temp_array.data
+        
+        return output
 
     def empty(self, shape, dtype: Optional[str] = genesis.float32) -> "NDArray":
         dtype = genesis.float32 if dtype is None else dtype
@@ -121,12 +143,19 @@ class NDArray:
         array = NDArray.__new__(NDArray)
         array._device = device if device is not None else default_device()
         array._dtype = dtype
-        array.data = array.device.array(shape, device_id=array._device.device_id, dtype=dtype)
+        
+        # Convert DType to format expected by backend
+        if hasattr(dtype, 'name'):  # DType object
+            backend_dtype = dtype.name
+        else:
+            backend_dtype = dtype
+            
+        array.data = array.device.array(shape, device_id=array._device.device_id, dtype=backend_dtype)
         return array
 
     def fill(self, value):
         """ Fill (in place) with a constant value. """
-        self.data.fill_(value)
+        self.data = self.device.fill(self.data, value)
 
     def __repr__(self):
         return "Gensis::" + self.data.__repr__()
@@ -138,7 +167,16 @@ class NDArray:
         return self.data.cpu()
 
     def numpy(self):
-        return self.data.cpu().numpy()
+        if hasattr(self.data, 'cpu'):
+            cpu_data = self.data.cpu()
+            if hasattr(cpu_data, 'numpy'):
+                return cpu_data.numpy()
+            else:
+                # cpu() already returned numpy array
+                return cpu_data
+        else:
+            # Fallback for other data types
+            return self.data.cpu().numpy()
 
     @property
     def dtype(self):
@@ -154,21 +192,62 @@ class NDArray:
 
     def numel(self):
         return prod(self.shape)
+    
+    def is_contiguous(self):
+        """Check if tensor has contiguous memory"""
+        if hasattr(self.data, 'is_contiguous'):
+            return self.data.is_contiguous()
+        elif hasattr(self.data, 'is_contiguous'):
+            # PyTorch tensor
+            return self.data.is_contiguous()
+        else:
+            # Assume contiguous for unknown types
+            return True
+    
+    def contiguous(self):
+        """Return contiguous version of tensor"""
+        if hasattr(self.data, 'contiguous'):
+            # Use CUDATensor or PyTorch contiguous
+            out = NDArray.make(self.shape, device=self.device)
+            out.data = self.data.contiguous()
+            return out
+        else:
+            # Already contiguous or unknown type
+            return self
 
     def size(self, dim):
         return self.data.size(dim)
 
     def triu(self, k=0):
         out = NDArray.make(self.shape, device=self.device)
-        out.data = torch.triu(self.data, diagonal=k)
+        # Handle both PyTorch tensors and CUDATensors
+        if hasattr(self.data, 'to_numpy'):
+            # CUDATensor - convert to numpy, apply triu, then convert back
+            import numpy as np
+            np_data = self.data.to_numpy()
+            np_triu = np.triu(np_data, k=k)
+            out.data = self.device.from_numpy(np_triu, device_id=self.device.device_id)
+        else:
+            # PyTorch tensor
+            out.data = torch.triu(self.data, diagonal=k)
         return out
 
     def split(self, cnt, dim=None):
         result = []
-        for ten in torch.split(self.data, cnt, dim=dim):
-            out = NDArray.make(self.shape, device=self.device)
-            out.data = ten
-            result.append(out)
+        # Handle both PyTorch tensors and CUDATensors
+        if hasattr(self.data, 'split'):
+            # CUDATensor has its own split method
+            splits = self.data.split(cnt, dim=dim if dim is not None else -1)
+            for tensor_data in splits:
+                out = NDArray.make(tensor_data.shape, device=self.device)
+                out.data = tensor_data
+                result.append(out)
+        else:
+            # PyTorch tensor
+            for ten in torch.split(self.data, cnt, dim=dim):
+                out = NDArray.make(ten.shape, device=self.device)
+                out.data = ten
+                result.append(out)
         return result
 
     @property
@@ -378,10 +457,20 @@ class NDArray:
         return out
 
     def __lt__(self, other):
-        return (self < other) * (self != other)
+        out = NDArray.make(self.shape, device=self.device)
+        if isinstance(other, NDArray):
+            out.data = self.device.lt(self.data, other.data)
+        else:
+            out.data = self.device.lt(self.data, other)
+        return out
 
     def __le__(self, other):
-        return (self <= other) * (self != other)
+        out = NDArray.make(self.shape, device=self.device)
+        if isinstance(other, NDArray):
+            out.data = self.device.le(self.data, other.data)
+        else:
+            out.data = self.device.le(self.data, other)
+        return out
 
     def __matmul__(self, b, activation=""):
         out = NDArray.make(self.shape, dtype=self.dtype, device=self.device)
@@ -401,6 +490,69 @@ class NDArray:
     def is_floating_point(self):
         return self.data.is_floating_point()
 
+    def data_ptr(self):
+        """Return data pointer (Triton compatible)
+        
+        Returns:
+            int: Data pointer address
+        """
+        if hasattr(self.data, 'ptr'):
+            # CUDA data
+            return int(self.data.ptr)
+        elif hasattr(self.data, 'ctypes'):
+            # CPU data (numpy array)
+            return self.data.ctypes.data
+        else:
+            raise RuntimeError("Cannot get data pointer for this NDArray type")
+    
+    def stride(self, dim=None):
+        """Return stride information (in elements, not bytes)
+        
+        Args:
+            dim (int, optional): Specify dimension
+            
+        Returns:
+            int or tuple: stride value or stride tuple
+        """
+        if hasattr(self.data, 'strides'):
+            # CUDATensor has strides attribute
+            strides = self.data.strides
+        else:
+            # Calculate stride
+            strides = []
+            stride = 1
+            for i in reversed(self.shape):
+                strides.insert(0, stride)
+                stride *= i
+            strides = tuple(strides)
+        
+        if dim is None:
+            return strides
+        else:
+            return strides[dim]
+    
+    def element_size(self):
+        """Return bytes per element
+        
+        Returns:
+            int: Element size (bytes)
+        """
+        if hasattr(self.data, 'itemsize'):
+            return self.data.itemsize
+        else:
+            # Calculate from dtype
+            import numpy as np
+            return np.dtype(self._dtype).itemsize
+    
+    @property
+    def is_cuda(self):
+        """Check if on CUDA device
+        
+        Returns:
+            bool: True if on CUDA device
+        """
+        return hasattr(self._device, 'name') and self._device.name == "cuda"
+
 def array(a, dtype=genesis.float32, device=None):
     """ Convenience methods to match numpy a bit more closely."""
     dtype = genesis.float32 if dtype is None else dtype
@@ -409,7 +561,7 @@ def array(a, dtype=genesis.float32, device=None):
 
 def empty(shape, dtype=genesis.float32, device=None):
     device = device if device is not None else default_device()
-    return devie.empty(shape, dtype)
+    return device.empty(shape, dtype)
 
 
 def full(shape, fill_value, dtype=genesis.float32, device=None):
@@ -506,7 +658,7 @@ def negative(array):
     return -array
 
 def divide(a, b, dtype):
-    return a / b
+    return a.device.truediv(a, b)
 
 def power(a, b):
     return a ** b

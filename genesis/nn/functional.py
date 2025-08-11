@@ -129,7 +129,7 @@ class EWiseDiv(Function):
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
         requires_grad = a.requires_grad or b.requires_grad
-        return Tensor(array_api.divide(a.data, b.data, dtype=a.dtype), requires_grad=requires_grad, dtype=a.dtype)
+        return Tensor(a.data / b.data, requires_grad=requires_grad, dtype=a.dtype)
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -150,9 +150,9 @@ class DivScalar(Function):
         ctx.save_for_backward(a, scalar)
         ctx.reverse = reverse
         if reverse:
-            result_data = array_api.divide(scalar, a.data, dtype=a.dtype)
+            result_data = scalar / a.data
         else:
-            result_data = array_api.divide(a.data, scalar, dtype=a.dtype)
+            result_data = a.data / scalar
         return Tensor(result_data, requires_grad=a.requires_grad, dtype=a.dtype)
 
     @staticmethod
@@ -406,7 +406,22 @@ class GetItem(Function):
     def forward(ctx, a, index):
         ctx.save_for_backward(a)
         if isinstance(index, Tensor):
-            index = index.data.data
+            # Handle different data types for index tensor
+            if hasattr(index.data, 'data'):
+                # NDArray with PyTorch tensor
+                index = index.data.data
+            else:
+                # CUDATensor - convert to numpy then to appropriate format
+                if hasattr(index.data, 'to_numpy'):
+                    index_np = index.data.to_numpy()
+                else:
+                    index_np = index.data.numpy()
+                # Convert to integer if needed for indexing
+                if index_np.ndim == 0:  # scalar
+                    index = int(index_np.item())
+                else:
+                    # For array indexing, we need to keep it as numpy array
+                    index = index_np
         tensor = Tensor.__new__(Tensor)
         tensor.init([], data=a.data[index], requires_grad=a.requires_grad)
         ctx.index = index
@@ -625,7 +640,25 @@ class Stack(Function):
     @staticmethod
     def forward(ctx, tensors, dim):
         ctx.dim = dim
-        data = torch.stack([t.data.data for t in tensors], axis=dim)
+        ctx.num_tensors = len(tensors)  # Save the number of tensors for backward
+        # Handle different data types - check if we have CUDATensor or PyTorch tensor
+        data_list = []
+        for t in tensors:
+            if hasattr(t.data, 'data'):
+                # NDArray with .data attribute - check if it's CUDATensor or PyTorch tensor
+                if hasattr(t.data.data, 'to_numpy'):
+                    # CUDATensor - convert to PyTorch tensor
+                    np_data = t.data.data.to_numpy()
+                    data_list.append(torch.from_numpy(np_data).cuda())
+                else:
+                    # PyTorch tensor
+                    data_list.append(t.data.data)
+            else:
+                # Direct CUDATensor - convert to numpy then to torch
+                np_data = t.data.to_numpy() if hasattr(t.data, 'to_numpy') else t.data.numpy()
+                data_list.append(torch.from_numpy(np_data).cuda())
+        
+        data = torch.stack(data_list, axis=dim)
         requires_grad = False
         for t in tensors:
             if t.requires_grad:
@@ -634,9 +667,38 @@ class Stack(Function):
     
     @staticmethod
     def backward(ctx, out_grad):
-        grads = array_api.split(out_grad.data, 1, dim=ctx.dim)
-        result = tuple(Tensor(g.data.squeeze(dim=ctx.dim), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype) for g in grads)
-        return result
+        # Split into ctx.num_tensors parts, each part should have size 1 in ctx.dim
+        # We need to split along ctx.dim dimension
+        if hasattr(out_grad.data, 'data') and hasattr(out_grad.data.data, 'to_numpy'):
+            # CUDATensor case (has to_numpy method) - use our split method
+            # For stack backward, we need to split into ctx.num_tensors chunks, each of size 1
+            grads = out_grad.data.data.split([1] * ctx.num_tensors, dim=ctx.dim)
+            result = []
+            for g in grads:
+                # Each g should be a CUDATensor with size 1 in ctx.dim, so squeeze it
+                squeezed_data = g.squeeze(dim=ctx.dim)
+                # Create NDArray wrapper for the squeezed CUDATensor
+                squeezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
+                squeezed_ndarray._device = out_grad.device
+                squeezed_ndarray._dtype = out_grad.dtype
+                squeezed_ndarray.data = squeezed_data
+                result.append(Tensor.make_const(squeezed_ndarray, requires_grad=False))
+        else:
+            # Fallback for CPU case - use array_api.split directly
+            # This should split the tensor at ctx.dim into ctx.num_tensors pieces
+            result = []
+            
+            # Split into individual tensors - for CPU case, split should return NDArray objects
+            # that need to be squeezed to remove the stacking dimension
+            for i in range(ctx.num_tensors):
+                # Extract slice i from dimension ctx.dim
+                indices = [slice(None)] * len(out_grad.data.shape)
+                indices[ctx.dim] = i  # Get single slice at index i
+                slice_data = out_grad.data[tuple(indices)]
+                
+                # Create tensor from the slice (this removes the stacking dimension)
+                result.append(Tensor.make_const(slice_data, requires_grad=False))
+        return tuple(result)
 
 def stack(tensors, dim=0):
     return Stack.apply(tensors, dim=dim)
@@ -646,7 +708,24 @@ class Cat(Function):
     def forward(ctx, tensors, dim):
         ctx.dim = dim
         ctx.save_for_backward(*tensors)
-        data = torch.cat([t.data.data for t in tensors], dim=dim)
+        # Handle different data types - check if we have CUDATensor or PyTorch tensor
+        data_list = []
+        for t in tensors:
+            if hasattr(t.data, 'data'):
+                # NDArray with .data attribute - check if it's CUDATensor or PyTorch tensor
+                if hasattr(t.data.data, 'to_numpy'):
+                    # CUDATensor - convert to PyTorch tensor
+                    np_data = t.data.data.to_numpy()
+                    data_list.append(torch.from_numpy(np_data).cuda())
+                else:
+                    # PyTorch tensor
+                    data_list.append(t.data.data)
+            else:
+                # Direct CUDATensor - convert to numpy then to torch
+                np_data = t.data.to_numpy() if hasattr(t.data, 'to_numpy') else t.data.numpy()
+                data_list.append(torch.from_numpy(np_data).cuda())
+        
+        data = torch.cat(data_list, dim=dim)
         requires_grad = False
         for t in tensors:
             if t.requires_grad:
@@ -655,10 +734,41 @@ class Cat(Function):
     
     @staticmethod
     def backward(ctx, out_grad):
-        sizes = [t.data.data.shape[ctx.dim] for t in ctx.saved_tensors]
-        grads = torch.split(out_grad.data.data, sizes, dim=ctx.dim)
-        result = tuple(Tensor(g, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype) for g in grads)
-        return result 
+        # Handle different data types for getting shapes
+        sizes = []
+        for t in ctx.saved_tensors:
+            if hasattr(t.data, 'data'):
+                sizes.append(t.data.data.shape[ctx.dim])
+            else:
+                sizes.append(t.data.shape[ctx.dim])
+        
+        # Handle different data types for out_grad
+        if hasattr(out_grad.data, 'data') and hasattr(out_grad.data.data, 'to_numpy'):
+            # CUDATensor case - use our split method
+            grads = out_grad.data.data.split(sizes, dim=ctx.dim)
+            result = []
+            for g in grads:
+                # Create NDArray wrapper for the CUDATensor
+                grad_ndarray = array_api.NDArray.__new__(array_api.NDArray)
+                grad_ndarray._device = out_grad.device
+                grad_ndarray._dtype = out_grad.dtype
+                grad_ndarray.data = g
+                result.append(Tensor.make_const(grad_ndarray, requires_grad=False))
+        else:
+            # CPU case - use torch.split
+            if hasattr(out_grad.data, 'data'):
+                grads = torch.split(out_grad.data.data, sizes, dim=ctx.dim)
+            else:
+                # Convert CUDATensor to torch tensor for split operation
+                np_data = out_grad.data.to_numpy() if hasattr(out_grad.data, 'to_numpy') else out_grad.data.numpy()
+                torch_data = torch.from_numpy(np_data).cuda()
+                grads = torch.split(torch_data, sizes, dim=ctx.dim)
+            
+            result = []
+            for g in grads:
+                result.append(Tensor.make_const(g, requires_grad=False))
+        
+        return tuple(result) 
 
 def cat(tensors, dim=0):
     return Cat.apply(tensors, dim=dim)
@@ -667,14 +777,45 @@ class Squeeze(Function):
     @staticmethod
     def forward(ctx, tensor, dim):
         ctx.dim = dim
-        data = tensor.data.data.squeeze(dim)
-        requires_grad = tensor.requires_grad
-        return Tensor(data, device=tensor.device, requires_grad=requires_grad, dtype=tensor.dtype) 
+        # Handle different data types
+        if hasattr(tensor.data, 'data') and hasattr(tensor.data.data, 'to_numpy'):
+            # CUDATensor case
+            squeezed_cuda = tensor.data.data.squeeze(dim)
+            # Create NDArray wrapper for the squeezed CUDATensor
+            squeezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
+            squeezed_ndarray._device = tensor.device
+            squeezed_ndarray._dtype = tensor.dtype
+            squeezed_ndarray.data = squeezed_cuda
+            return Tensor.make_const(squeezed_ndarray, requires_grad=tensor.requires_grad)
+        elif hasattr(tensor.data, 'data'):
+            # NDArray with PyTorch tensor
+            data = tensor.data.data.squeeze(dim)
+            return Tensor(data, device=tensor.device, requires_grad=tensor.requires_grad, dtype=tensor.dtype)
+        else:
+            # Direct tensor case
+            squeezed_data = tensor.data.squeeze(dim)
+            return Tensor.make_const(squeezed_data, requires_grad=tensor.requires_grad) 
     
     @staticmethod
     def backward(ctx, out_grad):
-        grad = out_grad.data.data.unsqueeze(ctx.dim)
-        return (Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype), ) 
+        # Handle different data types for unsqueeze
+        if hasattr(out_grad.data, 'data') and hasattr(out_grad.data.data, 'to_numpy'):
+            # CUDATensor case
+            unsqueezed_cuda = out_grad.data.data.unsqueeze(ctx.dim)
+            # Create NDArray wrapper
+            unsqueezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
+            unsqueezed_ndarray._device = out_grad.device
+            unsqueezed_ndarray._dtype = out_grad.dtype
+            unsqueezed_ndarray.data = unsqueezed_cuda
+            return (Tensor.make_const(unsqueezed_ndarray, requires_grad=False), )
+        elif hasattr(out_grad.data, 'data'):
+            # NDArray with PyTorch tensor
+            grad = out_grad.data.data.unsqueeze(ctx.dim)
+            return (Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype), )
+        else:
+            # Direct tensor case
+            unsqueezed_data = out_grad.data.unsqueeze(ctx.dim)
+            return (Tensor.make_const(unsqueezed_data, requires_grad=False), ) 
 
 def squeeze(tensor, dim):
     return Squeeze.apply(tensor, dim)
@@ -683,14 +824,45 @@ class Unsqueeze(Function):
     @staticmethod
     def forward(ctx, tensor, dim):
         ctx.dim = dim
-        data = tensor.data.data.unsqueeze(dim)
-        requires_grad = tensor.requires_grad
-        return Tensor(data, device=tensor.device, requires_grad=requires_grad, dtype=tensor.dtype) 
+        # Handle different data types
+        if hasattr(tensor.data, 'data') and hasattr(tensor.data.data, 'to_numpy'):
+            # CUDATensor case
+            unsqueezed_cuda = tensor.data.data.unsqueeze(dim)
+            # Create NDArray wrapper for the unsqueezed CUDATensor
+            unsqueezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
+            unsqueezed_ndarray._device = tensor.device
+            unsqueezed_ndarray._dtype = tensor.dtype
+            unsqueezed_ndarray.data = unsqueezed_cuda
+            return Tensor.make_const(unsqueezed_ndarray, requires_grad=tensor.requires_grad)
+        elif hasattr(tensor.data, 'data'):
+            # NDArray with PyTorch tensor
+            data = tensor.data.data.unsqueeze(dim)
+            return Tensor(data, device=tensor.device, requires_grad=tensor.requires_grad, dtype=tensor.dtype)
+        else:
+            # Direct tensor case
+            unsqueezed_data = tensor.data.unsqueeze(dim)
+            return Tensor.make_const(unsqueezed_data, requires_grad=tensor.requires_grad) 
     
     @staticmethod
     def backward(ctx, out_grad):
-        grad = out_grad.data.data.squeeze(ctx.dim)
-        return (Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype), )
+        # Handle different data types for squeeze
+        if hasattr(out_grad.data, 'data') and hasattr(out_grad.data.data, 'to_numpy'):
+            # CUDATensor case
+            squeezed_cuda = out_grad.data.data.squeeze(ctx.dim)
+            # Create NDArray wrapper
+            squeezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
+            squeezed_ndarray._device = out_grad.device
+            squeezed_ndarray._dtype = out_grad.dtype
+            squeezed_ndarray.data = squeezed_cuda
+            return (Tensor.make_const(squeezed_ndarray, requires_grad=False), )
+        elif hasattr(out_grad.data, 'data'):
+            # NDArray with PyTorch tensor
+            grad = out_grad.data.data.squeeze(ctx.dim)
+            return (Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype), )
+        else:
+            # Direct tensor case
+            squeezed_data = out_grad.data.squeeze(ctx.dim)
+            return (Tensor.make_const(squeezed_data, requires_grad=False), )
 
 def unsqueeze(tensor, dim):
     return Unsqueeze.apply(tensor, dim)
@@ -703,19 +875,56 @@ class Split(Function):
             axis = axis + len(x.shape)
         ctx.axis = axis
         results = []
-        for res in array_api.split(x.data, 1, dim=ctx.axis):
-            results.append(Tensor(res, device=x.device, dtype=x.dtype))
+        
+        # Split along the axis dimension - each split should have size 1 in that dimension
+        for i in range(x.shape[axis]):
+            # Create slice for index i (using slice to preserve dimension)
+            indices = [slice(None)] * len(x.shape)
+            indices[axis] = slice(i, i+1)  # Use slice(i, i+1) instead of i to preserve dimension
+            slice_tensor = x.data[tuple(indices)]
+            results.append(Tensor(slice_tensor, device=x.device, dtype=x.dtype))
         return tuple(results)
 
     @staticmethod
     def backward(ctx, out_grad, idx):
+        import time
         x, = ctx.saved_tensors
-        grad = torch.zeros_like(x.data.data)
+        
+        start = time.time()
+        
+        # FIXME: This implementation copies data to CPU for processing
+        # Should be replaced with a GPU-native implementation using CUDA kernels
+        # for better performance on GPU tensors
+        
+        # FASTEST METHOD: Use empty tensor + direct memory copy via numpy
+        # This avoids the slow Genesis setitem completely
+        import numpy as np
+        
+        # Create empty tensor (fast)
+        result = genesis.empty(*x.shape, dtype=x.dtype, device=x.device, requires_grad=False)
+        
+        # Convert to numpy for fast manipulation
+        # Handle both CPU (numpy) and GPU (CUDATensor) cases
+        if hasattr(result.data, 'to_numpy'):
+            result_numpy = result.data.to_numpy() * 0  # GPU case: CUDATensor
+            out_grad_numpy = out_grad.data.to_numpy()
+        else:
+            result_numpy = result.numpy() * 0  # CPU case: direct numpy
+            out_grad_numpy = out_grad.numpy()
+        
+        # Use numpy's fast indexing
         slices = [slice(None)] * len(x.shape)
-        slices[ctx.axis] = slice(idx, idx + 1)
-        grad[tuple(slices)] = out_grad.data.data
-        grad = Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
-        return (grad,)
+        slices[ctx.axis] = slice(idx, idx+1)
+        result_numpy[tuple(slices)] = out_grad_numpy
+        
+        # Copy back to GPU tensor
+        if hasattr(result.data, 'from_numpy'):
+            result.data.from_numpy(result_numpy)  # GPU case
+        else:
+            # CPU case: create new tensor from numpy
+            result = genesis.Tensor(result_numpy, device=x.device, requires_grad=False, dtype=x.dtype)
+        
+        return (result,)
 
 def split(a, axis):
     return Split.apply(a, axis=axis)

@@ -105,35 +105,38 @@ class SafeSoftmaxFunction(Function):
         inp = x.contiguous()
         if dtype is None:
             dtype = x.dtype
-        out = torch.empty_like(inp, dtype=dtype)
+        out_tensor = genesis.empty_like(ox, dtype=dtype, requires_grad=ox.requires_grad)
+        out = out_tensor.data.data
         K = inp.numel() // M // N
 
         grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]), K)
         _safe_softmax_forward_kernel[grid](out, inp, M, N, K,)
-        ctx.save_for_backward(out)
+        ctx.save_for_backward(out_tensor)
         ctx.dim = dim
-        return Tensor(out, device=ox.device, dtype=ox.dtype)
+        return out_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         dim = ctx.dim
         (out,) = ctx.saved_tensors
 
-        assert dim >= -out.ndim and dim < out.ndim, "Invalid dim"
-        dim = dim % out.ndim
+        out_data = out.data.data
+        assert dim >= -out_data.ndim and dim < out_data.ndim, "Invalid dim"
+        dim = dim % out_data.ndim
         M = 1
-        N = out.shape[dim]
+        N = out_data.shape[dim]
         for i in range(dim):
-            M *= out.shape[i]
+            M *= out_data.shape[i]
 
         ori_out_grad = out_grad
         out_grad = out_grad.data.data.contiguous()
-        in_grad = torch.empty_like(out)
-        K = out.numel() // M // N
+        in_grad_tensor = genesis.empty_like(ori_out_grad, dtype=ori_out_grad.dtype, requires_grad=False)
+        in_grad = in_grad_tensor.data.data
+        K = out_data.numel() // M // N
 
         grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]), K,)
-        _safe_softmax_backward_kernel[grid](out, out_grad, in_grad, M, N, K,)
-        return Tensor(in_grad, requires_grad=False, device=ori_out_grad.device, dtype=ori_out_grad.dtype), None, None
+        _safe_softmax_backward_kernel[grid](out_data, out_grad, in_grad, M, N, K,)
+        return in_grad_tensor, None, None
 
 
 def safe_softmax(x, dim=-1, dtype=None):
@@ -478,7 +481,8 @@ class OnlineSoftmaxFunction(Function):
         inp = x.contiguous()
         if dtype is None:
             dtype = x.dtype
-        out = torch.empty_like(inp, dtype=dtype)
+        out_tensor = genesis.empty_like(ox, dtype=dtype, requires_grad=ox.requires_grad)
+        out = out_tensor.data.data
         K = inp.numel() // M // N  # post_dim
 
         with torch.cuda.device(inp.device):
@@ -488,9 +492,9 @@ class OnlineSoftmaxFunction(Function):
             else:
                 grid = (M, 1, 1)
                 _online_softmax_kernel_inner[grid](out, inp, M, N)
-        ctx.save_for_backward(out)
+        ctx.save_for_backward(out_tensor)
         ctx.dim = dim
-        return Tensor(out, device=ox.device, dtype=ox.dtype)
+        return out_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -499,25 +503,27 @@ class OnlineSoftmaxFunction(Function):
 
         ori_out_grad = out_grad
         out_grad = out_grad.data.data
-        assert dim >= -out.ndim and dim < out.ndim, "Invalid dim"
-        dim = dim % out.ndim
+        out_data = out.data.data
+        assert dim >= -out_data.ndim and dim < out_data.ndim, "Invalid dim"
+        dim = dim % out_data.ndim
         M = 1
-        N = out.shape[dim]
+        N = out_data.shape[dim]
         for i in range(dim):
-            M *= out.shape[i]
+            M *= out_data.shape[i]
 
         out_grad = out_grad.contiguous()
-        in_grad = torch.empty_like(out)
-        K = out.numel() // M // N
+        in_grad_tensor = genesis.empty_like(out, dtype=out.dtype, requires_grad=False)
+        in_grad = in_grad_tensor.data.data
+        K = out_data.numel() // M // N
 
         with torch.cuda.device(in_grad.device):
             if K > 1:
                 grid = lambda meta: (M, triton.cdiv(K, meta["TILE_K"]), 1)
-                _online_softmax_backward_kernel_non_inner[grid](out, out_grad, in_grad, M, N, K)
+                _online_softmax_backward_kernel_non_inner[grid](out_data, out_grad, in_grad, M, N, K)
             else:
                 grid = lambda meta: (triton.cdiv(M, meta["TILE_M"]), 1, 1)
-                _online_softmax_backward_kernel_inner[grid](out, out_grad, in_grad, M, N)
-        return Tensor(in_grad, dtype=ori_out_grad.dtype, device=ori_out_grad.device, requires_grad=False), None, None
+                _online_softmax_backward_kernel_inner[grid](out_data, out_grad, in_grad, M, N)
+        return in_grad_tensor, None, None
 
 
 def softmax(x, dim=-1, dtype=None):

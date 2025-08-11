@@ -69,6 +69,11 @@ def getitem(x, idxs):
 def setitem(x, idxs, other):
     return x.__setitem__(idxs, other)
 
+def fill(tensor, value):
+    """Fill tensor with constant value"""
+    tensor.fill_(value)
+    return tensor
+
 def eq(x, y):
     return x.__eq__(y)
 
@@ -101,10 +106,16 @@ def from_tensor(data, device_id=None):
     return data
 
 def array(shape, device_id=None, dtype=None):
-    if dtype is None or dtype == genesis.float32:
-        arr = torch.empty(shape, device=torch.device("cpu"), dtype=torch.float32)
-    elif dtype == genesis.float16:
-        arr = torch.empty(shape, device=torch.device("cpu"), dtype=torch.float16)
-    elif dtype == genesis.bfloat16:
-        arr = torch.empty(shape, device=torch.device("cpu"), dtype=torch.bfloat16)
+    # Convert dtype to string for comparison (handles both DType objects and strings)
+    dtype_str = dtype if isinstance(dtype, str) else (dtype.name if hasattr(dtype, 'name') else str(dtype))
+    
+    if dtype is None or dtype_str == "float32":
+        arr = torch.empty(shape, dtype=torch.float32, device=torch.device("cpu"))
+    elif dtype_str == "float16":
+        arr = torch.empty(shape, dtype=torch.float16, device=torch.device("cpu"))
+    elif dtype_str == "bfloat16":
+        arr = torch.empty(shape, dtype=torch.bfloat16, device=torch.device("cpu"))
+    else:
+        # Default to float32
+        arr = torch.empty(shape, dtype=torch.float32, device=torch.device("cpu"))
     return arr
