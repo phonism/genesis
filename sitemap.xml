@@ -29,6 +29,18 @@
          <lastmod>2025-08-11</lastmod>
     </url>
     <url>
+         <loc>https://phonism.github.io/genesis/contributing/</loc>
+         <lastmod>2025-08-11</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/contributing/development/</loc>
+         <lastmod>2025-08-11</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/contributing/testing/</loc>
+         <lastmod>2025-08-11</lastmod>
+    </url>
+    <url>
          <loc>https://phonism.github.io/genesis/core-components/</loc>
          <lastmod>2025-08-11</lastmod>
     </url>
@@ -54,6 +66,22 @@
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/models/qwen/</loc>
+         <lastmod>2025-08-11</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/tutorials/</loc>
+         <lastmod>2025-08-11</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/tutorials/basic-training/</loc>
+         <lastmod>2025-08-11</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/tutorials/custom-ops/</loc>
+         <lastmod>2025-08-11</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/tutorials/performance-tuning/</loc>
          <lastmod>2025-08-11</lastmod>
     </url>
 </urlset>
