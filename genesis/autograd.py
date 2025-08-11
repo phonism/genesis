@@ -3,6 +3,7 @@ from typing import List, Optional, NamedTuple, Tuple, Union
 import numpy
 from genesis import init
 from .backend import Device, array_api, NDArray, default_device
+from .dtypes import get_dtype, DType
 import operator
 from functools import reduce
 
@@ -129,17 +130,30 @@ class Tensor:
     requires_grad: bool
 
     def __init__(self, array, *, device: Optional[Device] = None, dtype=None, requires_grad=True, **kwargs):
+        # Convert dtype to DType object for consistency
+        if dtype is not None:
+            dtype = get_dtype(dtype)
+            
         if isinstance(array, Tensor):
             if device is None:
                 device = array.device
             if dtype is None:
                 dtype = array.dtype
+            # Compare using DType objects
             if device == array.device and dtype == array.dtype:
                 data = array.data
             else:
                 data = Tensor._array_from_numpy(array.numpy(), device=device, dtype=dtype)
         elif isinstance(array, NDArray):
-            data = Tensor._array_from_numpy(array, device=array.device, dtype=dtype)
+            # Directly reuse NDArray to avoid duplicate memory allocation
+            if device is None:
+                device = array.device
+            if dtype is None or dtype == array.dtype:
+                # Perfect match, directly reuse
+                data = array
+            else:
+                # Need type conversion, reallocate
+                data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
         else:
             device = device if device else default_device()
             data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
@@ -221,21 +235,46 @@ class Tensor:
         self.data = value.data.clone()
 
     def backward(self, out_grad=None):
+        import time
+        # print(f"\n🔍 Starting backward for tensor shape {self.shape}")
+        start_total = time.time()
+        
         out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)
         self.apply_hooks(self.grad)
         node_to_output_grads_list: Dict[Tensor, List[Tensor]] = {}
         node_to_output_grads_list[self] = [out_grad]
 
+        # Topo sort timing
+        topo_start = time.time()
         topo_order = topo_sort(self)
+        topo_time = time.time() - topo_start
+        # print(f"📊 Topo sort: {topo_time*1000:.3f}ms, found {len(topo_order)} nodes")
+        
+        # Process each node
+        node_count = 0
+        total_backward_call_time = 0
+        
         for node in reversed(topo_order):
             if node.requires_grad is False:
                 continue
+                
+            node_count += 1
+            node_start = time.time()
+            
             if node.grad is None:
                 node.grad = reduce(operator.add, node_to_output_grads_list[node])
+                # Ensure gradient is contiguous like PyTorch (fix for broadcasted tensors)
+                if hasattr(node.grad, 'data') and hasattr(node.grad.data, 'data'):
+                    cuda_tensor = node.grad.data.data
+                    if hasattr(cuda_tensor, 'is_contiguous') and not cuda_tensor.is_contiguous():
+                        node.grad.data.data = cuda_tensor.contiguous()
             else:
                 node.grad += reduce(operator.add, node_to_output_grads_list[node])
             node.apply_hooks(node.grad)
+            
             if node.creator is not None:
+                creator_name = type(node.creator).__name__
+                
                 for nd in node.creator.inputs:
                     if nd not in node_to_output_grads_list:
                         node_to_output_grads_list[nd] = []
@@ -243,14 +282,39 @@ class Tensor:
                     grad = node.grad.half()
                 else:
                     grad = node.grad
+                
+                # Time the actual backward call
+                backward_start = time.time()
                 if node.creator.is_tuple_result is False:
                     backward_grad = node.creator.backward(node.creator.ctx, grad)
                 else:
                     backward_grad = node.creator.backward(node.creator.ctx, grad, node.idx)
+                backward_time = time.time() - backward_start
+                total_backward_call_time += backward_time
+                
+                # Log slow operations - DISABLED FOR PYTEST
+                # if backward_time > 0.1:  # More than 100ms
+                #     print(f"⚠️  SLOW: {creator_name} backward took {backward_time*1000:.1f}ms")
+                # elif backward_time > 0.01:  # More than 10ms
+                #     print(f"🔸 {creator_name}: {backward_time*1000:.1f}ms")
+                
                 for i, nd in enumerate(node.creator.inputs):
                     if nd.requires_grad is False:
                         continue
                     node_to_output_grads_list[nd].append(backward_grad[i].float())
+            
+            node_time = time.time() - node_start
+            # if node_time > 0.1:  # More than 100ms per node
+            #     creator_name = type(node.creator).__name__ if node.creator else "Input"
+            #     print(f"⚠️  SLOW NODE: {creator_name} total processing took {node_time*1000:.1f}ms")
+        
+        total_time = time.time() - start_total
+        # print(f"\n📈 Backward summary:")
+        # print(f"  Total: {total_time*1000:.1f}ms")
+        # print(f"  Topo: {topo_time*1000:.1f}ms")
+        # print(f"  Backward calls: {total_backward_call_time*1000:.1f}ms")
+        # print(f"  Other: {(total_time - topo_time - total_backward_call_time)*1000:.1f}ms")
+        # print(f"  Nodes: {node_count}")
 
     @property
     def shape(self):
@@ -271,7 +335,8 @@ class Tensor:
 
     @property
     def dtype(self):
-        return self.data.dtype
+        # Return DType object instead of raw data.dtype
+        return get_dtype(self.data.dtype)
 
     @property
     def device(self):
@@ -293,12 +358,25 @@ class Tensor:
         tensor.init([], data=self.data.long(), requires_grad=self.requires_grad)
         return tensor
 
+    def is_floating_point(self):
+        """Check if tensor dtype is floating point"""
+        return self.dtype.is_floating_point
+    
+    def is_integer(self):
+        """Check if tensor dtype is integer"""
+        from .dtypes import is_integer
+        return is_integer(self.dtype)
+
     def to(self, device):
         if type(device) == str:
             device = genesis.device(device)
         tensor = Tensor(self, device=device)
         return tensor
 
+    def is_contiguous(self):
+        """Check if tensor has contiguous memory"""
+        return self.data.is_contiguous()
+    
     def contiguous(self):
         self.data = self.data.contiguous()
         return self
@@ -332,6 +410,10 @@ class Tensor:
         if array_api is numpy:
             return data
         return data.numpy()
+    
+    def to_numpy(self):
+        """Alias for numpy() to maintain compatibility"""
+        return self.numpy()
 
     def __add__(self, other):
         if isinstance(other, Tensor):
@@ -469,6 +551,10 @@ class Tensor:
     def split(self, dim=-1):
         return genesis.nn.functional.split(self, dim)
 
+    def fill_(self, value):
+        """Fill tensor with a constant value (in-place)"""
+        self.data.fill(value)  # Use NDArray's fill method
+        return self
 
     __radd__ = __add__
     __rsub__ = __sub__
@@ -477,6 +563,51 @@ class Tensor:
 
     def is_floating_point(self):
         return self.data.is_floating_point()
+
+    def data_ptr(self):
+        """Return underlying data pointer, compatible with Triton
+        
+        Returns:
+            int: CUDA pointer address or CPU data pointer
+        """
+        return self.data.data_ptr()
+    
+    def stride(self, dim=None):
+        """Return stride information (in elements)
+        
+        Args:
+            dim (int, optional): Specify dimension, None returns all dimensions
+            
+        Returns:
+            int or tuple: stride value or stride tuple
+        """
+        return self.data.stride(dim)
+    
+    def element_size(self):
+        """Return bytes per element
+        
+        Returns:
+            int: Element size (bytes)
+        """
+        return self.data.element_size()
+    
+    @property
+    def is_cuda(self):
+        """Check if on CUDA device
+        
+        Returns:
+            bool: True if on CUDA device
+        """
+        return self.device.name == "cuda"
+    
+    def numel(self):
+        """Return total number of elements in tensor
+        
+        Returns:
+            int: Total number of elements
+        """
+        import numpy as np
+        return int(np.prod(self.shape))
 
 def topo_sort(node):
     visited = set()

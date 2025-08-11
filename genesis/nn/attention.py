@@ -426,13 +426,14 @@ class FusedAttention(Function):
         HEAD_DIM_V = v.shape[-1]
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
         assert HEAD_DIM_K in {4, 8, 16, 32, 64, 128, 256}
-        o = torch.empty_like(q, device=q.device)
+        # Use Genesis tensors instead of PyTorch
+        o = genesis.empty_like(qq)
         stage = 3 if causal else 1
         extra_kern_args = {}
         sm_scale = 1 / np.sqrt(HEAD_DIM_K)
 
         grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
-        M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        M = genesis.empty((q.shape[0], q.shape[1], q.shape[2]), dtype=genesis.float32, device=device)
 
         _attn_fwd[grid](
                 q, k, v, sm_scale, M, o,
@@ -453,32 +454,32 @@ class FusedAttention(Function):
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
-        return Tensor(o, device=device)
+        return o
 
     @staticmethod
     def backward(ctx, out_grad):
         q, k, v, M, o = ctx.saved_tensors
         device = q.device
-        q = q.data.data
-        k = k.data.data
-        v = v.data.data
-        do = out_grad.data.data
-        if q.is_contiguous() is False:
+        # Keep as Genesis tensors like in forward
+        do = out_grad
+        # Make contiguous if needed (Genesis tensors)
+        if not q.is_contiguous():
             q = q.contiguous()
-        if k.is_contiguous() is False:
+        if not k.is_contiguous():
             k = k.contiguous()
-        if v.is_contiguous() is False:
+        if not v.is_contiguous():
             v = v.contiguous()
-        if o.is_contiguous() is False:
+        if not o.is_contiguous():
             o = o.contiguous()
-        if do.is_contiguous() is False:
+        if not do.is_contiguous():
             do = do.contiguous()
-        if M.is_contiguous() is False:
+        if not M.is_contiguous():
             M = M.contiguous()
 
-        dq = torch.empty_like(q, device=q.device)
-        dk = torch.empty_like(k, device=q.device)
-        dv = torch.empty_like(v, device=q.device)
+        # Use Genesis tensors instead of PyTorch
+        dq = genesis.empty(q.shape, dtype=genesis.float32, device=device)
+        dk = genesis.empty(k.shape, dtype=genesis.float32, device=device)
+        dv = genesis.empty(v.shape, dtype=genesis.float32, device=device)
         BATCH, N_HEAD, N_CTX = q.shape[:3]
         NUM_WARPS, NUM_STAGES = 4, 5
         BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 32, 32, 32
@@ -489,7 +490,7 @@ class FusedAttention(Function):
         PRE_BLOCK = 32
         assert N_CTX % PRE_BLOCK == 0
         pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-        delta = torch.empty_like(M, device=q.device)
+        delta = genesis.empty(M.shape, dtype=genesis.float32, device=device)
         _attn_bwd_preprocess[pre_grid](
                 o, do,
                 delta,
@@ -507,7 +508,7 @@ class FusedAttention(Function):
                 HEAD_DIM=ctx.HEAD_DIM,
                 num_warps=NUM_WARPS,
                 num_stages=NUM_STAGES)
-        return (Tensor(dq, device=device, requires_grad=False), Tensor(dk, device=device, requires_grad=False), Tensor(dv, device=device, requires_grad=False))
+        return (dq, dk, dv)
 
 def fused_attention(q, k, v):
     return FusedAttention.apply(q, k, v)

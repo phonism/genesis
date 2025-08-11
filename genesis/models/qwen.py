@@ -127,16 +127,20 @@ class QwenModel(nn.Module):
         Forward pass of the model.
         """
         batch_size, sequence_length = idx.size()
+        
         if position_ids is None:
             position_ids = genesis.arange(0, sequence_length, device=idx.device)
             position_ids = position_ids + genesis.zeros(batch_size, sequence_length, device=idx.device)
         mask = None
+        
         x = self.embed_tokens(idx)
 
         for i, layer in enumerate(self.layers):
             x = layer(x, position_ids, position_ids, mask)
+            
         x = self.norm(x)
         x = self.lm_head(x)
+        
         return x
 
     @classmethod
@@ -270,7 +274,6 @@ class Attention(nn.Module):
         q = self.q_proj(x).view(hidden_shape).transpose(1, 2)
         k = self.k_proj(x).view(hidden_shape).transpose(1, 2)
         v = self.v_proj(x).view(hidden_shape).transpose(1, 2)
-        
 
         cos, sin = self.rotary_emb(v, seq_len=k.shape[-2])
         q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
@@ -285,8 +288,10 @@ class Attention(nn.Module):
         v = v.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        
         y = y.transpose(1, 2).contiguous().reshape(bsz, seqlen, self.hidden_size)
         y = self.o_proj(y)
+        
         return y
 
 
@@ -319,8 +324,17 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """
     Apply rotary position embedding.
     """
-    cos = cos[position_ids.data.data.long()].unsqueeze(unsqueeze_dim)
-    sin = sin[position_ids.data.data.long()].unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    if USE_TORCH:
+        # PyTorch version
+        cos = cos[position_ids.long()].unsqueeze(unsqueeze_dim)
+        sin = sin[position_ids.long()].unsqueeze(unsqueeze_dim)
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+    else:
+        # Genesis version
+        cos = cos[position_ids.data.data.long()].unsqueeze(unsqueeze_dim)
+        sin = sin[position_ids.data.data.long()].unsqueeze(unsqueeze_dim)
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+    
     return q_embed, k_embed

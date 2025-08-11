@@ -1,14 +1,14 @@
-"""Operatpr table."""
+"""Layer Normalization implementation using Triton kernels."""
 # Global operator table.
 from numbers import Number
 from typing import Optional, List
 import numpy
+import genesis
+import triton
+import triton.language as tl
 from ..autograd import Function, NDArray, Tensor
 from genesis import init
 from ..backend import array_api, NDArray
-import torch
-import triton
-import triton.language as tl
 
 @triton.jit
 def _layer_norm_fwd_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK_SIZE: tl.constexpr,):
@@ -121,42 +121,41 @@ def _layer_norm_bwd_dwdb_kernel(DW, DB, FINAL_DW, FINAL_DB, M, N,
 class FusedLayerNormFunction(Function):
     @staticmethod
     def forward(ctx, x, weight, bias, eps=1e-6):
-        # allocate output
+        # Use Genesis tensors directly, just like PyTorch!
         device = x.device
-        x = x.data.data
-        weight = weight.data.data
-        bias = bias.data.data
-        y = torch.empty_like(x, device=x.device)
-        # reshape input data into 2D tensor
-        x_arg = x.reshape((-1, x.shape[-1]))
-        M, N = x_arg.shape
-        mean = torch.empty((M, ), dtype=torch.float32, device=x.device)
-        rstd = torch.empty((M, ), dtype=torch.float32, device=x.device)
-        # Less than 64KB per feature: enqueue fused kernel
-        MAX_FUSED_SIZE = 65536 // x.element_size()
+        
+        # Use Genesis's empty_like (newly added function)
+        y = genesis.empty_like(x)
+        
+        # Get reshaped tensor, keep Genesis Tensor type
+        x_reshaped = x.reshape(-1, x.shape[-1])
+        M, N = x_reshaped.shape
+        
+        # Create mean and rstd tensors
+        mean = genesis.empty((M,), dtype='float32', device=device)  
+        rstd = genesis.empty((M,), dtype='float32', device=device)
+        
+        # Calculate kernel parameters
+        MAX_FUSED_SIZE = 65536 // x.element_size()  # Use new method
         BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
-        if N > BLOCK_SIZE:
-            raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
-        # heuristics for number of warps
-        num_warps = 8
-        # enqueue kernel
-        _layer_norm_fwd_kernel[(M, )](
-                x_arg, y, weight, bias, mean, rstd, 
-                x_arg.stride(0), N, eps, 
-                BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps, num_ctas=1)
+        
+        # Pass Genesis tensors directly to Triton kernel!
+        _layer_norm_fwd_kernel[(M,)](
+            x_reshaped, y, weight, bias, mean, rstd,
+            x_reshaped.stride(0), N, eps,  # Use new method
+            BLOCK_SIZE=BLOCK_SIZE, num_warps=8
+        )
+        
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
-        ctx.num_warps = num_warps
-        ctx.bias = bias
-        return Tensor(y, device=device)
+        ctx.num_warps = 8
+        return y
 
     @staticmethod
     def backward(ctx, out_grad):
+        # Can also use Genesis tensors directly
         x, w, b, m, v = ctx.saved_tensors
-        x = x.data.data
-        w = w.data.data
-        b = b.data.data
-        #x, w, b, m, v = ctx.saved_tensors
+        
         # heuristics for amount of parallel reduction stream for DW/DB
         N = w.shape[0]
         GROUP_SIZE_M = 64
@@ -166,33 +165,39 @@ class FusedLayerNormFunction(Function):
             GROUP_SIZE_M = 128
         if N <= 1024: 
             GROUP_SIZE_M = 256
-        # allocate output
-        locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device=w.device)
-        _dw = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
-        _db = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
-        dw = torch.empty((N, ), dtype=w.dtype, device=w.device)
-        db = torch.empty((N, ), dtype=w.dtype, device=w.device)
-        dy = out_grad.data.data
-        dx = torch.empty_like(dy, device=dy.device)
-        # enqueue kernel using forward pass heuristics
-        # also compute partial sums for DW and DB
-        x_arg = x.reshape(-1, x.shape[-1])
-        M, N = x_arg.shape
-        if dy.is_contiguous() is False:
-            dy = dy.contiguous()
-        _layer_norm_bwd_dx_kernel[(M, )](
-                dx, dy, _dw, _db, x, w, m, v, locks,
-                x_arg.stride(0), N, 
-                BLOCK_SIZE_N=ctx.BLOCK_SIZE,
-                GROUP_SIZE_M=GROUP_SIZE_M,
-                num_warps=ctx.num_warps)
-        grid = lambda meta: [triton.cdiv(N, meta["BLOCK_SIZE_N"])]
-        # accumulate partial sums in separate kernel
+            
+        # Pass directly to backward kernels, inherit requires_grad=False for gradient computation
+        dx = genesis.empty_like(x, requires_grad=False)
+        dw = genesis.empty_like(w, requires_grad=False)
+        db = genesis.empty_like(b, requires_grad=False)
+        
+        # Create temporary buffers for parallel reduction
+        # Use safer way to create buffers, avoid mul_scalar issues
+        from genesis.ndarray.cuda_tensor import zeros
+        locks = zeros((2 * GROUP_SIZE_M,), "int32")
+        _dw = zeros((GROUP_SIZE_M, N), x.dtype)
+        _db = zeros((GROUP_SIZE_M, N), x.dtype)
+        
+        # Get reshaped dimensions
+        x_reshaped = x.reshape(-1, x.shape[-1])
+        M, N = x_reshaped.shape
+        
+        # Launch backward dx kernel
+        _layer_norm_bwd_dx_kernel[(M,)](
+            dx, out_grad, _dw, _db, x, w, m, v, locks,
+            x_reshaped.stride(0), N, 
+            BLOCK_SIZE_N=ctx.BLOCK_SIZE,
+            GROUP_SIZE_M=GROUP_SIZE_M,
+            num_warps=ctx.num_warps)
+        
+        # Launch backward dw/db kernel
+        grid = (triton.cdiv(N, 128),)
         _layer_norm_bwd_dwdb_kernel[grid](
-                _dw, _db, dw, db, min(GROUP_SIZE_M, M), N,
-                BLOCK_SIZE_M=32,
-                BLOCK_SIZE_N=128, num_ctas=1)
-        return (Tensor(dx, requires_grad=False), Tensor(dw, requires_grad=False), Tensor(db, requires_grad=False))
+            _dw, _db, dw, db, min(GROUP_SIZE_M, M), N,
+            BLOCK_SIZE_M=32,
+            BLOCK_SIZE_N=128)
+        
+        return dx, dw, db
 
 def fused_layer_norm(x, weight, bias, eps=1e-6):
     return FusedLayerNormFunction.apply(x, weight, bias, eps=eps)

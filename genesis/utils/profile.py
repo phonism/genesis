@@ -1,8 +1,6 @@
 import time
 import atexit
 from functools import wraps
-import torch
-import torch.nn as nn
 
 start_time = time.time()
 profile_data = {}

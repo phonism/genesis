@@ -31,6 +31,25 @@ def zeros(*shape, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate all-zeros Tensor """
     return constant(*shape, c=0.0, device=device, dtype=dtype, requires_grad=requires_grad)
 
+def empty(*shape, device=None, dtype=genesis.float32, requires_grad=False):
+    """ Generate empty Tensor (uninitialized data) """
+    device = genesis.cpu() if device is None else device
+    array = device.empty(shape, dtype=dtype)
+    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+
+def empty_like(tensor, dtype=None, device=None, requires_grad=None):
+    """ Generate empty Tensor with same shape as input tensor """
+    if dtype is None:
+        dtype = tensor.dtype
+    if device is None:
+        device = tensor.device
+    if requires_grad is None:
+        requires_grad = tensor.requires_grad  # Inherit requires_grad from input tensor
+    
+    # Use efficient empty instead of zeros
+    array = device.empty(tensor.shape, dtype=dtype)
+    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+
 def randb(*shape, p=0.5, device=None, dtype="bool", requires_grad=False):
     """ Generate binary random Tensor """
     device = genesis.cpu() if device is None else device
@@ -40,6 +59,7 @@ def randb(*shape, p=0.5, device=None, dtype="bool", requires_grad=False):
 def one_hot(n, i, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate one-hot encoding Tensor """
     device = genesis.cpu() if device is None else device
+    # i should be an NDArray, pass it directly to device.one_hot
     return genesis.Tensor(device.one_hot(n, i, dtype=genesis.float32), device=device, requires_grad=requires_grad)
 
 def xavier_uniform(fan_in, fan_out, gain=1.0, **kwargs):

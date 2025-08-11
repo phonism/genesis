@@ -1,2 +1,19 @@
-numpy
-torch
+# Core dependencies
+numpy>=1.20.0
+torch>=2.0.0
+
+# GPU computation
+triton>=2.0.0
+cuda-python>=12.0.0
+
+# Model and tokenization (for LLM apps)
+transformers>=4.20.0
+safetensors>=0.3.0
+
+# Development and testing
+pytest>=7.0.0
+
+# Optional dependencies for distributed training
+# torch.distributed (included with torch)
+
+dill

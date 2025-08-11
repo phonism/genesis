@@ -264,7 +264,7 @@ def test_qwen_basic_functionality():
     }
     
     # test basic functionality of two frameworks
-    for use_torch in [False, True]:
+    for use_torch in [True, False]:
         framework_name = "PyTorch" if use_torch else "Genesis"
         print(f"🧪 Testing {framework_name} basic functionality...")
         
