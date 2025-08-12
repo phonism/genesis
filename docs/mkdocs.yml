@@ -2,11 +2,11 @@
 site_name: Genesis Deep Learning Framework
 site_description: 'A lightweight deep learning framework built from scratch in Python'
 site_author: 'Genesis Team'
-site_url: 'https://your-username.github.io/genesis'
+site_url: 'https://phonism.github.io/genesis'
 
 # 仓库信息
-repo_name: 'your-username/genesis'
-repo_url: 'https://github.com/your-username/genesis'
+repo_name: 'phonism/genesis'
+repo_url: 'https://github.com/phonism/genesis'
 edit_uri: 'edit/main/docs/'
 
 # 版权信息
@@ -96,7 +96,7 @@ markdown_extensions:
   - pymdownx.magiclink:
       normalize_issue_symbols: true
       repo_url_shorthand: true
-      user: your-username
+      user: phonism
       repo: genesis
   - pymdownx.mark
   - pymdownx.smartsymbols
@@ -115,9 +115,9 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/your-username/genesis
+      link: https://github.com/phonism/genesis
     - icon: fontawesome/brands/python
-      link: https://pypi.org/project/genesis-dl/
+      link: https://pypi.org/project/genesis/
 
 # MathJax配置
 extra_javascript:
@@ -172,6 +172,8 @@ nav:
     - 基础训练: tutorials/basic-training.md
     - 自定义算子: tutorials/custom-ops.md
     - 性能调优: tutorials/performance-tuning.md
+  - 性能优化:
+    - performance/optimization-guide.md
   - API参考:
     - api-reference/index.md
     - genesis: api-reference/genesis.md

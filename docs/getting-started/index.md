@@ -20,7 +20,7 @@ Genesis是一个轻量级的深度学习框架，专为学习和研究而设计�
 pip install torch triton
 
 # 克隆源码
-git clone https://github.com/your-username/genesis.git
+git clone https://github.com/phonism/genesis.git
 cd genesis
 
 # 安装Genesis

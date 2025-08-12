@@ -15,15 +15,15 @@ Genesis的自动微分系统是框架的核心，负责构建计算图、执行�
 ```mermaid
 graph TB
     subgraph "计算图节点"
-        A[Tensor] --> B[data: NDArray]
-        A --> C[grad: Tensor]
-        A --> D[creator: Function]
-        A --> E[requires_grad: bool]
+        A[Tensor] --> B[data NDArray]
+        A --> C[grad Tensor]
+        A --> D[creator Function]
+        A --> E[requires_grad bool]
     end
     
     subgraph "操作节点"
-        F[Function] --> G[forward()]
-        F --> H[backward()]
+        F[Function] --> G[forward]
+        F --> H[backward]
         F --> I[Context]
         I --> J[saved_tensors]
     end

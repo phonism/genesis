@@ -5,7 +5,8 @@ import numpy as np
 import operator
 import genesis
 from functools import reduce
-from .cuda_tensor import CUDATensor, empty, zeros, ones, from_numpy, ensure_ctx, check_ptr_accessible, _ensure_cuda_initialized
+from .cuda_tensor import CUDATensor, empty, zeros, ones, from_numpy, ensure_ctx, check_ptr_accessible
+
 
 def prod(x: list[int]):
     """
@@ -132,10 +133,48 @@ def fill_kernel(
     
     tl.store(output_ptr + offsets, fill_value, mask=mask)
 
+@triton.autotune(
+    configs=[
+        # small (< 1M elements)
+        triton.Config({'BLOCK': 128},  num_warps=1, num_stages=1),
+        triton.Config({'BLOCK': 256},  num_warps=2, num_stages=1),
+        triton.Config({'BLOCK': 512},  num_warps=2, num_stages=2),
+        triton.Config({'BLOCK': 1024}, num_warps=4, num_stages=2),
+        # large (> 1M elements)
+        triton.Config({'BLOCK': 2048}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK': 4096}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK': 8192}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK': 16384}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK': 32768}, num_warps=8, num_stages=2),
+    ],
+    key=['n_elements'],
+)
 @triton.jit
-def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK: tl.constexpr):
     """
-    Add kernel for same-shape tensors.
+    Expert-optimized add kernel following performance recommendations:
+    - Large BLOCK sizes for bandwidth saturation
+    - Proper num_warps and num_stages for occupancy
+    - 1D indexing with alignment hints
+    - Autotune for optimal configuration selection
+    """
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    
+    # Alignment hints for better memory transactions (128B aligned)
+    tl.static_assert(BLOCK % 128 == 0)
+    tl.multiple_of(offs, 128)
+    
+    mask = offs < n_elements
+    x = tl.load(x_ptr + offs, mask=mask)
+    y = tl.load(y_ptr + offs, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offs, output, mask=mask)
+
+@triton.jit
+def sub_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Sub kernel for same-shape tensors.
     """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
@@ -143,7 +182,7 @@ def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
-    output = x + y
+    output = x - y
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
@@ -346,23 +385,27 @@ def matmul_kernel(
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        k_valid_a = (offs_k[None, :] < K - k * BLOCK_SIZE_K)
+        k_valid_b = (offs_k[:, None] < K - k * BLOCK_SIZE_K)
+        a_mask = (offs_am[:, None] < M) & k_valid_a
+        b_mask = k_valid_b & (offs_bn[None, :] < N)
+        
+        a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+        b = tl.load(b_ptrs, mask=b_mask, other=0.0)
         accumulator = tl.dot(a, b, accumulator,  allow_tf32=False)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     c = accumulator
-    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    # Use offset calculation consistent with load
+    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
+    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
 @triton.jit
@@ -407,7 +450,7 @@ def max_kernel(x_ptr, output_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.const
 
 def add(x, y):
     """
-    Add with broadcasting support.
+    Add with broadcasting support and optimizations.
     """
     if isinstance(y, CUDATensor):
         # Compute broadcasted shape
@@ -419,7 +462,7 @@ def add(x, y):
         if y.shape != broadcast_shape:
             y = y.broadcast_to(broadcast_shape)
         
-        # Now both tensors have the same shape - use simple add kernel
+        # Now both tensors have the same shape - use optimized kernel
         output = CUDATensor(broadcast_shape, dtype=x.dtype)
         
         if not x.is_contiguous():
@@ -428,8 +471,13 @@ def add(x, y):
             y = y.contiguous()
         
         n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        
+        # Use expert-optimized autotune add_kernel
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK"]), )
+        add_kernel[grid](x, y, output, n_elements)
+        
+        return output
+            
     else:
         # Scalar addition
         output = CUDATensor(x.shape, dtype=x.dtype)
@@ -437,10 +485,45 @@ def add(x, y):
             x = x.contiguous()
         
         n_elements = output.size
+        
+        # Use scalar add_kernel
         grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
         add_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     
     return output
+
+def sub(x, y):
+    """
+    Sub with broadcasting support.
+    """
+    if isinstance(y, CUDATensor):
+        # Compute broadcasted shape
+        broadcast_shape = broadcast_shapes(x.shape, y.shape)
+        
+        # Broadcast both tensors to the same shape
+        if x.shape != broadcast_shape:
+            x = x.broadcast_to(broadcast_shape)
+        if y.shape != broadcast_shape:
+            y = y.broadcast_to(broadcast_shape)
+        
+        # Now both tensors have the same shape - use simple sub kernel
+        output = CUDATensor(broadcast_shape, dtype=x.dtype)
+        
+        if not x.is_contiguous():
+            x = x.contiguous()
+        if not y.is_contiguous():
+            y = y.contiguous()
+        
+        n_elements = output.size
+        
+        # Use sub kernel
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        
+        return output
+    else:
+        # Scalar subtraction: x - scalar = x + (-scalar)
+        return add(x, -y)
 
 def iadd(x, y):
     """
@@ -462,11 +545,14 @@ def iadd(x, y):
             y = y.contiguous()
 
     n_elements = x.size
-    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
 
     if isinstance(y, CUDATensor):
-        add_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
+        # Use optimized autotune add_kernel for tensor-tensor addition
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK"]), )
+        add_kernel[grid](x, y, x, n_elements)
     else:
+        # Use scalar add_kernel for tensor-scalar addition
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
         add_scalar_kernel[grid](x, y, x, n_elements, BLOCK_SIZE=1024)
     return x
 
@@ -493,6 +579,8 @@ def mul(x, y):
             y = y.contiguous()
         
         n_elements = output.size
+        
+        # Use mul kernel
         grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
         mul_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     else:
@@ -747,21 +835,40 @@ def sqrt(x):
 
 def maximum(x, y):
     """
-    Maximum kernel.
+    Maximum kernel - optimized elementwise operation.
     """
-    output = zeros(x.shape, dtype=x.dtype)
-    
-    if not x.is_contiguous():
-        x = x.contiguous()
-    n_elements = output.size
-    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), 1, 1)
-    
     if isinstance(y, CUDATensor):
+        # Tensor-tensor maximum with broadcasting
+        broadcast_shape = broadcast_shapes(x.shape, y.shape)
+        
+        if x.shape != broadcast_shape:
+            x = x.broadcast_to(broadcast_shape)
+        if y.shape != broadcast_shape:
+            y = y.broadcast_to(broadcast_shape)
+        
+        output = CUDATensor(broadcast_shape, dtype=x.dtype)
+        
+        if not x.is_contiguous():
+            x = x.contiguous()
         if not y.is_contiguous():
             y = y.contiguous()
+        
+        n_elements = output.size
+        
+        # Use maximum kernel
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
         maximum_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     else:
+        # Scalar maximum
+        output = CUDATensor(x.shape, dtype=x.dtype)
+        if not x.is_contiguous():
+            x = x.contiguous()
+        n_elements = output.size
+        
+        # For scalar ops, use direct call (no need for complex optimization)
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), 1, 1)
         maximum_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    
     return output
 
 def reduce_sum(x, axis=None, keepdims=False):
