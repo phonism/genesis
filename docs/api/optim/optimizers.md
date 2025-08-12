@@ -1,103 +1,128 @@
-# 优化器 (genesis.optim)
+# Optimizers (genesis.optim)
 
-Genesis优化器模块提供了训练神经网络所需的各种优化算法。
+## Overview
 
-## 模块概述
+The `genesis.optim` module provides optimizers for training neural networks. It implements state-of-the-art optimization algorithms with support for parameter groups, gradient clipping, and mixed precision training.
 
-`genesis.optim`模块包含：
-- 基础优化器类（Optimizer）
-- 经典优化器（SGD、Adam、AdamW）
-- 学习率调度器（在schedulers.md中详述）
-- 梯度裁剪工具
+## Core Concepts
 
-## 基础类
+### Optimization Process
 
-### Optimizer
+Optimizers update model parameters based on computed gradients using various algorithms:
+1. **Gradient Descent**: Basic parameter update using gradients
+2. **Momentum**: Accelerated convergence using moving averages
+3. **Adaptive Learning Rates**: Different learning rates per parameter
+4. **Regularization**: Weight decay and gradient clipping
 
-所有优化器的抽象基类。
+### Parameter Groups
+
+Parameters can be organized into groups with different hyperparameters:
+- Different learning rates for different layers
+- Selective weight decay application
+- Layer-specific optimization settings
+
+## Base Classes
+
+### `optim.Optimizer`
+
+Abstract base class for all optimizers.
 
 ```python
 class Optimizer:
-    """优化器基类"""
+    """
+    Base class for all optimizers.
     
-    def __init__(self, params, defaults):
+    Args:
+        params: Iterable of parameters or dicts defining parameter groups
+        defaults: Dict containing default values for optimization options
+    """
+    
+    def __init__(self, params, defaults: dict):
         """
-        初始化优化器
+        Initialize the optimizer.
         
-        参数:
-            params: list - 参数列表或参数组
-            defaults: dict - 默认超参数
+        Args:
+            params: Model parameters or parameter groups
+            defaults: Default hyperparameter values
         """
 ```
 
-#### 核心方法
+#### Core Methods
 
+##### Optimization Step
 ```python
-def step(self, closure=None):
+def step(self, closure: Optional[Callable] = None) -> Optional[float]:
     """
-    执行一步优化
+    Perform a single optimization step.
     
-    参数:
-        closure: callable, optional - 重新计算损失的闭包函数
+    Args:
+        closure: Optional function to reevaluate the model and return loss
         
-    返回:
-        loss - 如果提供closure，返回损失值
+    Returns:
+        Loss value if closure is provided
         
-    示例:
+    Example:
         >>> optimizer.zero_grad()
         >>> loss = criterion(output, target)
         >>> loss.backward()
         >>> optimizer.step()
     """
 
-def zero_grad(self):
+def zero_grad(self, set_to_none: bool = True) -> None:
     """
-    清零所有参数的梯度
+    Clear gradients of all optimized parameters.
     
-    示例:
-        >>> # 在每个训练步骤开始时清零梯度
+    Args:
+        set_to_none: If True, set gradients to None instead of zero
+        
+    Example:
+        >>> # Clear gradients before each training step
         >>> optimizer.zero_grad()
-        >>> output = model(input)
-        >>> loss = criterion(output, target)
         >>> loss.backward()
         >>> optimizer.step()
     """
+```
 
-def state_dict(self) -> dict:
+##### State Management
+```python
+def state_dict(self) -> Dict[str, Any]:
     """
-    返回优化器状态字典
+    Return optimizer state as a dictionary.
     
-    返回:
-        dict - 包含state和param_groups的字典
+    Returns:
+        Dictionary containing optimizer state and parameter groups
         
-    示例:
-        >>> # 保存优化器状态
+    Example:
+        >>> # Save optimizer state
         >>> state = optimizer.state_dict()
-        >>> genesis.save(state, 'optimizer.pth')
+        >>> genesis.save(state, 'optimizer_checkpoint.pth')
     """
 
-def load_state_dict(self, state_dict: dict):
+def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
     """
-    加载优化器状态
+    Load optimizer state from dictionary.
     
-    参数:
-        state_dict: dict - 状态字典
+    Args:
+        state_dict: Optimizer state dictionary
         
-    示例:
-        >>> # 恢复优化器状态
-        >>> state = genesis.load('optimizer.pth')
+    Example:
+        >>> # Restore optimizer state
+        >>> state = genesis.load('optimizer_checkpoint.pth')
         >>> optimizer.load_state_dict(state)
     """
+```
 
-def add_param_group(self, param_group: dict):
+##### Parameter Groups
+```python
+def add_param_group(self, param_group: Dict[str, Any]) -> None:
     """
-    添加参数组
+    Add a parameter group to the optimizer.
     
-    参数:
-        param_group: dict - 新的参数组
+    Args:
+        param_group: Dictionary specifying parameters and their options
         
-    示例:
-        >>> # 为新添加的层设置不同的学习率
+    Example:
+        >>> # Add new layer with different learning rate
         >>> optimizer.add_param_group({
         ...     'params': new_layer.parameters(),
         ...     'lr': 0.001
@@ -105,277 +130,219 @@ def add_param_group(self, param_group: dict):
     """
 
 @property
-def param_groups(self) -> List[dict]:
+def param_groups(self) -> List[Dict[str, Any]]:
     """
-    获取参数组列表
+    Access parameter groups.
     
-    返回:
-        List[dict] - 每个字典包含'params'和其他超参数
+    Returns:
+        List of parameter group dictionaries
         
-    示例:
+    Example:
+        >>> # Manually adjust learning rates
         >>> for group in optimizer.param_groups:
-        ...     group['lr'] *= 0.95  # 手动调整学习率
+        ...     group['lr'] *= 0.9
     """
 ```
 
-## SGD优化器
+## Optimizers
 
-随机梯度下降优化器，支持动量和权重衰减。
+### `optim.SGD`
+
+Stochastic Gradient Descent optimizer with momentum and weight decay.
 
 ```python
 class SGD(Optimizer):
     """
-    随机梯度下降优化器
+    Stochastic Gradient Descent optimizer.
     
-    参数:
-        params: iterable - 待优化参数的迭代器
-        lr: float - 学习率，必需参数
-        momentum: float - 动量因子，默认0
-        dampening: float - 动量抑制，默认0
-        weight_decay: float - 权重衰减（L2正则化），默认0
-        nesterov: bool - 是否使用Nesterov动量，默认False
+    Args:
+        params: Iterable of parameters to optimize
+        lr: Learning rate (required)
+        momentum: Momentum factor (default: 0)
+        dampening: Dampening for momentum (default: 0)
+        weight_decay: Weight decay coefficient (default: 0)
+        nesterov: Whether to use Nesterov momentum (default: False)
+        
+    Algorithm:
+        v_t = momentum * v_{t-1} + g_t
+        p_t = p_{t-1} - lr * v_t
+        
+    Where:
+        g_t: gradient at time t
+        v_t: velocity at time t
+        p_t: parameters at time t
     """
     
-    def __init__(self, params, lr, momentum=0, dampening=0,
-                 weight_decay=0, nesterov=False):
-        """
-        初始化SGD优化器
-        
-        算法:
-            v_t = momentum * v_{t-1} + g_t
-            p_t = p_{t-1} - lr * v_t
-            
-        其中g_t是梯度，v_t是速度，p_t是参数
-        
-        示例:
-            >>> # 基础SGD
-            >>> optimizer = optim.SGD(model.parameters(), lr=0.01)
-            >>> 
-            >>> # 带动量的SGD
-            >>> optimizer = optim.SGD(model.parameters(), lr=0.01, 
-            ...                      momentum=0.9)
-            >>> 
-            >>> # 带权重衰减的SGD
-            >>> optimizer = optim.SGD(model.parameters(), lr=0.01,
-            ...                      momentum=0.9, weight_decay=1e-4)
-            >>> 
-            >>> # Nesterov动量SGD
-            >>> optimizer = optim.SGD(model.parameters(), lr=0.01,
-            ...                      momentum=0.9, nesterov=True)
-        """
-    
-    def step(self, closure=None):
-        """
-        执行一步SGD更新
-        
-        更新规则:
-            如果使用动量:
-                buf_t = momentum * buf_{t-1} + (1 - dampening) * g_t
-                如果使用nesterov:
-                    g_t = g_t + momentum * buf_t
-                否则:
-                    g_t = buf_t
-            p_t = p_{t-1} - lr * g_t
-        """
+    def __init__(
+        self,
+        params,
+        lr: float,
+        momentum: float = 0,
+        dampening: float = 0,
+        weight_decay: float = 0,
+        nesterov: bool = False
+    ):
 ```
 
-### 使用示例
+#### Usage Examples
 
 ```python
 import genesis.optim as optim
 
-# 基础SGD
-optimizer = optim.SGD(model.parameters(), lr=0.1)
+# Basic SGD
+optimizer = optim.SGD(model.parameters(), lr=0.01)
 
-# 带动量的SGD（推荐用于大多数任务）
+# SGD with momentum (recommended for most tasks)
 optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
 
-# 不同参数组使用不同学习率
-optimizer = optim.SGD([
-    {'params': model.base.parameters(), 'lr': 0.001},
-    {'params': model.head.parameters(), 'lr': 0.01}
-], momentum=0.9)
+# SGD with weight decay
+optimizer = optim.SGD(model.parameters(), lr=0.01, 
+                     momentum=0.9, weight_decay=1e-4)
 
-# 训练循环
-for epoch in range(num_epochs):
-    for batch in dataloader:
-        optimizer.zero_grad()
-        output = model(batch['input'])
-        loss = criterion(output, batch['target'])
-        loss.backward()
-        optimizer.step()
+# Nesterov accelerated gradient
+optimizer = optim.SGD(model.parameters(), lr=0.01,
+                     momentum=0.9, nesterov=True)
+
+# Different learning rates for different layers
+optimizer = optim.SGD([
+    {'params': model.features.parameters(), 'lr': 0.001},
+    {'params': model.classifier.parameters(), 'lr': 0.01}
+], momentum=0.9)
 ```
 
-## Adam优化器
+### `optim.Adam`
 
-自适应矩估计优化器，结合了RMSprop和动量。
+Adaptive Moment Estimation optimizer combining RMSprop and momentum.
 
 ```python
 class Adam(Optimizer):
     """
-    Adam优化器
+    Adam optimizer.
     
-    参数:
-        params: iterable - 待优化参数的迭代器
-        lr: float - 学习率，默认1e-3
-        betas: Tuple[float, float] - 用于计算梯度及其平方的移动平均的系数
-                                     默认(0.9, 0.999)
-        eps: float - 数值稳定性参数，默认1e-8
-        weight_decay: float - 权重衰减，默认0
-        amsgrad: bool - 是否使用AMSGrad变体，默认False
+    Args:
+        params: Iterable of parameters to optimize
+        lr: Learning rate (default: 1e-3)
+        betas: Coefficients for computing running averages of gradient
+               and its square (default: (0.9, 0.999))
+        eps: Term added to denominator for numerical stability (default: 1e-8)
+        weight_decay: Weight decay coefficient (default: 0)
+        amsgrad: Whether to use AMSGrad variant (default: False)
+        
+    Algorithm:
+        m_t = β₁ * m_{t-1} + (1 - β₁) * g_t
+        v_t = β₂ * v_{t-1} + (1 - β₂) * g_t²
+        m̂_t = m_t / (1 - β₁ᵗ)
+        v̂_t = v_t / (1 - β₂ᵗ)
+        p_t = p_{t-1} - lr * m̂_t / (√v̂_t + ε)
+        
+    Where:
+        g_t: gradient
+        m_t: first moment estimate (momentum)
+        v_t: second moment estimate (adaptive learning rate)
+        m̂_t, v̂_t: bias-corrected moment estimates
     """
     
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0, amsgrad=False):
-        """
-        初始化Adam优化器
-        
-        算法:
-            m_t = β1 * m_{t-1} + (1 - β1) * g_t
-            v_t = β2 * v_{t-1} + (1 - β2) * g_t^2
-            m̂_t = m_t / (1 - β1^t)
-            v̂_t = v_t / (1 - β2^t)
-            p_t = p_{t-1} - lr * m̂_t / (√v̂_t + ε)
-            
-        其中:
-            g_t: 梯度
-            m_t: 一阶矩估计（动量）
-            v_t: 二阶矩估计（自适应学习率）
-            m̂_t, v̂_t: 偏差修正的矩估计
-            
-        示例:
-            >>> # 默认Adam
-            >>> optimizer = optim.Adam(model.parameters())
-            >>> 
-            >>> # 自定义学习率
-            >>> optimizer = optim.Adam(model.parameters(), lr=0.001)
-            >>> 
-            >>> # 调整beta参数
-            >>> optimizer = optim.Adam(model.parameters(), lr=0.001,
-            ...                       betas=(0.9, 0.98))
-            >>> 
-            >>> # 使用AMSGrad
-            >>> optimizer = optim.Adam(model.parameters(), lr=0.001,
-            ...                       amsgrad=True)
-        """
-    
-    def step(self, closure=None):
-        """
-        执行一步Adam更新
-        
-        状态变量:
-            - exp_avg: 梯度的指数移动平均（m_t）
-            - exp_avg_sq: 梯度平方的指数移动平均（v_t）
-            - max_exp_avg_sq: 最大的v_t（仅AMSGrad使用）
-            - step: 当前步数（用于偏差修正）
-        """
-    
-    @property
-    def state(self) -> dict:
-        """
-        优化器状态
-        
-        每个参数的状态包含:
-            - step: int - 更新步数
-            - exp_avg: Tensor - 一阶矩估计
-            - exp_avg_sq: Tensor - 二阶矩估计
-            - max_exp_avg_sq: Tensor - 最大二阶矩（AMSGrad）
-        """
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas: Tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0,
+        amsgrad: bool = False
+    ):
 ```
 
-### 使用示例
+#### State Variables
+
+Each parameter maintains the following state:
+- `step`: Number of optimization steps taken
+- `exp_avg`: Exponential moving average of gradient values (momentum)
+- `exp_avg_sq`: Exponential moving average of squared gradient values
+- `max_exp_avg_sq`: Maximum of exp_avg_sq (AMSGrad only)
+
+#### Usage Examples
 
 ```python
-# 默认Adam（最常用）
+# Default Adam (most common)
 optimizer = optim.Adam(model.parameters())
 
-# 自定义学习率
-optimizer = optim.Adam(model.parameters(), lr=0.0001)
+# Custom learning rate
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# Transformer模型常用设置
-optimizer = optim.Adam(model.parameters(), lr=0.0001, 
+# Transformer model settings
+optimizer = optim.Adam(model.parameters(), lr=0.0001,
                       betas=(0.9, 0.98), eps=1e-9)
 
-# 带权重衰减
+# With weight decay
 optimizer = optim.Adam(model.parameters(), lr=0.001,
                       weight_decay=1e-5)
 
-# 微调预训练模型（不同层不同学习率）
+# Fine-tuning with different learning rates
 optimizer = optim.Adam([
     {'params': model.encoder.parameters(), 'lr': 1e-5},
     {'params': model.decoder.parameters(), 'lr': 1e-4},
     {'params': model.head.parameters(), 'lr': 1e-3}
 ])
+
+# Using AMSGrad variant
+optimizer = optim.Adam(model.parameters(), lr=0.001, amsgrad=True)
 ```
 
-## AdamW优化器
+### `optim.AdamW`
 
-Adam优化器的改进版本，解耦权重衰减。
+Adam optimizer with decoupled weight decay.
 
 ```python
 class AdamW(Optimizer):
     """
-    AdamW优化器（解耦权重衰减的Adam）
+    AdamW optimizer (Adam with decoupled weight decay).
     
-    参数:
-        params: iterable - 待优化参数的迭代器
-        lr: float - 学习率，默认1e-3
-        betas: Tuple[float, float] - 动量系数，默认(0.9, 0.999)
-        eps: float - 数值稳定性参数，默认1e-8
-        weight_decay: float - 权重衰减系数，默认0.01
-        amsgrad: bool - 是否使用AMSGrad，默认False
+    Args:
+        params: Iterable of parameters to optimize
+        lr: Learning rate (default: 1e-3)
+        betas: Coefficients for computing running averages (default: (0.9, 0.999))
+        eps: Term for numerical stability (default: 1e-8)
+        weight_decay: Weight decay coefficient (default: 0.01)
+        amsgrad: Whether to use AMSGrad variant (default: False)
+        
+    Difference from Adam:
+        Adam: p_t = p_{t-1} - lr * (m̂_t / (√v̂_t + ε) + wd * p_{t-1})
+        AdamW: p_t = p_{t-1} * (1 - lr * wd) - lr * m̂_t / (√v̂_t + ε)
+        
+    AdamW decouples weight decay from gradient computation, applying it
+    directly to parameters for better regularization.
     """
     
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0.01, amsgrad=False):
-        """
-        初始化AdamW优化器
-        
-        与Adam的区别:
-            Adam: p_t = p_{t-1} - lr * (m̂_t / (√v̂_t + ε) + wd * p_{t-1})
-            AdamW: p_t = p_{t-1} * (1 - lr * wd) - lr * m̂_t / (√v̂_t + ε)
-            
-        AdamW将权重衰减从梯度计算中解耦，直接作用于参数
-        
-        示例:
-            >>> # 默认AdamW（推荐用于Transformer）
-            >>> optimizer = optim.AdamW(model.parameters())
-            >>> 
-            >>> # BERT/GPT常用设置
-            >>> optimizer = optim.AdamW(model.parameters(), lr=5e-5,
-            ...                        weight_decay=0.01)
-            >>> 
-            >>> # 大模型训练设置
-            >>> optimizer = optim.AdamW(model.parameters(), lr=1e-4,
-            ...                        betas=(0.9, 0.95),
-            ...                        weight_decay=0.1)
-        """
-    
-    def step(self, closure=None):
-        """
-        执行一步AdamW更新
-        
-        更新规则:
-            1. 计算Adam更新（不包括权重衰减）
-            2. 单独应用权重衰减: p = p * (1 - lr * weight_decay)
-        """
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas: Tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0.01,
+        amsgrad: bool = False
+    ):
 ```
 
-### 使用示例
+#### Usage Examples
 
 ```python
-# Transformer模型标准配置
+# Default AdamW (recommended for Transformers)
+optimizer = optim.AdamW(model.parameters())
+
+# BERT/GPT standard settings
 optimizer = optim.AdamW(model.parameters(), lr=5e-5, weight_decay=0.01)
 
-# GPT风格模型
+# Large model training
 optimizer = optim.AdamW(model.parameters(), lr=1e-4,
                        betas=(0.9, 0.95), weight_decay=0.1)
 
-# 排除某些参数的权重衰减（如偏置和LayerNorm）
+# Exclude bias and normalization from weight decay
 decay_params = []
 no_decay_params = []
 for name, param in model.named_parameters():
-    if 'bias' in name or 'ln' in name or 'norm' in name:
+    if any(nd in name for nd in ['bias', 'norm', 'ln']):
         no_decay_params.append(param)
     else:
         decay_params.append(param)
@@ -386,160 +353,256 @@ optimizer = optim.AdamW([
 ], lr=1e-4)
 ```
 
-## 梯度裁剪
+### `optim.RMSprop`
 
-防止梯度爆炸的实用函数。
+Root Mean Square Propagation optimizer.
 
 ```python
-def clip_grad_norm_(parameters, max_norm: float, norm_type: float = 2.0):
+class RMSprop(Optimizer):
     """
-    裁剪梯度范数
+    RMSprop optimizer.
     
-    参数:
-        parameters: iterable - 参数迭代器
-        max_norm: float - 最大梯度范数
-        norm_type: float - 范数类型（1、2或inf）
+    Args:
+        params: Iterable of parameters to optimize
+        lr: Learning rate (default: 1e-2)
+        alpha: Smoothing constant (default: 0.99)
+        eps: Term for numerical stability (default: 1e-8)
+        weight_decay: Weight decay coefficient (default: 0)
+        momentum: Momentum factor (default: 0)
+        centered: Whether to normalize by centered second moment (default: False)
+    """
+```
+
+## Gradient Clipping
+
+Utilities to prevent gradient explosion.
+
+```python
+def clip_grad_norm_(
+    parameters: Iterable[Tensor],
+    max_norm: float,
+    norm_type: float = 2.0,
+    error_if_nonfinite: bool = False
+) -> float:
+    """
+    Clip gradients by global norm.
+    
+    Args:
+        parameters: Iterable of parameters with gradients
+        max_norm: Maximum gradient norm
+        norm_type: Type of norm (1, 2, or inf)
+        error_if_nonfinite: Error if total norm is non-finite
         
-    返回:
-        float - 裁剪前的总梯度范数
+    Returns:
+        Total norm of gradients before clipping
         
-    示例:
+    Example:
         >>> loss.backward()
-        >>> # 裁剪梯度，防止梯度爆炸
+        >>> # Clip gradients to prevent explosion
         >>> genesis.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         >>> optimizer.step()
     """
 
-def clip_grad_value_(parameters, clip_value: float):
+def clip_grad_value_(
+    parameters: Iterable[Tensor],
+    clip_value: float
+) -> None:
     """
-    裁剪梯度值
+    Clip gradients by value.
     
-    参数:
-        parameters: iterable - 参数迭代器
-        clip_value: float - 裁剪阈值
+    Args:
+        parameters: Iterable of parameters with gradients
+        clip_value: Clipping threshold
         
-    示例:
+    Example:
         >>> loss.backward()
-        >>> # 将梯度限制在[-1, 1]范围内
+        >>> # Limit gradients to [-1, 1] range
         >>> genesis.nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0)
         >>> optimizer.step()
     """
 ```
 
-## 完整训练示例
+## Training Examples
 
-### 基础训练循环
+### Basic Training Loop
+
 ```python
 import genesis
 import genesis.nn as nn
 import genesis.optim as optim
 
-# 模型和优化器
+# Model and optimizer setup
 model = MyModel()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 criterion = nn.CrossEntropyLoss()
 
-# 训练循环
+# Training loop
 for epoch in range(num_epochs):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
-        # 清零梯度
+        # Zero gradients
         optimizer.zero_grad()
         
-        # 前向传播
+        # Forward pass
         output = model(data)
         loss = criterion(output, target)
         
-        # 反向传播
+        # Backward pass
         loss.backward()
         
-        # 梯度裁剪（可选）
+        # Gradient clipping (optional)
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         
-        # 更新参数
+        # Update parameters
         optimizer.step()
         
         if batch_idx % 100 == 0:
             print(f'Epoch: {epoch}, Batch: {batch_idx}, Loss: {loss.item():.4f}')
 ```
 
-### 带学习率调度的训练
+### Advanced Training with Mixed Precision
+
 ```python
-from genesis.optim.lr_scheduler import get_cosine_schedule_with_warmup
+import genesis
+import genesis.nn as nn
+import genesis.optim as optim
 
-# 优化器和调度器
-optimizer = optim.AdamW(model.parameters(), lr=5e-5)
-num_training_steps = len(train_loader) * num_epochs
-scheduler = get_cosine_schedule_with_warmup(
-    optimizer,
-    num_warmup_steps=num_training_steps * 0.1,
-    num_training_steps=num_training_steps
-)
+# Enable mixed precision
+genesis.enable_autocast = True
 
-# 训练循环
+# Model setup
+model = TransformerModel()
+optimizer = optim.AdamW(model.parameters(), lr=5e-5, weight_decay=0.01)
+
 for epoch in range(num_epochs):
+    for batch in train_loader:
+        optimizer.zero_grad()
+        
+        # Use autocast for mixed precision
+        with genesis.autocast():
+            outputs = model(batch['input'])
+            loss = criterion(outputs, batch['target'])
+        
+        # Backward pass
+        loss.backward()
+        
+        # Gradient clipping
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
+        # Optimizer step
+        optimizer.step()
+```
+
+### Learning Rate Scheduling
+
+```python
+from genesis.optim.lr_scheduler import CosineAnnealingLR
+
+# Optimizer and scheduler
+optimizer = optim.AdamW(model.parameters(), lr=1e-3)
+scheduler = CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-6)
+
+for epoch in range(num_epochs):
+    # Training
     for batch in train_loader:
         optimizer.zero_grad()
         loss = compute_loss(model, batch)
         loss.backward()
         optimizer.step()
-        scheduler.step()  # 更新学习率
+    
+    # Update learning rate
+    scheduler.step()
+    print(f'Epoch {epoch}, LR: {scheduler.get_last_lr()[0]:.6f}')
 ```
 
-### 混合精度训练
+### Gradient Accumulation
+
 ```python
-genesis.enable_autocast = True
+# Simulate larger batch size through accumulation
+accumulation_steps = 4
+optimizer.zero_grad()
 
-# 使用自动混合精度
-with genesis.autocast():
-    output = model(data)
-    loss = criterion(output, target)
-
-loss.backward()
-optimizer.step()
+for i, batch in enumerate(train_loader):
+    # Forward pass
+    outputs = model(batch['input'])
+    loss = criterion(outputs, batch['target'])
+    
+    # Normalize loss by accumulation steps
+    loss = loss / accumulation_steps
+    loss.backward()
+    
+    # Update weights every accumulation_steps
+    if (i + 1) % accumulation_steps == 0:
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        optimizer.zero_grad()
 ```
 
-## 优化器选择指南
+## Optimizer Selection Guide
 
 ### SGD
-- **优点**：简单、内存效率高、泛化性能好
-- **缺点**：收敛慢、对学习率敏感
-- **适用场景**：
-  - 计算机视觉任务（ResNet、VGG等）
-  - 内存受限环境
-  - 需要最佳泛化性能时
-- **推荐设置**：`lr=0.1, momentum=0.9, weight_decay=1e-4`
+- **Advantages**: Simple, memory efficient, good generalization
+- **Disadvantages**: Slow convergence, sensitive to learning rate
+- **Best for**:
+  - Computer vision tasks (ResNet, VGG)
+  - Memory-constrained environments
+  - When best generalization is needed
+- **Recommended settings**: `lr=0.1, momentum=0.9, weight_decay=1e-4`
 
 ### Adam
-- **优点**：收敛快、对学习率不敏感、适应性强
-- **缺点**：内存占用大（需要存储一阶和二阶矩）、可能过拟合
-- **适用场景**：
-  - NLP任务
-  - 快速原型开发
-  - 稀疏梯度
-- **推荐设置**：`lr=1e-3, betas=(0.9, 0.999)`
+- **Advantages**: Fast convergence, adaptive, less sensitive to hyperparameters
+- **Disadvantages**: Higher memory usage, potential overfitting
+- **Best for**:
+  - NLP tasks
+  - Rapid prototyping
+  - Sparse gradients
+- **Recommended settings**: `lr=1e-3, betas=(0.9, 0.999)`
 
 ### AdamW
-- **优点**：更好的泛化性能、适合大模型
-- **缺点**：内存占用大
-- **适用场景**：
-  - Transformer模型（BERT、GPT等）
-  - 大规模预训练
-  - 需要强正则化时
-- **推荐设置**：`lr=5e-5, weight_decay=0.01`
+- **Advantages**: Better generalization than Adam, excellent for large models
+- **Disadvantages**: Higher memory usage
+- **Best for**:
+  - Transformer models (BERT, GPT)
+  - Large-scale pre-training
+  - When strong regularization is needed
+- **Recommended settings**: `lr=5e-5, weight_decay=0.01`
 
-## 性能优化提示
+### RMSprop
+- **Advantages**: Good for non-stationary objectives
+- **Disadvantages**: Can be unstable with high learning rates
+- **Best for**:
+  - RNN training
+  - Reinforcement learning
+  - Non-stationary problems
 
-1. **梯度累积**：小批量时累积多步梯度再更新
-2. **梯度裁剪**：防止梯度爆炸，特别是RNN/Transformer
-3. **参数组**：不同层使用不同学习率
-4. **权重衰减**：AdamW通常比Adam+L2正则化效果好
-5. **学习率预热**：大批量训练时使用warmup
+## Performance Tips
 
-## 注意事项
+1. **Gradient Accumulation**: Simulate larger batch sizes when memory is limited
+2. **Gradient Clipping**: Essential for RNNs and Transformers
+3. **Parameter Groups**: Use different learning rates for different layers
+4. **Weight Decay**: AdamW generally performs better than Adam + L2 regularization
+5. **Learning Rate Warmup**: Use warmup for large batch training
+6. **Mixed Precision**: Reduces memory usage and speeds up training
 
-- 优化器状态会占用额外内存（Adam/AdamW是参数的2倍）
-- 切换设备时需要将优化器状态也移到新设备
-- 保存检查点时记得保存优化器状态
-- 不同优化器的学习率范围差异很大
-- 梯度裁剪应在optimizer.step()之前进行
+## Memory Considerations
+
+- Optimizers maintain state per parameter (Adam/AdamW use 2x parameter memory)
+- Use `zero_grad(set_to_none=True)` to reduce memory fragmentation
+- Consider optimizer state when moving models between devices
+- Save optimizer state in checkpoints for resuming training
+
+## Best Practices
+
+1. **Always clear gradients** before backward pass
+2. **Use gradient clipping** for RNNs and Transformers
+3. **Monitor learning rates** throughout training
+4. **Save optimizer state** in checkpoints
+5. **Use appropriate weight decay** for your model type
+6. **Consider mixed precision** for large models
+
+## See Also
+
+- [Learning Rate Schedulers](schedulers.md) - Dynamic learning rate adjustment
+- [Neural Network Modules](../nn/modules.md) - Building models
+- [Autograd](../autograd.md) - Automatic differentiation
+- [Examples](../../../samples/) - Complete training examples

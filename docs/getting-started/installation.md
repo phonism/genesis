@@ -21,7 +21,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/your-username/genesis.git
+git clone https://github.com/phonism/genesis.git
 cd genesis
 
 # 2. 创建虚拟环境 (推荐)
@@ -149,7 +149,7 @@ pip install numpy matplotlib tqdm
 
 ```bash
 # 克隆源码
-git clone https://github.com/your-username/genesis.git
+git clone https://github.com/phonism/genesis.git
 cd genesis
 
 # 查看可用版本
@@ -374,7 +374,7 @@ pip install -e genesis/
 docker pull genesis/genesis:latest
 
 # 或构建自己的镜像
-git clone https://github.com/your-username/genesis.git
+git clone https://github.com/phonism/genesis.git
 cd genesis
 docker build -t genesis:local .
 

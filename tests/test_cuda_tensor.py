@@ -222,6 +222,46 @@ def test_memory_management():
     print("✓ Memory management tests passed\n")
 
 
+def test_cuda_memory_manager():
+    """Test CUDA memory manager initialization and basic operations"""
+    print("Testing CUDA memory manager...")
+    
+    try:
+        from genesis.ndarray.cuda_memory_manager import get_memory_manager
+        
+        # Test initialization - this should work without cuCtxCreate error
+        manager = get_memory_manager()
+        print("✓ CUDA memory manager initialized successfully")
+        
+        # Test basic allocation - use same stream for alloc/free
+        test_stream = manager.default_stream
+        ptr = manager.allocate(1024, stream=test_stream)  # 1KB
+        print(f"✓ Allocated 1KB at pointer: {ptr}")
+        assert ptr != 0, "Should return valid pointer"
+        
+        # Test deallocation - use same stream
+        manager.free(ptr, stream=test_stream)
+        print("✓ Memory freed successfully")
+        
+        # Test stats
+        stats = manager.get_stats()
+        print(f"✓ Memory stats: {stats}")
+        
+        # Test larger allocation - use same stream
+        large_ptr = manager.allocate(1024 * 1024, stream=test_stream)  # 1MB
+        print(f"✓ Allocated 1MB at pointer: {large_ptr}")
+        manager.free(large_ptr, stream=test_stream)
+        print("✓ Large memory freed successfully")
+        
+        print("✓ CUDA memory manager tests passed\n")
+        
+    except Exception as e:
+        print(f"❌ CUDA memory manager test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
 def run_all_tests():
     """Run all tests"""
     print("=" * 50)
@@ -229,6 +269,7 @@ def run_all_tests():
     print("=" * 50 + "\n")
     
     try:
+        test_cuda_memory_manager()  # Test this first
         test_basic_creation()
         test_numpy_conversion()
         test_reshape()

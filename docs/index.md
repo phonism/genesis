@@ -1,15 +1,13 @@
 # Genesis Deep Learning Framework
 
-<div align="center">
+<h3 align="center">轻量级深度学习框架 | 从零构建 | Python + Triton + CUDA</h3>
 
-**轻量级深度学习框架 | 从零构建 | Python + Triton + CUDA**
-
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://python.org)
-[![CUDA](https://img.shields.io/badge/CUDA-11.0%2B-green.svg)](https://developer.nvidia.com/cuda-toolkit)
-[![Triton](https://img.shields.io/badge/Triton-2.0%2B-orange.svg)](https://triton-lang.org/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-
-</div>
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/CUDA-11.0%2B-green.svg" alt="CUDA">
+  <img src="https://img.shields.io/badge/Triton-2.0%2B-orange.svg" alt="Triton">
+  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
+</p>
 
 ## 🚀 项目概述
 
@@ -67,17 +65,21 @@ graph TB
 - **性能优化** - 多种优化策略，实用的训练性能
 - **生态兼容** - 与现有深度学习生态系统良好兼容
 
-## 📊 性能对比
+## 📊 性能现状
 
-| 操作类型 | Genesis | PyTorch | 性能比例 |
-|---------|---------|---------|----------|
-| 矩阵乘法 (4096×4096) | 2.1ms | 2.0ms | 95% |
-| Softmax (8192×8192) | 0.8ms | 0.9ms | 112% |
-| LayerNorm (4096×4096) | 0.5ms | 0.6ms | 120% |
-| 注意力机制 | 3.2ms | 3.1ms | 97% |
+Genesis当前处于开发阶段，性能优化正在持续进行中。以下是最新的性能基准测试结果：
 
-!!! performance "性能说明"
-    基准测试环境：NVIDIA A100 GPU, CUDA 11.8, 混合精度训练模式
+| 张量大小 | 操作类型 | Genesis效率 | vs PyTorch | 状态 |
+|---------|---------|-------------|------------|------|
+| 中等张量 (4M) | 元素运算 | 29.6% | 0.3x | 🔴 优化中 |
+| 批处理张量 | 元素运算 | 31.2% | 0.3x | 🔴 优化中 |
+| 大张量 (16M+) | 元素运算 | 4.7% | 0.06x | ❌ 待优化 |
+| 小张量 (64K) | 元素运算 | 18.9% | 0.19x | ❌ 待优化 |
+
+!!! warning "性能声明"
+    Genesis目前专注于教育价值和代码可读性。性能优化正在积极进行中，当前建议用于学习和研究目的。
+    
+    详细性能分析请参考：[性能优化指南](performance/optimization-guide.md)
 
 ## 🛠️ 技术栈
 
@@ -104,7 +106,8 @@ graph TB
 ### 进阶用户
 1. [架构设计](architecture/index.md) - 深入理解系统设计
 2. [自定义算子](tutorials/custom-ops.md) - 实现自定义操作
-3. [性能优化](tutorials/performance-tuning.md) - 训练性能调优
+3. [性能优化](performance/optimization-guide.md) - 性能分析与优化指南
+4. [性能调优](tutorials/performance-tuning.md) - 训练性能调优技巧
 
 ### 贡献者
 1. [开发环境](contributing/development.md) - 搭建开发环境
@@ -143,11 +146,28 @@ graph TB
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **开始你的深度学习之旅** 🚀
 
-[快速开始](getting-started/index.md){ .md-button .md-button--primary }
-[查看源码](https://github.com/your-username/genesis){ .md-button }
+<div class="grid cards" markdown="1">
+
+-   :material-rocket-launch:{ .lg .middle } **快速开始**
+
+    ---
+
+    立即开始使用Genesis构建你的第一个神经网络
+
+    [:octicons-arrow-right-24: 快速开始](getting-started/index.md)
+
+-   :material-github:{ .lg .middle } **查看源码**
+
+    ---
+
+    在GitHub上探索Genesis的完整源代码实现
+
+    [:octicons-arrow-right-24: GitHub仓库](https://github.com/phonism/genesis)
+
+</div>
 
 </div>

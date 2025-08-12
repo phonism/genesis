@@ -4,11 +4,9 @@ Independent of PyTorch, using CUDA Python API directly
 """
 
 try:
-    # Try new API first
     from cuda.bindings import driver as cuda
     from cuda.bindings import nvrtc
 except ImportError:
-    # Fall back to old API if new one not available
     from cuda import cuda, nvrtc
 import numpy as np
 from typing import Tuple, List, Optional, Union
@@ -17,9 +15,11 @@ import triton
 import triton.language as tl
 from functools import reduce
 import operator
+from math import prod
 from ..dtypes import get_dtype
 from dataclasses import dataclass
 from enum import Enum
+from .cuda_memory_manager import allocate_memory, free_memory, memory_stats, get_memory_manager
 
 # ============= Index Plan Architecture =============
 
@@ -57,147 +57,8 @@ def check_cuda_error(result):
         if result != cuda.CUresult.CUDA_SUCCESS:
             raise RuntimeError(f"CUDA error: {result}")
 
-# CUDA initialization - will be done lazily
-_cuda_initialized = False
-_cuda_device = None
-_cuda_context = None
+# CUDA initialization handled by memory manager
 
-# ============= Advanced Memory Pool (PyTorch-inspired) =============
-import threading
-from collections import defaultdict
-from typing import Dict, List
-
-class CUDAMemoryPool:
-    """PyTorch-style CUDA memory pool"""
-    
-    def __init__(self):
-        self.lock = threading.Lock()  # Thread safety
-        
-        # Memory alignment size (512 bytes, consistent with PyTorch)
-        self.alignment = 512
-        
-        # Hierarchical memory pool: size -> [ptr_list]  
-        self.pools: Dict[int, List[int]] = defaultdict(list)
-        
-        # Memory statistics
-        self.allocated_bytes = 0
-        self.cached_bytes = 0
-        self.max_pool_size_per_bucket = 10  # Max 10 blocks cached per size
-        self.max_total_cached = 100 * 1024 * 1024  # Max 100MB cached
-        
-        # Predefined size buckets (similar to PyTorch)
-        self.size_buckets = self._create_size_buckets()
-    
-    def _create_size_buckets(self):
-        """Create size buckets, similar to PyTorch strategy"""
-        buckets = []
-        
-        # Small blocks: 512B - 64KB, doubling each time
-        size = 512
-        while size <= 64 * 1024:
-            buckets.append(size)
-            size *= 2
-            
-        # Medium blocks: 128KB - 1MB, step size 64KB
-        size = 128 * 1024
-        while size <= 1024 * 1024:
-            buckets.append(size)
-            size += 64 * 1024
-            
-        # Large blocks: 2MB+, step size 1MB
-        size = 2 * 1024 * 1024
-        while size <= 64 * 1024 * 1024:  # Max 64MB
-            buckets.append(size)
-            size += 1024 * 1024
-            
-        return sorted(buckets)
-    
-    def _round_up_to_bucket(self, nbytes):
-        """Round up request size to appropriate bucket"""
-        # First align to alignment
-        aligned_bytes = ((nbytes + self.alignment - 1) // self.alignment) * self.alignment
-        
-        # Find first bucket >= aligned_bytes
-        for bucket_size in self.size_buckets:
-            if bucket_size >= aligned_bytes:
-                return bucket_size
-        
-        # Exceeds max bucket, use aligned_bytes directly
-        return aligned_bytes
-    
-    def allocate(self, nbytes):
-        """Allocate memory"""
-        if nbytes == 0:
-            return None
-            
-        bucket_size = self._round_up_to_bucket(nbytes)
-        
-        with self.lock:
-            # Try to get from pool
-            if self.pools[bucket_size]:
-                ptr = self.pools[bucket_size].pop()
-                self.cached_bytes -= bucket_size
-                self.allocated_bytes += bucket_size
-                return ptr
-        
-        # Not in pool, allocate new
-        result = cuda.cuMemAlloc(bucket_size)
-        mem_result = check_cuda_error(result)
-        ptr = mem_result[0] if mem_result else None
-        
-        if ptr:
-            with self.lock:
-                self.allocated_bytes += bucket_size
-        
-        return ptr
-    
-    def deallocate(self, ptr, nbytes):
-        """Deallocate memory"""
-        if not ptr or nbytes == 0:
-            return
-            
-        bucket_size = self._round_up_to_bucket(nbytes)
-        
-        with self.lock:
-            self.allocated_bytes -= bucket_size
-            
-            # Check if should cache
-            should_cache = (
-                len(self.pools[bucket_size]) < self.max_pool_size_per_bucket and
-                self.cached_bytes + bucket_size <= self.max_total_cached
-            )
-            
-            if should_cache:
-                self.pools[bucket_size].append(ptr)
-                self.cached_bytes += bucket_size
-                return
-        
-        # Don't cache, free directly
-        try:
-            cuda.cuMemFree(ptr)
-        except:
-            pass
-    
-    def empty_cache(self):
-        """Empty cache (similar to torch.cuda.empty_cache)"""
-        with self.lock:
-            for bucket_size, ptr_list in self.pools.items():
-                for ptr in ptr_list:
-                    try:
-                        cuda.cuMemFree(ptr)
-                    except:
-                        pass
-                ptr_list.clear()
-            self.cached_bytes = 0
-    
-    def memory_stats(self):
-        """Get memory statistics"""
-        with self.lock:
-            return {
-                'allocated_bytes': self.allocated_bytes,
-                'cached_bytes': self.cached_bytes,
-                'pool_sizes': {size: len(ptrs) for size, ptrs in self.pools.items() if ptrs}
-            }
 
 # ============= CUDA Async Memory Pool Support =============
 _use_async_pool = False
@@ -207,11 +68,15 @@ _default_stream = None
 def _detect_async_pool_support():
     """Detect if CUDA async memory pool is supported"""
     try:
-        if not _cuda_initialized:
+        # Get device from memory manager's context
+        manager = get_memory_manager()
+        device_result = cuda.cuCtxGetDevice()
+        if device_result[0] != cuda.CUresult.CUDA_SUCCESS:
             return False
+        device = device_result[1]
         
         # Check if default memory pool exists
-        pool_result = cuda.cuDeviceGetDefaultMemPool(_cuda_device)
+        pool_result = cuda.cuDeviceGetDefaultMemPool(device)
         if pool_result[0] != cuda.CUresult.CUDA_SUCCESS:
             return False
         
@@ -227,8 +92,14 @@ def _enable_async_pool(device=0, release_threshold_bytes=8<<30):
             print("CUDA async memory pool not supported, using traditional memory pool")
             return False
         
+        # Get device from memory manager's context
+        device_result = cuda.cuCtxGetDevice()
+        if device_result[0] != cuda.CUresult.CUDA_SUCCESS:
+            return False
+        device = device_result[1]
+        
         # Get default memory pool
-        pool_result = cuda.cuDeviceGetDefaultMemPool(_cuda_device)
+        pool_result = cuda.cuDeviceGetDefaultMemPool(device)
         if pool_result[0] != cuda.CUresult.CUDA_SUCCESS:
             return False
         
@@ -245,98 +116,28 @@ def _enable_async_pool(device=0, release_threshold_bytes=8<<30):
         return False
 
 def _ensure_stream():
-    """Ensure default stream exists"""
+    """Ensure default stream exists - use memory manager's stream"""
     global _default_stream
     if _default_stream is None:
-        result = cuda.cuStreamCreate(0)
-        if result[0] == cuda.CUresult.CUDA_SUCCESS:
-            _default_stream = result[1]
-        else:
-            raise RuntimeError(f"Cannot create CUDA stream: {result[0]}")
+        # Use memory manager's default stream to avoid multi-stream issues
+        manager = get_memory_manager()
+        _default_stream = manager.default_stream
     return _default_stream
 
-# Global memory pool instance
-_memory_pool = CUDAMemoryPool()
 
 def _allocate_memory(nbytes):
-    """Use hybrid memory allocation strategy"""
-    if _use_async_pool:
-        # Async memory pool path
-        try:
-            stream = _ensure_stream()
-            ptr_result = cuda.cuMemAllocAsync(nbytes, stream)
-            if ptr_result[0] == cuda.CUresult.CUDA_SUCCESS:
-                ptr = ptr_result[1]
-                # Sync to ensure allocation complete
-                sync_result = cuda.cuStreamSynchronize(stream)
-                check_cuda_error(sync_result)
-                return ptr
-        except Exception:
-            pass
-    
-    # Traditional memory pool path (fallback)
-    return _memory_pool.allocate(nbytes)
+    """Allocate GPU memory using optimized manager"""
+    return allocate_memory(nbytes, _ensure_stream())
+
+def _allocate_memory_stream_safe(nbytes, stream):
+    """Stream-safe memory allocation"""
+    return allocate_memory(nbytes, stream)
 
 def _free_memory(ptr, nbytes):
-    """Use hybrid memory deallocation strategy"""
-    if _use_async_pool:
-        # Async memory pool path
-        try:
-            stream = _ensure_stream()
-            free_result = cuda.cuMemFreeAsync(ptr, stream)
-            if free_result == cuda.CUresult.CUDA_SUCCESS:
-                # Sync to ensure deallocation complete
-                sync_result = cuda.cuStreamSynchronize(stream)
-                check_cuda_error(sync_result)
-                return
-        except Exception:
-            pass
-    
-    # Traditional memory pool path (fallback)
-    _memory_pool.deallocate(ptr, nbytes)
+    """Free GPU memory using optimized manager"""
+    free_memory(ptr, _ensure_stream())
 
 # ============= User API (PyTorch-like) =============
-def empty_cache():
-    """Empty memory cache, similar to torch.cuda.empty_cache()"""
-    _memory_pool.empty_cache()
-
-def memory_stats():
-    """Get memory statistics"""
-    return _memory_pool.memory_stats()
-
-def memory_allocated():
-    """Get currently allocated memory amount (bytes)"""
-    return _memory_pool.allocated_bytes
-
-def memory_cached():
-    """Get currently cached memory amount (bytes)"""
-    return _memory_pool.cached_bytes
-
-def _ensure_cuda_initialized():
-    """Lazy CUDA initialization - only initialize when first needed"""
-    global _cuda_initialized, _cuda_device, _cuda_context
-    if _cuda_initialized:
-        return _cuda_device, _cuda_context
-    
-    # Initialize CUDA
-    result = cuda.cuInit(0)
-    check_cuda_error(result)
-    
-    result = cuda.cuDeviceGet(0)
-    _cuda_device = check_cuda_error(result)[0]
-    # Bind/reuse Primary Context (consistent with Triton)
-    
-    result = cuda.cuDevicePrimaryCtxRetain(_cuda_device)
-    _cuda_context = check_cuda_error(result)[0]
-    check_cuda_error(cuda.cuCtxSetCurrent(_cuda_context))
-    
-    _cuda_initialized = True
-    
-    # Enable CUDA async memory pool optimization
-    _enable_async_pool(device=0, release_threshold_bytes=8<<30)
-    
-    return _cuda_device, _cuda_context
-
 # ---- helpers ----
 import ctypes
 
@@ -355,38 +156,40 @@ class CUDATensor:
     
     def __init__(self, shape: Tuple[int, ...], dtype = "float32", 
                  ptr: Optional[int] = None, strides: Optional[Tuple[int, ...]] = None,
-                 base: Optional['CUDATensor'] = None):
+                 base: Optional['CUDATensor'] = None, stream: Optional[int] = None):
         # Flatten nested tuple if necessary
         if isinstance(shape, tuple) and len(shape) == 1 and isinstance(shape[0], tuple):
             self.shape = shape[0]
         else:
             self.shape = tuple(shape)
-        # Keep reference to base tensor to prevent memory from being freed
         self.base = base
         
-        # Use original DType system (restored from rollback)
+        # Data type setup
         self.dtype_obj = get_dtype(dtype)
         self.dtype = self.dtype_obj.name
         self._numpy_dtype = self.dtype_obj.numpy_dtype
         self.itemsize = self.dtype_obj.itemsize
-        self.nbytes = int(self.size * self.itemsize)
+        
+        # Use property size for nbytes calculation
+        self.nbytes = self.size * self.itemsize
         
         # Compute strides (default to C-contiguous)
         if strides is None:
             self.strides = self._compute_strides(self.shape)
         else:
             self.strides = strides
+        
+        # Stream management
+        self.alloc_stream = stream if stream is not None else _ensure_stream()
+        self.last_stream = self.alloc_stream
+        self.recorded_streams = {self.alloc_stream}
             
-        # GPU memory
+        # GPU memory allocation
         if ptr is None:
-            # Allocate new memory - ensure CUDA is initialized first
-            # Only initialize if not already done (avoid duplicate initialization)
-            if not _cuda_initialized:
-                _ensure_cuda_initialized()
-            self.ptr = _allocate_memory(self.nbytes)
+            # Memory manager handles CUDA initialization
+            self.ptr = _allocate_memory_stream_safe(self.nbytes, self.alloc_stream)
             self.owns_memory = True
         else:
-            # Use existing memory
             self.ptr = ptr
             self.owns_memory = False
     
@@ -395,14 +198,19 @@ class CUDATensor:
         """Release GPU memory"""
         if hasattr(self, 'owns_memory') and self.owns_memory and hasattr(self, 'ptr') and self.ptr:
             try:
-                # Check if the pointer is still valid before freeing
                 ptr_value = int(self.ptr)
                 if ptr_value != 0:
-                    # Use memory pool for deallocation
-                    _free_memory(self.ptr, getattr(self, 'nbytes', 0))
-                    self.ptr = None  # Mark as freed
+                    stream = getattr(self, 'last_stream', None)
+                    free_memory(self.ptr, stream)
+                    self.ptr = None
             except:
-                pass  # Ignore errors during cleanup
+                pass
+    
+    def record_stream(self, stream: int):
+        """Record tensor usage on specified stream to prevent premature deallocation"""
+        if hasattr(self, 'recorded_streams'):
+            self.recorded_streams.add(stream)
+            self.last_stream = stream
     
     def _compute_strides(self, shape: Tuple[int, ...]) -> Tuple[int, ...]:
         """Compute C-contiguous strides"""
@@ -1460,6 +1268,12 @@ class CUDATensor:
         """Move tensor to CPU and convert to PyTorch tensor"""
         import torch
         np_data = self.to_numpy()
+        
+        # Handle read-only numpy arrays (e.g., from broadcast operations)
+        # PyTorch requires writable tensors, so create a copy if needed
+        if not np_data.flags.writeable:
+            np_data = np_data.copy()
+            
         return torch.from_numpy(np_data)
     
     def numpy(self):

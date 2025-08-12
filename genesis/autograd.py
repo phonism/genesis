@@ -423,7 +423,7 @@ class Tensor:
 
     def __sub__(self, other):
         if isinstance(other, Tensor):
-            return genesis.nn.functional.add(self, genesis.nn.functional.negate(other))
+            return genesis.nn.functional.sub(self, other)
         else:
             return genesis.nn.functional.add_scalar(self, -other)
 

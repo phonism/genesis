@@ -51,6 +51,25 @@ class EWiseAdd(Function):
 def add(a, b):
     return EWiseAdd.apply(a, b)
 
+class EWiseSub(Function):
+    @staticmethod
+    def forward(ctx, a, b):
+        ctx.save_for_backward(a, b)
+        requires_grad = a.requires_grad or b.requires_grad
+        return Tensor(a.data - b.data, requires_grad=requires_grad, dtype=a.dtype)
+
+    @staticmethod
+    def backward(ctx, out_grad: Tensor):
+        a, b = ctx.saved_tensors
+        grad_a = out_grad.data
+        grad_b = -out_grad.data  # Gradient for subtraction: d/da(a-b) = 1, d/db(a-b) = -1
+        grad_a = sum_to_shape(grad_a, a.shape)
+        grad_b = sum_to_shape(grad_b, b.shape)
+        return (Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype), Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype))
+
+def sub(a, b):
+    return EWiseSub.apply(a, b)
+
 
 class AddScalar(Function):
     @staticmethod

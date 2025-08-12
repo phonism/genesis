@@ -365,16 +365,16 @@ SPLIT_PARAMETERS = [
 @pytest.mark.parametrize("shape, dim, sections", SPLIT_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_split(shape, dim, sections, device):
-    # 生成随机输入数据
+    # Generate random input data
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
 
-    # 使用numpy测试相等性
+    # Test equality using numpy
     result_genesis = F.split(A, axis=dim)
     result_torch = torch.split(TA, 1, dim=dim)
-    assert len(result_genesis) == len(result_torch), "结果切分数量不一致"
+    assert len(result_genesis) == len(result_torch), "Split result count mismatch"
 
     for r_genesis, r_torch in zip(result_genesis, result_torch):
         np.testing.assert_allclose(
@@ -382,7 +382,7 @@ def test_split(shape, dim, sections, device):
             r_torch.detach().numpy(),
             atol=atol, rtol=rtol)
 
-    # 测试反向传播是否一致
+    # Test backward propagation consistency
     sum([r.sum() for r in result_torch]).backward()
     sum([r.sum() for r in result_genesis]).backward()
     

@@ -1,89 +1,107 @@
-# 自动微分系统 (genesis.autograd)
+# Automatic Differentiation System (genesis.autograd)
 
-Genesis的自动微分系统是框架的核心，提供了张量操作和自动梯度计算功能。
+## Overview
 
-## 模块概述
+The automatic differentiation system is the core of Genesis, providing dynamic computational graph construction and automatic gradient computation. It implements reverse-mode automatic differentiation (backpropagation) with support for complex computational graphs.
 
-`genesis.autograd`模块实现了动态计算图和反向传播算法，支持：
-- 自动梯度计算
-- 混合精度训练
-- 梯度钩子和累积
-- 计算图构建和优化
+## Core Concepts
 
-## 核心类
+### Computational Graph
 
-### Tensor
+Genesis builds a dynamic computational graph as operations are performed. Each operation creates nodes in the graph that track:
+- Input tensors
+- The operation performed
+- Output tensors
+- Gradient functions for backpropagation
 
-Genesis框架的核心数据结构，支持自动微分的多维数组。
+### Gradient Computation
+
+Gradients are computed using the chain rule, traversing the computational graph in reverse order from outputs to inputs.
+
+## Main Classes
+
+### `genesis.Tensor`
+
+The fundamental data structure in Genesis that supports automatic differentiation.
 
 ```python
 class Tensor:
-    def __init__(self, array, device=None, dtype=None, requires_grad=False, **kwargs)
+    def __init__(
+        self,
+        array: Union[list, np.ndarray, NDArray],
+        device: Optional[Device] = None,
+        dtype: Optional[DType] = None,
+        requires_grad: bool = False,
+        **kwargs
+    )
 ```
 
-#### 参数
-- `array`: array-like - 输入数据，可以是list、numpy数组或NDArray
-- `device`: Device, optional - 设备对象(cpu/cuda)，默认使用default_device
-- `dtype`: DType, optional - 数据类型，默认从输入数据推断
-- `requires_grad`: bool - 是否需要计算梯度，默认False
-- `**kwargs`: 其他NDArray构造参数
+#### Parameters
 
-#### 属性
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `array` | array-like | required | Input data (list, numpy array, or NDArray) |
+| `device` | Device | `None` | Computation device (cpu/cuda) |
+| `dtype` | DType | `None` | Data type (inferred if None) |
+| `requires_grad` | bool | `False` | Whether to compute gradients |
+| `**kwargs` | dict | `{}` | Additional NDArray parameters |
 
-##### 基础属性
+#### Properties
+
+##### Shape and Type Information
 ```python
 @property
 def shape(self) -> Tuple[int, ...]:
-    """返回张量形状"""
-    
+    """Returns the shape of the tensor."""
+
 @property
 def dtype(self) -> DType:
-    """返回数据类型"""
-    
+    """Returns the data type."""
+
 @property
 def device(self) -> Device:
-    """返回设备对象"""
-    
+    """Returns the device."""
+
 @property
 def ndim(self) -> int:
-    """返回张量维度数"""
-    
+    """Returns the number of dimensions."""
+
 @property
 def size(self) -> int:
-    """返回张量元素总数"""
+    """Returns the total number of elements."""
 ```
 
-##### 梯度相关属性
+##### Gradient Properties
 ```python
 @property
 def requires_grad(self) -> bool:
-    """是否需要计算梯度"""
-    
+    """Whether this tensor requires gradient computation."""
+
 @property
 def grad(self) -> Optional[Tensor]:
-    """访问梯度张量"""
-    
-@grad.setter
-def grad(self, value: Optional[Tensor]):
-    """设置梯度张量"""
-    
+    """Access the gradient tensor."""
+
 @property
 def is_leaf(self) -> bool:
-    """是否为叶子节点（用户创建的张量）"""
+    """Whether this is a leaf node (user-created tensor)."""
+
+@property
+def grad_fn(self) -> Optional[Function]:
+    """The function that created this tensor."""
 ```
 
-#### 核心方法
+#### Core Methods
 
-##### 梯度操作
+##### Gradient Operations
 ```python
-def backward(self, gradient=None):
+def backward(self, gradient: Optional[Tensor] = None) -> None:
     """
-    执行反向传播，计算所有需要梯度的张量的梯度
+    Compute gradients via backpropagation.
     
-    参数:
-        gradient: Tensor, optional - 输出梯度，默认为1.0（标量情况）
+    Args:
+        gradient: Output gradient. Defaults to tensor([1.0]) for scalars.
         
-    示例:
+    Example:
         >>> x = genesis.tensor([1., 2., 3.], requires_grad=True)
         >>> y = (x ** 2).sum()
         >>> y.backward()
@@ -92,431 +110,349 @@ def backward(self, gradient=None):
 
 def detach(self) -> Tensor:
     """
-    返回一个新张量，与计算图分离
+    Returns a new tensor detached from the computational graph.
     
-    返回:
-        Tensor - 分离的张量，requires_grad=False
+    Returns:
+        Tensor with requires_grad=False
         
-    示例:
+    Example:
         >>> x = genesis.tensor([1., 2.], requires_grad=True)
         >>> y = x.detach()
         >>> print(y.requires_grad)  # False
     """
 
-def requires_grad_(self, requires_grad=True) -> Tensor:
+def retain_grad(self) -> None:
     """
-    原地修改requires_grad属性
+    Enable gradient retention for non-leaf tensors.
     
-    参数:
-        requires_grad: bool - 是否需要梯度
-        
-    返回:
-        self - 返回自身以支持链式调用
+    Example:
+        >>> x = genesis.tensor([1., 2.], requires_grad=True)
+        >>> y = x * 2  # Non-leaf tensor
+        >>> y.retain_grad()
+        >>> z = y.sum()
+        >>> z.backward()
+        >>> print(y.grad)  # tensor([1., 1.])
     """
 
-def zero_grad(self):
-    """清零梯度"""
-
-def register_hook(self, hook):
+def zero_grad(self) -> None:
     """
-    注册梯度钩子函数
+    Zero out the gradient tensor.
     
-    参数:
-        hook: callable - 钩子函数，接收梯度作为参数
-        
-    示例:
-        >>> def print_grad(grad):
-        ...     print(f"Gradient: {grad}")
-        >>> x.register_hook(print_grad)
+    Example:
+        >>> x = genesis.tensor([1., 2.], requires_grad=True)
+        >>> y = x.sum()
+        >>> y.backward()
+        >>> x.zero_grad()
+        >>> print(x.grad)  # None
     """
 ```
 
-##### 设备和类型转换
+##### Tensor Operations
+
+All standard mathematical operations are supported and automatically tracked for gradient computation:
+
 ```python
-def cpu(self) -> Tensor:
-    """将张量移到CPU"""
-    
-def cuda(self, device_id=0) -> Tensor:
-    """
-    将张量移到CUDA设备
-    
-    参数:
-        device_id: int - GPU设备ID
-    """
-    
-def to(self, device=None, dtype=None) -> Tensor:
-    """
-    转换设备或数据类型
-    
-    参数:
-        device: Device, optional - 目标设备
-        dtype: DType, optional - 目标数据类型
-        
-    示例:
-        >>> x = genesis.tensor([1, 2, 3])
-        >>> x_gpu = x.to(genesis.cuda())
-        >>> x_fp16 = x.to(dtype=genesis.float16)
-    """
+# Arithmetic operations
+z = x + y          # Addition
+z = x - y          # Subtraction
+z = x * y          # Multiplication
+z = x / y          # Division
+z = x ** y         # Power
+z = x @ y          # Matrix multiplication
 
-def float(self) -> Tensor:
-    """转换为float32类型"""
-    
-def half(self) -> Tensor:
-    """转换为float16类型"""
-    
-def long(self) -> Tensor:
-    """转换为int64类型"""
-    
-def int(self) -> Tensor:
-    """转换为int32类型"""
-    
-def bool(self) -> Tensor:
-    """转换为bool类型"""
+# Unary operations
+z = -x             # Negation
+z = x.abs()        # Absolute value
+z = x.exp()        # Exponential
+z = x.log()        # Natural logarithm
+z = x.sqrt()       # Square root
+z = x.sin()        # Sine
+z = x.cos()        # Cosine
+z = x.tanh()       # Hyperbolic tangent
+
+# Reduction operations
+z = x.sum()        # Sum all elements
+z = x.mean()       # Mean of all elements
+z = x.max()        # Maximum element
+z = x.min()        # Minimum element
+
+# Shape operations
+z = x.reshape(shape)      # Reshape
+z = x.transpose(dims)     # Transpose
+z = x.squeeze()           # Remove singleton dimensions
+z = x.unsqueeze(dim)      # Add singleton dimension
+z = x.view(shape)         # View with different shape
 ```
 
-##### 形状操作
-```python
-def reshape(self, *shape) -> Tensor:
-    """
-    改变张量形状
-    
-    参数:
-        *shape: int - 新形状维度
-        
-    返回:
-        Tensor - 改变形状后的张量
-        
-    示例:
-        >>> x = genesis.tensor([[1, 2], [3, 4]])
-        >>> y = x.reshape(4)  # [1, 2, 3, 4]
-        >>> z = x.reshape(1, 4)  # [[1, 2, 3, 4]]
-    """
+### `genesis.Function`
 
-def view(self, *shape) -> Tensor:
-    """reshape的别名，与PyTorch兼容"""
-    
-def transpose(self, dim0=None, dim1=None) -> Tensor:
-    """
-    转置张量
-    
-    参数:
-        dim0, dim1: int, optional - 要交换的维度，默认转置最后两维
-        
-    示例:
-        >>> x = genesis.randn(2, 3, 4)
-        >>> y = x.transpose(0, 2)  # shape: (4, 3, 2)
-    """
-
-def permute(self, *dims) -> Tensor:
-    """
-    按指定顺序重排维度
-    
-    参数:
-        *dims: int - 新的维度顺序
-        
-    示例:
-        >>> x = genesis.randn(2, 3, 4)
-        >>> y = x.permute(2, 0, 1)  # shape: (4, 2, 3)
-    """
-
-def squeeze(self, dim=None) -> Tensor:
-    """移除大小为1的维度"""
-    
-def unsqueeze(self, dim) -> Tensor:
-    """在指定位置插入大小为1的维度"""
-    
-def expand(self, *shape) -> Tensor:
-    """扩展张量到新形状（通过广播）"""
-```
-
-##### 数学运算
-```python
-# 算术运算
-def __add__(self, other) -> Tensor
-def __sub__(self, other) -> Tensor  
-def __mul__(self, other) -> Tensor
-def __truediv__(self, other) -> Tensor
-def __pow__(self, other) -> Tensor
-def __matmul__(self, other) -> Tensor
-
-# 原地运算
-def add_(self, other) -> Tensor
-def sub_(self, other) -> Tensor
-def mul_(self, other) -> Tensor
-def div_(self, other) -> Tensor
-
-# 聚合运算
-def sum(self, axis=None, keepdims=False) -> Tensor:
-    """
-    求和
-    
-    参数:
-        axis: int or tuple, optional - 求和的轴
-        keepdims: bool - 是否保持维度
-    """
-
-def mean(self, axis=None, keepdims=False) -> Tensor:
-    """求平均值"""
-    
-def max(self, axis=None, keepdims=False) -> Tensor:
-    """求最大值"""
-    
-def min(self, axis=None, keepdims=False) -> Tensor:
-    """求最小值"""
-
-# 数学函数
-def exp(self) -> Tensor
-def log(self) -> Tensor
-def sqrt(self) -> Tensor
-def sin(self) -> Tensor
-def cos(self) -> Tensor
-def tanh(self) -> Tensor
-def sigmoid(self) -> Tensor
-def relu(self) -> Tensor
-```
-
-##### 索引和切片
-```python
-def __getitem__(self, key) -> Tensor:
-    """
-    张量索引和切片
-    
-    参数:
-        key: int, slice, tuple - 索引键
-        
-    示例:
-        >>> x = genesis.randn(3, 4, 5)
-        >>> y = x[0]  # 获取第一个元素
-        >>> z = x[:, 1:3, :]  # 切片操作
-        >>> w = x[..., -1]  # 使用省略号
-    """
-
-def __setitem__(self, key, value):
-    """张量赋值"""
-```
-
-##### 实用方法
-```python
-def item(self) -> float:
-    """返回标量张量的Python数值"""
-    
-def numpy(self) -> numpy.ndarray:
-    """转换为numpy数组"""
-    
-def contiguous(self) -> Tensor:
-    """返回内存连续的张量"""
-    
-def clone(self) -> Tensor:
-    """深拷贝张量"""
-    
-def data_ptr(self) -> int:
-    """返回数据指针（用于Triton）"""
-    
-def stride(self, dim=None):
-    """返回步长信息"""
-    
-def is_contiguous(self) -> bool:
-    """检查是否内存连续"""
-```
-
-### Function
-
-所有可微分操作的基类。
+Base class for all differentiable operations.
 
 ```python
 class Function:
-    """自定义可微分操作的基类"""
+    """
+    Base class for implementing custom differentiable operations.
+    """
     
     @staticmethod
-    def forward(ctx: Context, *args, **kwargs):
+    def forward(ctx: Context, *args, **kwargs) -> Tensor:
         """
-        前向传播计算
+        Forward pass implementation.
         
-        参数:
-            ctx: Context - 用于保存中间结果的上下文
-            *args: 输入参数
-            **kwargs: 关键字参数
+        Args:
+            ctx: Context object for saving information for backward pass
+            *args: Input tensors
+            **kwargs: Additional arguments
             
-        返回:
-            输出张量
+        Returns:
+            Output tensor(s)
         """
-        raise NotImplementedError()
+        raise NotImplementedError
     
     @staticmethod
-    def backward(ctx: Context, *grad_outputs):
+    def backward(ctx: Context, *grad_outputs) -> Tuple[Optional[Tensor], ...]:
         """
-        反向传播计算
+        Backward pass implementation.
         
-        参数:
-            ctx: Context - 前向传播保存的上下文
-            *grad_outputs: 输出梯度
+        Args:
+            ctx: Context object with saved information
+            *grad_outputs: Gradients w.r.t. outputs
             
-        返回:
-            tuple - 对应每个输入的梯度
+        Returns:
+            Gradients w.r.t. inputs (None for non-differentiable inputs)
         """
-        raise NotImplementedError()
+        raise NotImplementedError
     
     @classmethod
-    def apply(cls, *args, **kwargs):
+    def apply(cls, *args, **kwargs) -> Tensor:
         """
-        应用函数，自动处理前向和反向传播
-        
-        示例:
-            >>> class Exp(Function):
-            ...     @staticmethod
-            ...     def forward(ctx, x):
-            ...         y = x.exp()
-            ...         ctx.save_for_backward(y)
-            ...         return y
-            ...     
-            ...     @staticmethod
-            ...     def backward(ctx, grad_output):
-            ...         y, = ctx.saved_tensors
-            ...         return grad_output * y
-            >>> 
-            >>> y = Exp.apply(x)
+        Apply the function and register it in the computational graph.
         """
 ```
 
-### Context
+#### Custom Function Example
 
-用于在前向和反向传播之间传递信息的上下文对象。
-
-```python
-class Context:
-    """操作上下文，用于保存中间结果"""
-    
-    def save_for_backward(self, *tensors):
-        """
-        保存张量用于反向传播
-        
-        参数:
-            *tensors: Tensor - 需要保存的张量
-            
-        示例:
-            >>> def forward(ctx, x, y):
-            ...     z = x * y
-            ...     ctx.save_for_backward(x, y)
-            ...     return z
-        """
-    
-    @property
-    def saved_tensors(self) -> List[Tensor]:
-        """获取保存的张量列表"""
-```
-
-## 全局函数
-
-### 梯度管理
-
-```python
-@contextmanager
-def no_grad():
-    """
-    上下文管理器，禁用梯度计算
-    
-    示例:
-        >>> with genesis.no_grad():
-        ...     y = x * 2  # 不会构建计算图
-    """
-
-@contextmanager
-def enable_grad():
-    """
-    上下文管理器，启用梯度计算
-    
-    示例:
-        >>> with genesis.enable_grad():
-        ...     y = x * 2  # 会构建计算图
-    """
-
-def set_grad_enabled(enabled: bool):
-    """
-    设置梯度计算开关
-    
-    参数:
-        enabled: bool - 是否启用梯度计算
-    """
-```
-
-## 使用示例
-
-### 基础张量操作
 ```python
 import genesis
+from genesis import Function
 
-# 创建张量
-x = genesis.tensor([[1., 2.], [3., 4.]], requires_grad=True)
-y = genesis.tensor([[2., 0.], [0., 2.]], requires_grad=True)
-
-# 前向计算
-z = genesis.matmul(x, y)
-loss = z.sum()
-
-# 反向传播
-loss.backward()
-
-print(x.grad)  # 梯度: [[2., 2.], [2., 2.]]
-print(y.grad)  # 梯度: [[4., 4.], [6., 6.]]
-```
-
-### 自定义Function
-```python
-class CustomReLU(genesis.Function):
+class Exp(Function):
     @staticmethod
     def forward(ctx, x):
+        # Save input for backward pass
         ctx.save_for_backward(x)
-        return genesis.maximum(x, 0)
+        return genesis.tensor(x.data.exp(), requires_grad=x.requires_grad)
     
     @staticmethod
     def backward(ctx, grad_output):
+        # Retrieve saved tensor
         x, = ctx.saved_tensors
-        grad_input = grad_output * (x > 0)
-        return grad_input
+        # Gradient of exp(x) is exp(x)
+        return grad_output * x.exp()
 
-# 使用自定义函数
-x = genesis.randn(10, requires_grad=True)
-y = CustomReLU.apply(x)
+# Usage
+exp = Exp.apply
+x = genesis.tensor([1., 2., 3.], requires_grad=True)
+y = exp(x)
 y.sum().backward()
+print(x.grad)  # Gradients computed through custom function
 ```
 
-### 梯度钩子
+## Context Management
+
+### `genesis.no_grad()`
+
+Context manager to disable gradient computation for efficiency during inference.
+
 ```python
-def grad_hook(grad):
-    print(f"Gradient norm: {grad.norm()}")
-    return grad * 0.1  # 缩放梯度
-
-x = genesis.randn(10, requires_grad=True)
-x.register_hook(grad_hook)
-
-y = (x ** 2).sum()
-y.backward()  # 会打印梯度范数并缩放梯度
+with genesis.no_grad():
+    # Operations here won't build computational graph
+    y = model(x)  # No gradients computed
 ```
 
-### 混合精度训练
+### `genesis.enable_grad()`
+
+Context manager to enable gradient computation (useful within no_grad context).
+
+```python
+with genesis.no_grad():
+    # Most operations without gradients
+    y = model(x)
+    
+    with genesis.enable_grad():
+        # This specific operation needs gradients
+        z = y.sum()
+        z.backward()
+```
+
+### `genesis.set_grad_enabled(mode: bool)`
+
+Globally enable or disable gradient computation.
+
+```python
+genesis.set_grad_enabled(False)  # Disable globally
+y = x * 2  # No gradients
+
+genesis.set_grad_enabled(True)   # Enable globally
+z = x * 2  # Gradients computed
+```
+
+## Gradient Hooks
+
+### Pre and Post Hooks
+
+Register functions to be called during backward pass:
+
+```python
+def print_grad(grad):
+    print(f"Gradient: {grad}")
+    return grad  # Can modify gradient here
+
+x = genesis.tensor([1., 2., 3.], requires_grad=True)
+x.register_hook(print_grad)
+y = (x ** 2).sum()
+y.backward()  # Will print gradients during backward
+```
+
+## Memory Management
+
+### Gradient Accumulation
+
+Gradients accumulate by default across multiple backward passes:
+
+```python
+x = genesis.tensor([1., 2.], requires_grad=True)
+
+y1 = x.sum()
+y1.backward()
+print(x.grad)  # tensor([1., 1.])
+
+y2 = (x * 2).sum()
+y2.backward()
+print(x.grad)  # tensor([3., 3.]) - accumulated!
+```
+
+### Clearing Gradients
+
+```python
+# Clear gradients before new computation
+x.grad = None  # or x.zero_grad()
+```
+
+## Best Practices
+
+### 1. Efficient Inference
+
+Always use `no_grad()` context for inference:
+
+```python
+model.eval()
+with genesis.no_grad():
+    predictions = model(test_data)
+```
+
+### 2. Memory Optimization
+
+Detach intermediate results when gradients aren't needed:
+
+```python
+# Don't need gradients for running_mean
+running_mean = (alpha * running_mean.detach() + 
+                (1 - alpha) * batch_mean)
+```
+
+### 3. Gradient Clipping
+
+Prevent gradient explosion:
+
+```python
+genesis.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+```
+
+### 4. Mixed Precision Training
+
+Use automatic mixed precision for faster training:
+
 ```python
 genesis.enable_autocast = True
-
 with genesis.autocast():
-    # 自动转换为FP16进行计算
-    x = genesis.randn(1000, 1000)
-    y = genesis.matmul(x, x)
-    loss = y.mean()
-    
-loss.backward()  # 梯度计算自动处理精度转换
+    output = model(input)
+    loss = criterion(output, target)
 ```
 
-## 性能优化提示
+## Common Patterns
 
-1. **使用no_grad进行推理**：在不需要梯度的场景下使用`no_grad()`减少内存消耗
-2. **及时清理梯度**：使用`zero_grad()`清理不需要的梯度
-3. **使用detach分离计算图**：避免不必要的梯度传播
-4. **利用原地操作**：使用`add_()`, `mul_()`等原地操作减少内存分配
-5. **混合精度训练**：启用autocast提升训练速度
+### Training Loop
 
-## 注意事项
+```python
+model = MyModel()
+optimizer = genesis.optim.Adam(model.parameters())
 
-- 张量的`requires_grad`属性只能在叶子节点上设置
-- 原地操作可能会破坏计算图，谨慎使用
-- 梯度默认会累积，需要手动清零
-- 视图操作（reshape, transpose等）共享内存，修改会影响原张量
+for epoch in range(num_epochs):
+    for batch in dataloader:
+        # Forward pass
+        outputs = model(batch.inputs)
+        loss = criterion(outputs, batch.targets)
+        
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        
+        # Update weights
+        optimizer.step()
+```
+
+### Gradient Checkpointing
+
+Save memory by recomputing activations:
+
+```python
+# Coming in future versions
+from genesis.utils.checkpoint import checkpoint
+
+def forward(self, x):
+    # Checkpoint intermediate computation
+    x = checkpoint(self.layer1, x)
+    x = checkpoint(self.layer2, x)
+    return self.layer3(x)
+```
+
+## Debugging
+
+### Gradient Checking
+
+Verify gradients with numerical differentiation:
+
+```python
+from genesis.autograd import gradcheck
+
+def func(x):
+    return (x ** 2).sum()
+
+x = genesis.tensor([1., 2., 3.], requires_grad=True)
+gradcheck(func, x, eps=1e-6)  # Returns True if gradients are correct
+```
+
+### Inspecting Computational Graph
+
+```python
+# Print computational graph structure
+y = x * 2 + 3
+print(y.grad_fn)  # <AddBackward>
+print(y.grad_fn.next_functions)  # Connected operations
+```
+
+## Performance Tips
+
+1. **Reuse tensors**: Avoid creating new tensors unnecessarily
+2. **In-place operations**: Use when possible (e.g., `x.add_(y)`)
+3. **Batch operations**: Process multiple samples together
+4. **Disable gradients**: Use `no_grad()` for inference
+5. **Clear gradients**: Zero gradients before each backward pass
+
+## See Also
+
+- [Neural Network Modules](nn/modules.md) - Building models with Genesis
+- [Optimizers](optim/optimizers.md) - Training with gradient descent
+- [Tensor Operations](../ndarray/index.md) - Low-level tensor operations
+- [Examples](../../samples/) - Complete working examples

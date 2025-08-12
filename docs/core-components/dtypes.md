@@ -14,11 +14,11 @@ Genesis实现了一套统一的数据类型系统，提供与PyTorch对齐的类
 ```mermaid
 graph TB
     subgraph "DType核心类"
-        A[DType] --> B[name: str]
-        A --> C[itemsize: int]
+        A[DType] --> B[name str]
+        A --> C[itemsize int]
         A --> D[numpy_dtype]
-        A --> E[triton_name: str]
-        A --> F[is_floating_point: bool]
+        A --> E[triton_name str]
+        A --> F[is_floating_point bool]
     end
     
     subgraph "预定义类型"

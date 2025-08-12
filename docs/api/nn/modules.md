@@ -1,786 +1,821 @@
-# 神经网络模块 (genesis.nn)
+# Neural Network Modules (genesis.nn)
 
-Genesis的神经网络模块提供了构建深度学习模型所需的所有基础组件。
+## Overview
 
-## 模块概述
+The `genesis.nn` module provides all the building blocks needed to create deep learning models. It follows a modular design where complex models are built by composing simpler components.
 
-`genesis.nn`模块包含：
-- 基础模块类（Module、Parameter）
-- 线性层和容器（Linear、Sequential、ModuleList）
-- 激活函数（ReLU、SiLU、Softmax）
-- 正则化层（Dropout、BatchNorm、LayerNorm）
-- 高级组件（Embedding、Attention）
+## Core Concepts
 
-## 核心基类
+### Module System
 
-### Module
+All neural network components inherit from `nn.Module`, which provides:
+- Parameter management
+- Device and dtype handling  
+- State serialization
+- Forward pass definition
 
-所有神经网络模块的基类，提供参数管理、前向传播、状态保存等功能。
+### Parameters
+
+Parameters are tensors that are automatically tracked and updated during training:
+- Automatically registered when assigned as module attributes
+- Included in `module.parameters()` for optimizer
+- Saved/loaded with model state
+
+## Base Classes
+
+### `nn.Module`
+
+The base class for all neural network modules.
 
 ```python
 class Module:
-    """神经网络模块基类"""
+    """Base class for all neural network modules."""
     
     def __init__(self):
-        """初始化模块"""
+        """Initialize the module."""
+        self._modules = {}
+        self._parameters = {}
+        self._buffers = {}
+        self.training = True
 ```
 
-#### 核心方法
+#### Core Methods
 
-##### 前向传播
+##### Forward Pass
 ```python
-def forward(self, *args, **kwargs):
+def forward(self, *args, **kwargs) -> Tensor:
     """
-    定义前向传播逻辑（子类必须实现）
+    Define the forward pass computation.
+    Must be overridden by subclasses.
     
-    示例:
+    Example:
         >>> class MyModule(nn.Module):
         ...     def forward(self, x):
         ...         return x * 2
     """
-    raise NotImplementedError()
+    raise NotImplementedError
 
-def __call__(self, *args, **kwargs):
+def __call__(self, *args, **kwargs) -> Tensor:
     """
-    调用模块，执行前向传播
+    Make module callable. Calls forward() internally.
     
-    注意: 直接调用模块而不是forward方法
-    示例:
-        >>> model = MyModule()
-        >>> output = model(input)  # 正确
-        >>> output = model.forward(input)  # 不推荐
+    Note: Always use module(input) instead of module.forward(input)
     """
 ```
 
-##### 参数管理
+##### Parameter Management
 ```python
 def parameters(self) -> List[Tensor]:
     """
-    返回模块的所有参数
+    Return all parameters in the module.
     
-    返回:
-        List[Tensor] - 参数列表
+    Returns:
+        List of parameter tensors
         
-    示例:
+    Example:
         >>> model = nn.Linear(10, 5)
         >>> params = model.parameters()
-        >>> print(len(params))  # 2 (weight和bias)
+        >>> print(len(params))  # 2 (weight and bias)
     """
 
 def named_parameters(self) -> List[Tuple[str, Tensor]]:
     """
-    返回参数及其名称
+    Return parameters with their names.
     
-    返回:
-        List[Tuple[str, Tensor]] - (名称, 参数)对列表
+    Returns:
+        List of (name, parameter) tuples
         
-    示例:
+    Example:
         >>> for name, param in model.named_parameters():
         ...     print(f"{name}: {param.shape}")
     """
 
-def add_module(self, name: str, module: Optional[Module]):
+def zero_grad(self) -> None:
     """
-    添加子模块
+    Zero out gradients of all parameters.
     
-    参数:
-        name: str - 子模块名称
-        module: Module - 子模块实例
+    Example:
+        >>> model.zero_grad()  # Clear all gradients
+    """
+```
+
+##### Module Hierarchy
+```python
+def add_module(self, name: str, module: Optional[Module]) -> None:
+    """
+    Add a child module.
+    
+    Args:
+        name: Name for the submodule
+        module: Module instance to add
         
-    示例:
+    Example:
         >>> model = nn.Module()
         >>> model.add_module('fc', nn.Linear(10, 5))
     """
 
 def modules(self) -> Iterator[Module]:
-    """返回所有子模块的迭代器（包括自身）"""
+    """Return iterator over all modules (including self)."""
 
 def children(self) -> Iterator[Module]:
-    """返回直接子模块的迭代器"""
+    """Return iterator over immediate child modules."""
+
+def named_modules(self) -> Iterator[Tuple[str, Module]]:
+    """Return iterator over all modules with names."""
 ```
 
-##### 状态管理
+##### Training Mode
 ```python
-def state_dict(self, destination=None, prefix='', keep_vars=False) -> dict:
+def train(self, mode: bool = True) -> Module:
     """
-    返回模块状态字典
+    Set module to training mode.
     
-    参数:
-        destination: dict, optional - 目标字典
-        prefix: str - 参数名前缀
-        keep_vars: bool - 是否保持张量的梯度信息
+    Args:
+        mode: Whether to enable training mode
         
-    返回:
-        dict - 参数名到张量的映射
+    Returns:
+        self
         
-    示例:
+    Example:
+        >>> model.train()  # Enable training mode
+        >>> model.train(False)  # Equivalent to model.eval()
+    """
+
+def eval(self) -> Module:
+    """
+    Set module to evaluation mode.
+    
+    Returns:
+        self
+        
+    Example:
+        >>> model.eval()  # Disable dropout, use running stats for BN
+    """
+```
+
+##### State Management
+```python
+def state_dict(self) -> Dict[str, Tensor]:
+    """
+    Return state dictionary containing all parameters and buffers.
+    
+    Returns:
+        Dictionary mapping parameter names to tensors
+        
+    Example:
         >>> state = model.state_dict()
         >>> genesis.save(state, 'model.pth')
     """
 
-def load_state_dict(self, state_dict: dict, strict: bool = True):
+def load_state_dict(self, state_dict: Dict[str, Tensor]) -> None:
     """
-    加载模块状态
+    Load parameters from state dictionary.
     
-    参数:
-        state_dict: dict - 状态字典
-        strict: bool - 是否严格匹配参数名
+    Args:
+        state_dict: Dictionary of parameters
         
-    示例:
+    Example:
         >>> state = genesis.load('model.pth')
         >>> model.load_state_dict(state)
     """
 ```
 
-##### 训练模式控制
-```python
-def train(self, mode: bool = True) -> Module:
-    """
-    设置训练模式
-    
-    参数:
-        mode: bool - True为训练模式，False为评估模式
-        
-    返回:
-        self - 支持链式调用
-        
-    示例:
-        >>> model.train()  # 训练模式
-        >>> model.train(False)  # 评估模式
-    """
+### `nn.Parameter`
 
-def eval(self) -> Module:
-    """
-    设置评估模式（等价于train(False)）
-    
-    示例:
-        >>> model.eval()
-        >>> with genesis.no_grad():
-        ...     output = model(input)
-    """
-
-@property
-def training(self) -> bool:
-    """返回是否处于训练模式"""
-```
-
-##### 设备管理
-```python
-def to(self, device=None, dtype=None) -> Module:
-    """
-    移动模块到指定设备或转换数据类型
-    
-    参数:
-        device: Device - 目标设备
-        dtype: DType - 目标数据类型
-        
-    示例:
-        >>> model = model.to(genesis.cuda())
-        >>> model = model.to(dtype=genesis.float16)
-    """
-
-def cpu(self) -> Module:
-    """移动到CPU"""
-
-def cuda(self, device_id: int = 0) -> Module:
-    """移动到CUDA设备"""
-```
-
-##### 实用方法
-```python
-def apply(self, fn: Callable[[Module], None]) -> Module:
-    """
-    递归应用函数到所有子模块
-    
-    参数:
-        fn: callable - 应用到每个模块的函数
-        
-    示例:
-        >>> def init_weights(m):
-        ...     if isinstance(m, nn.Linear):
-        ...         m.weight.data.normal_(0, 0.01)
-        >>> model.apply(init_weights)
-    """
-
-def zero_grad(self):
-    """清零所有参数的梯度"""
-
-def extra_repr(self) -> str:
-    """返回模块的额外字符串表示（子类可重写）"""
-```
-
-### Parameter
-
-模型参数的特殊张量类型。
+A special tensor that is automatically registered as a module parameter.
 
 ```python
 class Parameter(Tensor):
     """
-    模型参数
+    A tensor that is automatically registered as a module parameter.
     
-    参数:
-        data: Tensor - 参数数据
-        requires_grad: bool - 是否需要梯度，默认True
+    Args:
+        data: Tensor data
+        requires_grad: Whether to compute gradients (default: True)
         
-    示例:
-        >>> weight = nn.Parameter(genesis.randn(10, 5))
-        >>> bias = nn.Parameter(genesis.zeros(5))
+    Example:
+        >>> class MyModule(nn.Module):
+        ...     def __init__(self):
+        ...         super().__init__()
+        ...         self.weight = nn.Parameter(genesis.randn(10, 5))
     """
-    
-    def __init__(self, data: Tensor, requires_grad: bool = True):
-        """初始化参数"""
 ```
 
-## 基础层
+## Layer Types
 
-### Linear
+### Linear Layers
 
-全连接层（线性变换）。
+#### `nn.Linear`
+
+Fully connected layer performing linear transformation.
 
 ```python
 class Linear(Module):
     """
-    线性层: y = xW^T + b
+    Linear transformation: y = xW^T + b
     
-    参数:
-        in_features: int - 输入特征维度
-        out_features: int - 输出特征维度
-        bias: bool - 是否使用偏置，默认True
-        device: Device - 设备
-        dtype: DType - 数据类型
+    Args:
+        in_features: Size of input features
+        out_features: Size of output features
+        bias: Whether to include bias term (default: True)
+        
+    Shape:
+        - Input: (*, in_features)
+        - Output: (*, out_features)
+        
+    Example:
+        >>> layer = nn.Linear(20, 30)
+        >>> x = genesis.randn(128, 20)
+        >>> output = layer(x)  # Shape: (128, 30)
     """
-    
-    def __init__(self, in_features: int, out_features: int, bias: bool = True,
-                 device=None, dtype=None):
-        """
-        初始化线性层
-        
-        示例:
-            >>> layer = nn.Linear(784, 128)
-            >>> x = genesis.randn(32, 784)
-            >>> y = layer(x)  # shape: (32, 128)
-        """
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        前向传播
-        
-        参数:
-            x: Tensor - 输入张量，shape: (..., in_features)
-            
-        返回:
-            Tensor - 输出张量，shape: (..., out_features)
-        """
-    
-    @property
-    def weight(self) -> Parameter:
-        """权重参数，shape: (out_features, in_features)"""
-    
-    @property
-    def bias(self) -> Optional[Parameter]:
-        """偏置参数，shape: (out_features,)"""
 ```
 
-### Embedding
+### Convolutional Layers
 
-嵌入层，将离散索引映射到连续向量。
+#### `nn.Conv2d`
+
+2D convolution layer for image processing.
 
 ```python
-class Embedding(Module):
+class Conv2d(Module):
     """
-    嵌入层
+    2D convolution over input signal.
     
-    参数:
-        num_embeddings: int - 嵌入字典大小
-        embedding_dim: int - 嵌入向量维度
-        padding_idx: int, optional - 填充索引
-        device: Device - 设备
-        dtype: DType - 数据类型
+    Args:
+        in_channels: Number of input channels
+        out_channels: Number of output channels
+        kernel_size: Size of convolution kernel
+        stride: Stride of convolution (default: 1)
+        padding: Zero-padding added to both sides (default: 0)
+        bias: Whether to add bias (default: True)
+        
+    Shape:
+        - Input: (N, C_in, H, W)
+        - Output: (N, C_out, H_out, W_out)
+        
+    Example:
+        >>> conv = nn.Conv2d(3, 64, kernel_size=3, padding=1)
+        >>> x = genesis.randn(32, 3, 224, 224)
+        >>> output = conv(x)  # Shape: (32, 64, 224, 224)
     """
-    
-    def __init__(self, num_embeddings: int, embedding_dim: int, 
-                 padding_idx: Optional[int] = None, device=None, dtype=None):
-        """
-        初始化嵌入层
-        
-        示例:
-            >>> embed = nn.Embedding(10000, 128)  # 词汇表大小10000，嵌入维度128
-            >>> indices = genesis.tensor([1, 2, 3, 4])
-            >>> vectors = embed(indices)  # shape: (4, 128)
-        """
-    
-    def forward(self, input: Tensor) -> Tensor:
-        """
-        前向传播
-        
-        参数:
-            input: Tensor - 索引张量，dtype必须是整数
-            
-        返回:
-            Tensor - 嵌入向量，shape: (*input.shape, embedding_dim)
-        """
-    
-    @property  
-    def weight(self) -> Parameter:
-        """嵌入权重矩阵，shape: (num_embeddings, embedding_dim)"""
 ```
 
-## 容器模块
+### Activation Functions
 
-### Sequential
+#### `nn.ReLU`
 
-顺序容器，按顺序执行子模块。
-
-```python
-class Sequential(Module):
-    """
-    顺序容器
-    
-    参数:
-        *args: Module - 按顺序执行的模块
-        
-    示例:
-        >>> model = nn.Sequential(
-        ...     nn.Linear(784, 256),
-        ...     nn.ReLU(),
-        ...     nn.Linear(256, 128),
-        ...     nn.ReLU(),
-        ...     nn.Linear(128, 10)
-        ... )
-        >>> output = model(input)
-    """
-    
-    def __init__(self, *args):
-        """初始化顺序容器"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """依次通过所有子模块"""
-    
-    def append(self, module: Module) -> Sequential:
-        """添加模块到末尾"""
-    
-    def __getitem__(self, idx: int) -> Module:
-        """通过索引访问子模块"""
-    
-    def __len__(self) -> int:
-        """返回子模块数量"""
-```
-
-### ModuleList
-
-模块列表容器。
-
-```python
-class ModuleList(Module):
-    """
-    模块列表
-    
-    参数:
-        modules: list, optional - 模块列表
-        
-    示例:
-        >>> layers = nn.ModuleList([
-        ...     nn.Linear(10, 10) for _ in range(5)
-        ... ])
-        >>> for layer in layers:
-        ...     x = layer(x)
-    """
-    
-    def __init__(self, modules: Optional[List[Module]] = None):
-        """初始化模块列表"""
-    
-    def append(self, module: Module) -> ModuleList:
-        """添加模块"""
-    
-    def extend(self, modules: List[Module]) -> ModuleList:
-        """扩展模块列表"""
-    
-    def __getitem__(self, idx: int) -> Module:
-        """索引访问"""
-    
-    def __len__(self) -> int:
-        """返回模块数量"""
-```
-
-## 激活函数
-
-### ReLU
-
-线性整流单元激活函数。
+Rectified Linear Unit activation.
 
 ```python
 class ReLU(Module):
     """
-    ReLU激活函数: f(x) = max(0, x)
+    ReLU activation: f(x) = max(0, x)
     
-    参数:
-        inplace: bool - 是否原地操作，默认False
+    Args:
+        inplace: Whether to modify input in-place (default: False)
         
-    示例:
+    Example:
         >>> relu = nn.ReLU()
         >>> x = genesis.randn(10)
-        >>> y = relu(x)
+        >>> output = relu(x)
     """
-    
-    def __init__(self, inplace: bool = False):
-        """初始化ReLU"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """应用ReLU激活"""
 ```
 
-### SiLU
+#### `nn.Sigmoid`
 
-Sigmoid线性单元（Swish激活函数）。
+Sigmoid activation function.
+
+```python
+class Sigmoid(Module):
+    """
+    Sigmoid activation: f(x) = 1 / (1 + exp(-x))
+    
+    Example:
+        >>> sigmoid = nn.Sigmoid()
+        >>> x = genesis.randn(10)
+        >>> output = sigmoid(x)  # Values in (0, 1)
+    """
+```
+
+#### `nn.Tanh`
+
+Hyperbolic tangent activation.
+
+```python
+class Tanh(Module):
+    """
+    Tanh activation: f(x) = tanh(x)
+    
+    Example:
+        >>> tanh = nn.Tanh()
+        >>> x = genesis.randn(10)
+        >>> output = tanh(x)  # Values in (-1, 1)
+    """
+```
+
+#### `nn.SiLU` (Swish)
+
+Sigmoid Linear Unit activation.
 
 ```python
 class SiLU(Module):
     """
-    SiLU激活函数: f(x) = x * sigmoid(x)
+    SiLU/Swish activation: f(x) = x * sigmoid(x)
     
-    示例:
+    Example:
         >>> silu = nn.SiLU()
         >>> x = genesis.randn(10)
-        >>> y = silu(x)
+        >>> output = silu(x)
     """
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """应用SiLU激活"""
 ```
 
-### Softmax
+#### `nn.GELU`
 
-Softmax激活函数。
+Gaussian Error Linear Unit activation.
+
+```python
+class GELU(Module):
+    """
+    GELU activation: f(x) = x * Φ(x)
+    where Φ(x) is the cumulative distribution function of standard Gaussian.
+    
+    Example:
+        >>> gelu = nn.GELU()
+        >>> x = genesis.randn(10)
+        >>> output = gelu(x)
+    """
+```
+
+#### `nn.Softmax`
+
+Softmax activation for multi-class classification.
 
 ```python
 class Softmax(Module):
     """
-    Softmax激活函数
+    Softmax activation: softmax(x_i) = exp(x_i) / Σ exp(x_j)
     
-    参数:
-        dim: int - 计算softmax的维度，默认-1
+    Args:
+        dim: Dimension along which to apply softmax
         
-    示例:
+    Example:
         >>> softmax = nn.Softmax(dim=-1)
         >>> x = genesis.randn(10, 5)
-        >>> y = softmax(x)  # 每行和为1
+        >>> output = softmax(x)  # Each row sums to 1
     """
-    
-    def __init__(self, dim: int = -1):
-        """初始化Softmax"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """应用Softmax"""
 ```
 
-## 正则化层
+### Normalization Layers
 
-### Dropout
+#### `nn.BatchNorm1d`
 
-随机失活正则化。
-
-```python
-class Dropout(Module):
-    """
-    Dropout正则化
-    
-    参数:
-        p: float - 失活概率，默认0.5
-        inplace: bool - 是否原地操作，默认False
-        
-    示例:
-        >>> dropout = nn.Dropout(p=0.2)
-        >>> model.train()  # 训练模式下应用dropout
-        >>> y = dropout(x)
-        >>> model.eval()  # 评估模式下不应用dropout
-    """
-    
-    def __init__(self, p: float = 0.5, inplace: bool = False):
-        """初始化Dropout"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        应用Dropout
-        
-        注意: 训练模式下随机失活，评估模式下直接返回输入
-        """
-```
-
-### BatchNorm1d
-
-一维批量归一化。
+Batch normalization for 1D or 2D inputs.
 
 ```python
 class BatchNorm1d(Module):
     """
-    批量归一化（用于全连接层）
+    Batch normalization over 2D or 3D input.
     
-    参数:
-        num_features: int - 特征维度
-        eps: float - 数值稳定性参数，默认1e-5
-        momentum: float - 移动平均动量，默认0.1
-        device: Device - 设备
-        dtype: DType - 数据类型
+    Args:
+        num_features: Number of features (C in [N, C] or [N, C, L])
+        eps: Small value for numerical stability (default: 1e-5)
+        momentum: Momentum for running stats (default: 0.1)
         
-    示例:
-        >>> bn = nn.BatchNorm1d(128)
-        >>> x = genesis.randn(32, 128)  # batch_size=32, features=128
-        >>> y = bn(x)
+    Shape:
+        - Input: (N, C) or (N, C, L)
+        - Output: Same as input
+        
+    Example:
+        >>> bn = nn.BatchNorm1d(100)
+        >>> x = genesis.randn(20, 100)
+        >>> output = bn(x)
     """
-    
-    def __init__(self, num_features: int, eps: float = 1e-5, 
-                 momentum: float = 0.1, device=None, dtype=None):
-        """初始化BatchNorm1d"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        应用批量归一化
-        
-        参数:
-            x: Tensor - 输入张量，shape: (N, C) 或 (N, C, L)
-            
-        返回:
-            Tensor - 归一化后的张量
-        """
-    
-    @property
-    def weight(self) -> Parameter:
-        """缩放参数γ，shape: (num_features,)"""
-    
-    @property
-    def bias(self) -> Parameter:
-        """偏移参数β，shape: (num_features,)"""
-    
-    @property
-    def running_mean(self) -> Tensor:
-        """移动平均均值"""
-    
-    @property
-    def running_var(self) -> Tensor:
-        """移动平均方差"""
 ```
 
-### LayerNorm
+#### `nn.LayerNorm`
 
-层归一化。
+Layer normalization.
 
 ```python
 class LayerNorm(Module):
     """
-    层归一化
+    Layer normalization over last dimensions.
     
-    参数:
-        normalized_shape: int or tuple - 归一化形状
-        eps: float - 数值稳定性参数，默认1e-5
-        elementwise_affine: bool - 是否使用可学习参数，默认True
-        device: Device - 设备
-        dtype: DType - 数据类型
+    Args:
+        normalized_shape: Shape of dimensions to normalize
+        eps: Small value for numerical stability (default: 1e-5)
         
-    示例:
-        >>> ln = nn.LayerNorm(128)
-        >>> x = genesis.randn(32, 10, 128)
-        >>> y = ln(x)  # 在最后一维归一化
+    Shape:
+        - Input: (*, normalized_shape)
+        - Output: Same as input
+        
+    Example:
+        >>> ln = nn.LayerNorm([768])
+        >>> x = genesis.randn(32, 100, 768)
+        >>> output = ln(x)  # Normalize over last dimension
     """
-    
-    def __init__(self, normalized_shape, eps: float = 1e-5,
-                 elementwise_affine: bool = True, device=None, dtype=None):
-        """初始化LayerNorm"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """应用层归一化"""
-    
-    @property
-    def weight(self) -> Optional[Parameter]:
-        """缩放参数"""
-    
-    @property
-    def bias(self) -> Optional[Parameter]:
-        """偏移参数"""
 ```
 
-### RMSNorm
+### Dropout Layers
 
-RMS归一化（Root Mean Square Normalization）。
+#### `nn.Dropout`
+
+Dropout for regularization.
 
 ```python
-class RMSNorm(Module):
+class Dropout(Module):
     """
-    RMS归一化
+    Randomly zero out elements for regularization.
     
-    参数:
-        dim: int - 归一化维度
-        eps: float - 数值稳定性参数，默认1e-6
-        device: Device - 设备
-        dtype: DType - 数据类型
+    Args:
+        p: Probability of zeroing an element (default: 0.5)
+        inplace: Whether to modify input in-place (default: False)
         
-    示例:
-        >>> rms_norm = nn.RMSNorm(128)
-        >>> x = genesis.randn(32, 10, 128)
-        >>> y = rms_norm(x)
+    Example:
+        >>> dropout = nn.Dropout(p=0.2)
+        >>> x = genesis.randn(20, 16)
+        >>> output = dropout(x)  # Training mode: randomly zero 20% of elements
     """
-    
-    def __init__(self, dim: int, eps: float = 1e-6, device=None, dtype=None):
-        """初始化RMSNorm"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """应用RMS归一化"""
 ```
 
-## 其他模块
+### Pooling Layers
 
-### Flatten
+#### `nn.MaxPool2d`
 
-展平层。
+2D max pooling.
 
 ```python
-class Flatten(Module):
+class MaxPool2d(Module):
     """
-    展平层，将多维输入展平为二维
+    Max pooling over 2D input.
     
-    参数:
-        start_dim: int - 开始展平的维度，默认1
-        end_dim: int - 结束展平的维度，默认-1
+    Args:
+        kernel_size: Size of pooling window
+        stride: Stride of pooling (default: kernel_size)
+        padding: Zero-padding (default: 0)
         
-    示例:
-        >>> flatten = nn.Flatten()
-        >>> x = genesis.randn(32, 3, 28, 28)
-        >>> y = flatten(x)  # shape: (32, 2352)
+    Shape:
+        - Input: (N, C, H, W)
+        - Output: (N, C, H_out, W_out)
+        
+    Example:
+        >>> pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        >>> x = genesis.randn(1, 16, 32, 32)
+        >>> output = pool(x)  # Shape: (1, 16, 16, 16)
     """
-    
-    def __init__(self, start_dim: int = 1, end_dim: int = -1):
-        """初始化Flatten"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """展平张量"""
 ```
 
-### Residual
+#### `nn.AvgPool2d`
 
-残差连接包装器。
+2D average pooling.
 
 ```python
-class Residual(Module):
+class AvgPool2d(Module):
     """
-    残差连接: output = x + fn(x)
+    Average pooling over 2D input.
     
-    参数:
-        fn: Module - 要应用的函数/模块
+    Args:
+        kernel_size: Size of pooling window
+        stride: Stride of pooling (default: kernel_size)
+        padding: Zero-padding (default: 0)
         
-    示例:
-        >>> residual = nn.Residual(
-        ...     nn.Sequential(
-        ...         nn.Linear(128, 128),
-        ...         nn.ReLU()
-        ...     )
+    Example:
+        >>> pool = nn.AvgPool2d(kernel_size=2, stride=2)
+        >>> x = genesis.randn(1, 16, 32, 32)
+        >>> output = pool(x)  # Shape: (1, 16, 16, 16)
+    """
+```
+
+### Embedding Layers
+
+#### `nn.Embedding`
+
+Embedding lookup table.
+
+```python
+class Embedding(Module):
+    """
+    Embedding lookup table.
+    
+    Args:
+        num_embeddings: Size of vocabulary
+        embedding_dim: Dimension of embeddings
+        
+    Shape:
+        - Input: (*) containing indices
+        - Output: (*, embedding_dim)
+        
+    Example:
+        >>> embed = nn.Embedding(10000, 300)  # 10k vocab, 300-dim embeddings
+        >>> indices = genesis.tensor([1, 2, 3, 4])
+        >>> output = embed(indices)  # Shape: (4, 300)
+    """
+```
+
+### Attention Layers
+
+#### `nn.MultiheadAttention`
+
+Multi-head attention mechanism.
+
+```python
+class MultiheadAttention(Module):
+    """
+    Multi-head attention mechanism.
+    
+    Args:
+        embed_dim: Embedding dimension
+        num_heads: Number of attention heads
+        dropout: Dropout probability (default: 0.0)
+        bias: Whether to add bias (default: True)
+        
+    Shape:
+        - Query: (L, N, E) or (N, L, E)
+        - Key: (S, N, E) or (N, S, E)
+        - Value: (S, N, E) or (N, S, E)
+        - Output: (L, N, E) or (N, L, E)
+        
+    Example:
+        >>> attn = nn.MultiheadAttention(embed_dim=512, num_heads=8)
+        >>> x = genesis.randn(10, 32, 512)  # (seq_len, batch, embed_dim)
+        >>> output, weights = attn(x, x, x)
+    """
+```
+
+## Container Modules
+
+### `nn.Sequential`
+
+Sequential container for modules.
+
+```python
+class Sequential(Module):
+    """
+    Sequential container that runs modules in order.
+    
+    Args:
+        *modules: Sequence of modules to apply
+        
+    Example:
+        >>> model = nn.Sequential(
+        ...     nn.Linear(784, 256),
+        ...     nn.ReLU(),
+        ...     nn.Linear(256, 10)
         ... )
-        >>> y = residual(x)  # y = x + fn(x)
+        >>> x = genesis.randn(32, 784)
+        >>> output = model(x)  # Shape: (32, 10)
     """
-    
-    def __init__(self, fn: Module):
-        """初始化残差模块"""
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """应用残差连接"""
 ```
 
-## 使用示例
+### `nn.ModuleList`
 
-### 构建简单的MLP
+List container for modules.
+
 ```python
-import genesis.nn as nn
+class ModuleList(Module):
+    """
+    List of modules that are properly registered.
+    
+    Args:
+        modules: Optional list of modules
+        
+    Example:
+        >>> layers = nn.ModuleList([
+        ...     nn.Linear(10, 10) for _ in range(5)
+        ... ])
+        >>> x = genesis.randn(32, 10)
+        >>> for layer in layers:
+        ...     x = layer(x)
+    """
+```
 
-class MLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.1):
+### `nn.ModuleDict`
+
+Dictionary container for modules.
+
+```python
+class ModuleDict(Module):
+    """
+    Dictionary of modules with string keys.
+    
+    Args:
+        modules: Optional dict of modules
+        
+    Example:
+        >>> layers = nn.ModuleDict({
+        ...     'fc1': nn.Linear(10, 20),
+        ...     'fc2': nn.Linear(20, 10)
+        ... })
+        >>> x = genesis.randn(32, 10)
+        >>> x = layers['fc1'](x)
+        >>> x = layers['fc2'](x)
+    """
+```
+
+## Loss Functions
+
+### `nn.MSELoss`
+
+Mean squared error loss.
+
+```python
+class MSELoss(Module):
+    """
+    Mean squared error loss: L = mean((y_pred - y_true)^2)
+    
+    Args:
+        reduction: 'mean', 'sum', or 'none' (default: 'mean')
+        
+    Example:
+        >>> loss_fn = nn.MSELoss()
+        >>> pred = genesis.randn(32, 10)
+        >>> target = genesis.randn(32, 10)
+        >>> loss = loss_fn(pred, target)
+    """
+```
+
+### `nn.CrossEntropyLoss`
+
+Cross entropy loss for classification.
+
+```python
+class CrossEntropyLoss(Module):
+    """
+    Cross entropy loss for multi-class classification.
+    
+    Args:
+        weight: Manual rescaling weight for each class
+        reduction: 'mean', 'sum', or 'none' (default: 'mean')
+        
+    Shape:
+        - Input: (N, C) where C is number of classes
+        - Target: (N,) containing class indices
+        
+    Example:
+        >>> loss_fn = nn.CrossEntropyLoss()
+        >>> logits = genesis.randn(32, 10)  # 32 samples, 10 classes
+        >>> targets = genesis.randint(0, 10, (32,))
+        >>> loss = loss_fn(logits, targets)
+    """
+```
+
+### `nn.BCELoss`
+
+Binary cross entropy loss.
+
+```python
+class BCELoss(Module):
+    """
+    Binary cross entropy loss.
+    
+    Args:
+        reduction: 'mean', 'sum', or 'none' (default: 'mean')
+        
+    Shape:
+        - Input: (N, *) where * means any number of dimensions
+        - Target: Same shape as input
+        
+    Example:
+        >>> loss_fn = nn.BCELoss()
+        >>> pred = genesis.sigmoid(genesis.randn(32, 1))
+        >>> target = genesis.randint(0, 2, (32, 1)).float()
+        >>> loss = loss_fn(pred, target)
+    """
+```
+
+## Utilities
+
+### Weight Initialization
+
+```python
+def init_weights(module: Module, init_type: str = 'xavier'):
+    """
+    Initialize module weights.
+    
+    Args:
+        module: Module to initialize
+        init_type: 'xavier', 'kaiming', 'normal', 'uniform'
+        
+    Example:
+        >>> model = nn.Linear(10, 5)
+        >>> init_weights(model, 'xavier')
+    """
+```
+
+### Gradient Clipping
+
+```python
+def clip_grad_norm_(parameters, max_norm: float, norm_type: float = 2.0):
+    """
+    Clip gradients by norm.
+    
+    Args:
+        parameters: Iterable of parameters
+        max_norm: Maximum norm value
+        norm_type: Type of norm (default: 2.0)
+        
+    Example:
+        >>> nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    """
+
+def clip_grad_value_(parameters, clip_value: float):
+    """
+    Clip gradients by value.
+    
+    Args:
+        parameters: Iterable of parameters
+        clip_value: Maximum absolute value
+        
+    Example:
+        >>> nn.utils.clip_grad_value_(model.parameters(), clip_value=0.5)
+    """
+```
+
+## Building Custom Modules
+
+### Example: Custom Layer
+
+```python
+class CustomLayer(nn.Module):
+    def __init__(self, in_features, out_features):
         super().__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, output_dim)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
+        # Parameters are automatically tracked
+        self.weight = nn.Parameter(genesis.randn(out_features, in_features))
+        self.bias = nn.Parameter(genesis.zeros(out_features))
+        
+        # Submodules are automatically tracked
+        self.activation = nn.ReLU()
         
     def forward(self, x):
-        x = self.dropout(self.relu(self.fc1(x)))
-        x = self.dropout(self.relu(self.fc2(x)))
-        x = self.fc3(x)
+        # Define forward pass
+        x = genesis.matmul(x, self.weight.T) + self.bias
+        x = self.activation(x)
         return x
 
-# 使用模型
-model = MLP(784, 256, 10)
-x = genesis.randn(32, 784)
-output = model(x)
-print(output.shape)  # (32, 10)
+# Usage
+layer = CustomLayer(10, 5)
+x = genesis.randn(32, 10)
+output = layer(x)
 ```
 
-### 使用Sequential构建模型
+### Example: Custom Model
+
 ```python
-model = nn.Sequential(
-    nn.Linear(784, 256),
-    nn.BatchNorm1d(256),
-    nn.ReLU(),
-    nn.Dropout(0.2),
-    nn.Linear(256, 128),
-    nn.BatchNorm1d(128),
-    nn.ReLU(),
-    nn.Dropout(0.2),
-    nn.Linear(128, 10)
-)
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+        self.relu = nn.ReLU()
+        
+    def forward(self, x):
+        residual = x
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.bn2(self.conv2(x))
+        x = x + residual  # Skip connection
+        x = self.relu(x)
+        return x
 
-# 训练模式
-model.train()
-output = model(x)
-
-# 评估模式
-model.eval()
-with genesis.no_grad():
-    output = model(x)
+class ResNet(nn.Module):
+    def __init__(self, num_classes=10):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 64, 7, stride=2, padding=3)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU()
+        self.maxpool = nn.MaxPool2d(3, stride=2, padding=1)
+        
+        # Residual blocks
+        self.layer1 = nn.Sequential(*[ResidualBlock(64) for _ in range(3)])
+        self.layer2 = nn.Sequential(*[ResidualBlock(64) for _ in range(4)])
+        
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(64, num_classes)
+        
+    def forward(self, x):
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
 ```
 
-### 参数初始化
-```python
-def init_weights(m):
-    if isinstance(m, nn.Linear):
-        # Xavier初始化
-        nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-    elif isinstance(m, nn.Embedding):
-        nn.init.normal_(m.weight, mean=0, std=0.02)
+## Best Practices
 
-model.apply(init_weights)
-```
+1. **Always override `forward()`**: Define computation in forward method
+2. **Use `module(input)`**: Never call forward() directly
+3. **Register parameters**: Use nn.Parameter for learnable parameters
+4. **Track submodules**: Assign modules as attributes for automatic tracking
+5. **Handle training/eval**: Use different behavior for training vs evaluation
+6. **Initialize weights**: Proper initialization improves convergence
 
-### 模型保存和加载
-```python
-# 保存模型状态
-genesis.save(model.state_dict(), 'model.pth')
+## See Also
 
-# 加载模型状态
-model = MLP(784, 256, 10)
-state_dict = genesis.load('model.pth')
-model.load_state_dict(state_dict)
-
-# 保存完整检查点
-checkpoint = {
-    'epoch': 100,
-    'model_state': model.state_dict(),
-    'optimizer_state': optimizer.state_dict(),
-    'loss': loss.item()
-}
-genesis.save_checkpoint(checkpoint, 'checkpoint.pth')
-```
-
-## 性能优化提示
-
-1. **使用eval模式进行推理**：调用`model.eval()`禁用dropout和批量归一化的训练行为
-2. **参数共享**：使用同一个模块实例可以共享参数
-3. **原地操作**：使用`inplace=True`减少内存使用（注意梯度计算）
-4. **批量处理**：尽可能使用较大的批量大小提升GPU利用率
-5. **混合精度**：结合autocast使用半精度训练
-
-## 注意事项
-
-- Module的forward方法必须被子类实现
-- 使用`model(x)`而不是`model.forward(x)`调用模型
-- 训练和评估模式会影响Dropout和BatchNorm的行为
-- Parameter会自动注册为模块参数，普通Tensor不会
-- 模块的设备和数据类型需要与输入一致
+- [Functional API](functional.md) - Functional operations
+- [Optimizers](../optim/optimizers.md) - Training optimizers
+- [Autograd](../autograd.md) - Automatic differentiation
+- [Examples](../../../samples/) - Complete examples

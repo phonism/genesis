@@ -257,11 +257,17 @@ class NDArray:
         return out
 
     def __add__(self, y):
-        out = NDArray.make(self.shape, device=self.device)
+        # Optimized: Let device.add() handle the full operation including output creation
         if isinstance(y, NDArray):
-            out.data = self.device.add(self.data, y.data)
+            result_data = self.device.add(self.data, y.data)
         else:
-            out.data = self.device.add(self.data, y)
+            result_data = self.device.add(self.data, y)
+        
+        # Create minimal NDArray wrapper around the result
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     def __iadd__(self, y):
@@ -275,21 +281,33 @@ class NDArray:
     __radd__ = __add__
 
     def __mul__(self, y):
-        out = NDArray.make(self.shape, device=self.device)
+        # Optimized: Let device.mul() handle the full operation
         if isinstance(y, NDArray):
-            out.data = self.device.mul(self.data, y.data)
+            result_data = self.device.mul(self.data, y.data)
         else:
-            out.data = self.device.mul(self.data, y)
+            result_data = self.device.mul(self.data, y)
+        
+        # Create minimal NDArray wrapper around the result
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     __rmul__ = __mul__
 
     def __truediv__(self, y):
-        out = NDArray.make(self.shape, device=self.device)
+        # Optimized: Let device.truediv() handle the full operation
         if isinstance(y, NDArray):
-            out.data = self.device.truediv(self.data, y.data)
+            result_data = self.device.truediv(self.data, y.data)
         else:
-            out.data = self.device.truediv(self.data, y)
+            result_data = self.device.truediv(self.data, y)
+        
+        # Create minimal NDArray wrapper around the result
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     def __rtruediv__(self, y):
@@ -301,11 +319,17 @@ class NDArray:
         return out
 
     def maximum(self, y):
-        out = NDArray.make(self.shape, device=self.device)
+        # Optimized: Let device.maximum() handle the full operation
         if isinstance(y, NDArray):
-            out.data = self.device.maximum(self.data, y.data)
+            result_data = self.device.maximum(self.data, y.data)
         else:
-            out.data = self.device.maximum(self.data, y)
+            result_data = self.device.maximum(self.data, y)
+        
+        # Create minimal NDArray wrapper around the result
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
     
     def __neg__(self):
@@ -314,11 +338,18 @@ class NDArray:
         return self * (-1)
 
     def __sub__(self, other):
-        if self.data.is_contiguous() is False:
-            self.data = self.data.contiguous()
-        if other.data.is_contiguous() is False:
-            other.data = other.data.contiguous()
-        return self + (-other)
+        # Optimized: Direct sub operation instead of add + neg
+        if isinstance(other, NDArray):
+            result_data = self.device.sub(self.data, other.data)
+        else:
+            result_data = self.device.sub(self.data, other)
+        
+        # Create minimal NDArray wrapper around the result
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
+        return out
 
     def __rsub__(self, other):
         if self.data.is_contiguous() is False:
@@ -339,13 +370,21 @@ class NDArray:
         return out
 
     def log(self):
-        out = NDArray.make(self.shape, device=self.device)
-        out.data = self.device.log(self.data)
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.log(self.data)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     def exp(self):
-        out = NDArray.make(self.shape, device=self.device)
-        out.data = self.device.exp(self.data)
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.exp(self.data)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     def cos(self):
@@ -359,8 +398,12 @@ class NDArray:
         return out
 
     def sqrt(self):
-        out = NDArray.make(self.shape, device=self.device)
-        out.data = self.device.sqrt(self.data)
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.sqrt(self.data)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     def reshape(self, new_shape):
