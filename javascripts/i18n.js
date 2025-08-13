@@ -23,7 +23,7 @@
     // Detect current language based on URL
     let currentLang = 'en';
     const path = window.location.pathname;
-    if (path.includes('.zh/')) {
+    if (path.includes('/zh/') || path.includes('.zh/')) {
         currentLang = 'zh';
     }
     
@@ -78,23 +78,28 @@
         if (currentLang === 'en' && targetLang === 'zh') {
             // English to Chinese conversion
             if (currentPath === '/' || currentPath.endsWith('/genesis/')) {
-                // Root page: / -> /index.zh/
-                newPath = currentPath.replace(/\/$/, '/index.zh/');
-            } else if (currentPath.endsWith('/')) {
-                // Directory page: /getting-started/ -> /getting-started/index.zh/
-                newPath = currentPath + 'index.zh/';
+                // Root page: /genesis/ -> /genesis/zh/
+                newPath = currentPath.replace(/\/genesis\/$/, '/genesis/zh/') || '/genesis/zh/';
+            } else if (currentPath.includes('/genesis/')) {
+                // Other pages: /genesis/xxx/ -> /genesis/zh/xxx.zh/
+                newPath = currentPath.replace('/genesis/', '/genesis/zh/').replace(/\/$/, '.zh/');
             } else {
-                // This shouldn't happen with clean URLs, but handle it
-                newPath = currentPath + '.zh/';
+                // Fallback
+                newPath = '/genesis/zh/';
             }
         } else if (currentLang === 'zh' && targetLang === 'en') {
             // Chinese to English conversion
-            if (currentPath.includes('/index.zh/')) {
-                // Handle /xxx/index.zh/ -> /xxx/ or /index.zh/ -> /
-                newPath = currentPath.replace('/index.zh/', '/');
+            if (currentPath.includes('/genesis/zh/')) {
+                if (currentPath === '/genesis/zh/' || currentPath.endsWith('/genesis/zh/index.zh/')) {
+                    // Root Chinese page -> Root English page
+                    newPath = '/genesis/';
+                } else {
+                    // Other Chinese pages: /genesis/zh/xxx.zh/ -> /genesis/xxx/
+                    newPath = currentPath.replace('/genesis/zh/', '/genesis/').replace('.zh/', '/');
+                }
             } else {
-                // Handle /xxx.zh/ -> /xxx/
-                newPath = currentPath.replace('.zh/', '/');
+                // Fallback
+                newPath = '/genesis/';
             }
         }
         
@@ -187,7 +192,7 @@
         
         // Re-detect current language
         const path = window.location.pathname;
-        currentLang = path.includes('.zh/') ? 'zh' : 'en';
+        currentLang = (path.includes('/zh/') || path.includes('.zh/')) ? 'zh' : 'en';
         
         // Create new switcher
         createLanguageSwitcher();
