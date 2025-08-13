@@ -20,10 +20,11 @@
         }
     };
     
-    // Current language detection
+    // Current language detection based on URL
     let currentLang = 'en';
     const path = window.location.pathname;
-    if (path.includes('.zh.')) {
+    // Check if we're on a Chinese page (ends with .zh/ or contains .zh.)
+    if (path.includes('.zh/') || path.includes('/zh/') || path.endsWith('.zh/')) {
         currentLang = 'zh';
     }
     
@@ -92,26 +93,33 @@
         
         if (currentLang === 'en' && targetLang === 'zh') {
             // Switch from English to Chinese
-            if (currentPath.endsWith('/')) {
-                newPath = currentPath + 'index.zh.html';
-            } else if (currentPath.endsWith('.html')) {
-                newPath = currentPath.replace('.html', '.zh.html');
-            } else if (currentPath.endsWith('/index.md')) {
-                newPath = currentPath.replace('/index.md', '/index.zh.html');
+            // MkDocs converts file.zh.md to file.zh/ directory structure
+            if (currentPath === '/' || currentPath.endsWith('/genesis/')) {
+                // Root index page
+                newPath = currentPath + 'index.zh/';
+            } else if (currentPath.endsWith('/')) {
+                // Directory pages like /getting-started/
+                newPath = currentPath + 'index.zh/';
             } else {
-                newPath = currentPath.replace('.md', '.zh.html');
+                // Normal pages - add .zh before the final /
+                newPath = currentPath.replace(/\/$/, '.zh/');
             }
         } else if (currentLang === 'zh' && targetLang === 'en') {
             // Switch from Chinese to English
-            newPath = currentPath.replace('.zh.html', '.html');
-            if (newPath.endsWith('/index.html')) {
-                newPath = newPath.replace('/index.html', '/');
+            if (currentPath.includes('index.zh/')) {
+                // Handle index.zh/ -> / or directory/
+                newPath = currentPath.replace('/index.zh/', '/');
+            } else {
+                // Handle page.zh/ -> page/
+                newPath = currentPath.replace('.zh/', '/');
             }
+            
+            // Clean up double slashes
+            newPath = newPath.replace('//', '/');
         }
         
-        // Check if target file exists, fallback to index if not
+        // Navigate to new path
         if (newPath) {
-            // For development, directly navigate. In production, you might want to check existence
             window.location.href = newPath;
         }
     }
