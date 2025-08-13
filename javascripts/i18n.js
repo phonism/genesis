@@ -68,7 +68,7 @@
         });
     }
     
-    // Switch language function with proper site structure
+    // Switch language function with URL mapping for .zh files
     function switchLanguage(targetLang) {
         if (targetLang === currentLang) return;
         
@@ -77,23 +77,32 @@
         let newPath;
         
         if (currentLang === 'en' && targetLang === 'zh') {
-            // English to Chinese: /genesis/xxx/ -> /genesis/zh/xxx/
+            // English to Chinese: /genesis/xxx/ -> /genesis/zh/xxx.zh/
             if (currentPath === '/genesis/' || currentPath === '/genesis/index.html') {
                 newPath = '/genesis/zh/';
             } else if (currentPath.startsWith('/genesis/') && !currentPath.startsWith('/genesis/zh/')) {
-                // Map English paths to Chinese paths
-                const relativePath = currentPath.replace('/genesis/', '');
-                newPath = `/genesis/zh/${relativePath}`;
+                // Map English paths to Chinese paths with .zh suffix
+                let relativePath = currentPath.replace('/genesis/', '').replace(/\/$/, '');
+                if (relativePath) {
+                    newPath = `/genesis/zh/${relativePath}.zh/`;
+                } else {
+                    newPath = '/genesis/zh/';
+                }
             } else {
                 newPath = '/genesis/zh/';
             }
         } else if (currentLang === 'zh' && targetLang === 'en') {
-            // Chinese to English: /genesis/zh/xxx/ -> /genesis/xxx/
+            // Chinese to English: /genesis/zh/xxx.zh/ -> /genesis/xxx/
             if (currentPath === '/genesis/zh/' || currentPath === '/genesis/zh/index.html') {
                 newPath = '/genesis/';
             } else if (currentPath.startsWith('/genesis/zh/')) {
-                const relativePath = currentPath.replace('/genesis/zh/', '');
-                newPath = `/genesis/${relativePath}`;
+                // Remove .zh suffix and map back to English
+                let relativePath = currentPath.replace('/genesis/zh/', '').replace(/\.zh\/$/, '').replace(/\/$/, '');
+                if (relativePath) {
+                    newPath = `/genesis/${relativePath}/`;
+                } else {
+                    newPath = '/genesis/';
+                }
             } else {
                 newPath = '/genesis/';
             }
@@ -101,6 +110,7 @@
         
         // Navigate to new path
         if (newPath) {
+            console.log('Switching from', currentPath, 'to', newPath);
             window.location.href = baseUrl + newPath;
         }
     }
