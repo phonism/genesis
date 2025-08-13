@@ -1,6 +1,6 @@
 /**
  * Genesis Documentation Language Switcher
- * Switches between English and Chinese versions of documentation
+ * Matches actual MkDocs URL structure
  */
 
 (function() {
@@ -20,11 +20,10 @@
         }
     };
     
-    // Current language detection based on URL
+    // Detect current language based on URL
     let currentLang = 'en';
     const path = window.location.pathname;
-    // Check if we're on a Chinese page (ends with .zh/ or contains .zh.)
-    if (path.includes('.zh/') || path.includes('/zh/') || path.endsWith('.zh/')) {
+    if (path.includes('.zh/')) {
         currentLang = 'zh';
     }
     
@@ -35,19 +34,18 @@
         
         const switcher = document.createElement('div');
         switcher.className = 'md-header__language-switcher';
+        
+        // Create both language options, highlight current one
         switcher.innerHTML = `
-            <button class="md-header__button md-icon" id="lang-switcher" title="Switch Language">
-                <span class="lang-icon">${languages[currentLang].icon}</span>
-                <span class="lang-text">${languages[currentLang].flag}</span>
+            <button class="lang-option ${currentLang === 'en' ? 'active' : ''}" data-lang="en" title="Switch to English">
+                <span class="lang-icon">${languages.en.icon}</span>
+                <span class="lang-text">${languages.en.flag}</span>
             </button>
-            <div class="lang-dropdown" id="lang-dropdown">
-                <a href="#" data-lang="en" class="lang-option ${currentLang === 'en' ? 'active' : ''}">
-                    ${languages.en.icon} ${languages.en.name}
-                </a>
-                <a href="#" data-lang="zh" class="lang-option ${currentLang === 'zh' ? 'active' : ''}">
-                    ${languages.zh.icon} ${languages.zh.name}
-                </a>
-            </div>
+            <span class="lang-separator">|</span>
+            <button class="lang-option ${currentLang === 'zh' ? 'active' : ''}" data-lang="zh" title="Switch to Chinese">
+                <span class="lang-icon">${languages.zh.icon}</span>
+                <span class="lang-text">${languages.zh.flag}</span>
+            </button>
         `;
         
         // Insert before search button
@@ -59,32 +57,18 @@
         }
         
         // Add event listeners
-        const button = switcher.querySelector('#lang-switcher');
-        const dropdown = switcher.querySelector('#lang-dropdown');
-        
-        button.addEventListener('click', (e) => {
-            e.preventDefault();
-            dropdown.classList.toggle('show');
-        });
-        
-        // Close dropdown when clicking outside
-        document.addEventListener('click', (e) => {
-            if (!switcher.contains(e.target)) {
-                dropdown.classList.remove('show');
-            }
-        });
-        
-        // Language switch handlers
         switcher.querySelectorAll('.lang-option').forEach(option => {
             option.addEventListener('click', (e) => {
                 e.preventDefault();
                 const targetLang = option.getAttribute('data-lang');
-                switchLanguage(targetLang);
+                if (targetLang !== currentLang) {
+                    switchLanguage(targetLang);
+                }
             });
         });
     }
     
-    // Switch language function
+    // Switch language function that matches MkDocs structure
     function switchLanguage(targetLang) {
         if (targetLang === currentLang) return;
         
@@ -92,30 +76,26 @@
         let newPath;
         
         if (currentLang === 'en' && targetLang === 'zh') {
-            // Switch from English to Chinese
-            // MkDocs converts file.zh.md to file.zh/ directory structure
+            // English to Chinese conversion
             if (currentPath === '/' || currentPath.endsWith('/genesis/')) {
-                // Root index page
-                newPath = currentPath + 'index.zh/';
+                // Root page: / -> /index.zh/
+                newPath = currentPath.replace(/\/$/, '/index.zh/');
             } else if (currentPath.endsWith('/')) {
-                // Directory pages like /getting-started/
+                // Directory page: /getting-started/ -> /getting-started/index.zh/
                 newPath = currentPath + 'index.zh/';
             } else {
-                // Normal pages - add .zh before the final /
-                newPath = currentPath.replace(/\/$/, '.zh/');
+                // This shouldn't happen with clean URLs, but handle it
+                newPath = currentPath + '.zh/';
             }
         } else if (currentLang === 'zh' && targetLang === 'en') {
-            // Switch from Chinese to English
-            if (currentPath.includes('index.zh/')) {
-                // Handle index.zh/ -> / or directory/
+            // Chinese to English conversion
+            if (currentPath.includes('/index.zh/')) {
+                // Handle /xxx/index.zh/ -> /xxx/ or /index.zh/ -> /
                 newPath = currentPath.replace('/index.zh/', '/');
             } else {
-                // Handle page.zh/ -> page/
+                // Handle /xxx.zh/ -> /xxx/
                 newPath = currentPath.replace('.zh/', '/');
             }
-            
-            // Clean up double slashes
-            newPath = newPath.replace('//', '/');
         }
         
         // Navigate to new path
@@ -129,71 +109,69 @@
         const style = document.createElement('style');
         style.textContent = `
             .md-header__language-switcher {
-                position: relative;
                 display: flex;
                 align-items: center;
                 margin-right: 0.5rem;
+                gap: 0.25rem;
             }
             
-            .md-header__language-switcher button {
+            .lang-option {
                 background: none;
                 border: none;
                 color: var(--md-primary-fg-color--light);
                 cursor: pointer;
-                padding: 0.5rem;
+                padding: 0.375rem 0.5rem;
                 border-radius: 0.25rem;
                 display: flex;
                 align-items: center;
                 gap: 0.25rem;
-                transition: background-color 0.2s;
-            }
-            
-            .md-header__language-switcher button:hover {
-                background-color: var(--md-accent-fg-color--transparent);
-            }
-            
-            .lang-icon {
-                font-size: 1.1rem;
-            }
-            
-            .lang-text {
-                font-size: 0.75rem;
-                font-weight: 600;
-            }
-            
-            .lang-dropdown {
-                position: absolute;
-                top: 100%;
-                right: 0;
-                background: var(--md-default-bg-color);
-                border: 1px solid var(--md-default-fg-color--lightest);
-                border-radius: 0.25rem;
-                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-                display: none;
-                z-index: 1000;
-                min-width: 120px;
-            }
-            
-            .lang-dropdown.show {
-                display: block;
-            }
-            
-            .lang-option {
-                display: block;
-                padding: 0.5rem 0.75rem;
-                color: var(--md-default-fg-color);
-                text-decoration: none;
+                transition: all 0.2s ease;
+                opacity: 0.7;
                 font-size: 0.875rem;
-                transition: background-color 0.2s;
             }
             
             .lang-option:hover {
-                background-color: var(--md-default-fg-color--lightest);
+                background-color: var(--md-accent-fg-color--transparent);
+                opacity: 1;
+                transform: translateY(-1px);
             }
             
             .lang-option.active {
                 background-color: var(--md-accent-fg-color--transparent);
                 color: var(--md-accent-fg-color);
+                opacity: 1;
+                font-weight: 600;
+            }
+            
+            .lang-icon {
+                font-size: 1rem;
+            }
+            
+            .lang-text {
+                font-size: 0.75rem;
+                font-weight: inherit;
+            }
+            
+            .lang-separator {
+                color: var(--md-primary-fg-color--light);
+                opacity: 0.5;
+                font-size: 0.875rem;
+                margin: 0 0.125rem;
+            }
+            
+            /* Responsive design */
+            @media screen and (max-width: 768px) {
+                .lang-text {
+                    display: none;
+                }
+                
+                .lang-option {
+                    padding: 0.375rem;
+                }
+                
+                .lang-separator {
+                    margin: 0 0.25rem;
+                }
             }
         `;
         document.head.appendChild(style);
