@@ -177,17 +177,48 @@
         document.head.appendChild(style);
     }
     
+    // Initialize function
+    function initSwitcher() {
+        // Remove existing switcher if present
+        const existingSwitcher = document.querySelector('.md-header__language-switcher');
+        if (existingSwitcher) {
+            existingSwitcher.remove();
+        }
+        
+        // Re-detect current language
+        const path = window.location.pathname;
+        currentLang = path.includes('.zh/') ? 'zh' : 'en';
+        
+        // Create new switcher
+        createLanguageSwitcher();
+    }
+    
     // Initialize when DOM is ready
     function init() {
+        addStyles();
+        
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => {
-                addStyles();
-                createLanguageSwitcher();
-            });
+            document.addEventListener('DOMContentLoaded', initSwitcher);
         } else {
-            addStyles();
-            createLanguageSwitcher();
+            initSwitcher();
         }
+        
+        // Listen for MkDocs instant navigation events
+        document.addEventListener('DOMContentLoaded', () => {
+            // MkDocs Material instant navigation
+            if (typeof app !== 'undefined' && app.document$) {
+                app.document$.subscribe(initSwitcher);
+            }
+        });
+        
+        // Fallback for page navigation detection
+        let currentUrl = window.location.href;
+        setInterval(() => {
+            if (window.location.href !== currentUrl) {
+                currentUrl = window.location.href;
+                setTimeout(initSwitcher, 100); // Small delay to ensure DOM is updated
+            }
+        }, 500);
     }
     
     init();
