@@ -20,10 +20,10 @@
         }
     };
     
-    // Detect current language based on URL
+    // Detect current language based on URL path
     let currentLang = 'en';
     const path = window.location.pathname;
-    if (path.includes('/zh/') || path.includes('.zh/')) {
+    if (path.startsWith('/genesis/zh/')) {
         currentLang = 'zh';
     }
     
@@ -68,44 +68,40 @@
         });
     }
     
-    // Switch language function that matches MkDocs structure
+    // Switch language function with proper site structure
     function switchLanguage(targetLang) {
         if (targetLang === currentLang) return;
         
         const currentPath = window.location.pathname;
+        const baseUrl = window.location.origin;
         let newPath;
         
         if (currentLang === 'en' && targetLang === 'zh') {
-            // English to Chinese conversion
-            if (currentPath === '/' || currentPath.endsWith('/genesis/')) {
-                // Root page: /genesis/ -> /genesis/zh/
-                newPath = currentPath.replace(/\/genesis\/$/, '/genesis/zh/') || '/genesis/zh/';
-            } else if (currentPath.includes('/genesis/')) {
-                // Other pages: /genesis/xxx/ -> /genesis/zh/xxx.zh/
-                newPath = currentPath.replace('/genesis/', '/genesis/zh/').replace(/\/$/, '.zh/');
+            // English to Chinese: /genesis/xxx/ -> /genesis/zh/xxx/
+            if (currentPath === '/genesis/' || currentPath === '/genesis/index.html') {
+                newPath = '/genesis/zh/';
+            } else if (currentPath.startsWith('/genesis/') && !currentPath.startsWith('/genesis/zh/')) {
+                // Map English paths to Chinese paths
+                const relativePath = currentPath.replace('/genesis/', '');
+                newPath = `/genesis/zh/${relativePath}`;
             } else {
-                // Fallback
                 newPath = '/genesis/zh/';
             }
         } else if (currentLang === 'zh' && targetLang === 'en') {
-            // Chinese to English conversion
-            if (currentPath.includes('/genesis/zh/')) {
-                if (currentPath === '/genesis/zh/' || currentPath.endsWith('/genesis/zh/index.zh/')) {
-                    // Root Chinese page -> Root English page
-                    newPath = '/genesis/';
-                } else {
-                    // Other Chinese pages: /genesis/zh/xxx.zh/ -> /genesis/xxx/
-                    newPath = currentPath.replace('/genesis/zh/', '/genesis/').replace('.zh/', '/');
-                }
+            // Chinese to English: /genesis/zh/xxx/ -> /genesis/xxx/
+            if (currentPath === '/genesis/zh/' || currentPath === '/genesis/zh/index.html') {
+                newPath = '/genesis/';
+            } else if (currentPath.startsWith('/genesis/zh/')) {
+                const relativePath = currentPath.replace('/genesis/zh/', '');
+                newPath = `/genesis/${relativePath}`;
             } else {
-                // Fallback
                 newPath = '/genesis/';
             }
         }
         
         // Navigate to new path
         if (newPath) {
-            window.location.href = newPath;
+            window.location.href = baseUrl + newPath;
         }
     }
     
@@ -192,7 +188,7 @@
         
         // Re-detect current language
         const path = window.location.pathname;
-        currentLang = (path.includes('/zh/') || path.includes('.zh/')) ? 'zh' : 'en';
+        currentLang = path.startsWith('/genesis/zh/') ? 'zh' : 'en';
         
         // Create new switcher
         createLanguageSwitcher();
