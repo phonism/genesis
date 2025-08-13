@@ -68,7 +68,7 @@
         });
     }
     
-    // Switch language function with URL mapping for .zh files
+    // Switch language function with correct URL mapping
     function switchLanguage(targetLang) {
         if (targetLang === currentLang) return;
         
@@ -77,31 +77,49 @@
         let newPath;
         
         if (currentLang === 'en' && targetLang === 'zh') {
-            // English to Chinese: /genesis/xxx/ -> /genesis/zh/xxx.zh/
+            // English to Chinese
             if (currentPath === '/genesis/' || currentPath === '/genesis/index.html') {
                 newPath = '/genesis/zh/';
             } else if (currentPath.startsWith('/genesis/') && !currentPath.startsWith('/genesis/zh/')) {
-                // Map English paths to Chinese paths with .zh suffix
+                // Map paths: /genesis/xxx/ -> /genesis/zh/xxx/index.zh/
+                // or /genesis/xxx/yyy/ -> /genesis/zh/xxx/yyy.zh/
                 let relativePath = currentPath.replace('/genesis/', '').replace(/\/$/, '');
-                if (relativePath) {
-                    newPath = `/genesis/zh/${relativePath}.zh/`;
-                } else {
+                if (!relativePath) {
                     newPath = '/genesis/zh/';
+                } else {
+                    // Split path into segments
+                    const segments = relativePath.split('/').filter(s => s);
+                    if (segments.length === 1) {
+                        // Top level: /genesis/xxx/ -> /genesis/zh/xxx/index.zh/
+                        newPath = `/genesis/zh/${segments[0]}/index.zh/`;
+                    } else {
+                        // Nested: /genesis/xxx/yyy/ -> /genesis/zh/xxx/yyy.zh/
+                        const lastSegment = segments.pop();
+                        const basePath = segments.join('/');
+                        newPath = `/genesis/zh/${basePath}/${lastSegment}.zh/`;
+                    }
                 }
             } else {
                 newPath = '/genesis/zh/';
             }
         } else if (currentLang === 'zh' && targetLang === 'en') {
-            // Chinese to English: /genesis/zh/xxx.zh/ -> /genesis/xxx/
+            // Chinese to English
             if (currentPath === '/genesis/zh/' || currentPath === '/genesis/zh/index.html') {
                 newPath = '/genesis/';
             } else if (currentPath.startsWith('/genesis/zh/')) {
-                // Remove .zh suffix and map back to English
-                let relativePath = currentPath.replace('/genesis/zh/', '').replace(/\.zh\/$/, '').replace(/\/$/, '');
-                if (relativePath) {
-                    newPath = `/genesis/${relativePath}/`;
+                // Map paths back: /genesis/zh/xxx/index.zh/ -> /genesis/xxx/
+                // or /genesis/zh/xxx/yyy.zh/ -> /genesis/xxx/yyy/
+                let relativePath = currentPath.replace('/genesis/zh/', '');
+                
+                if (relativePath.endsWith('/index.zh/')) {
+                    // Top level: /genesis/zh/xxx/index.zh/ -> /genesis/xxx/
+                    newPath = '/genesis/' + relativePath.replace('/index.zh/', '/');
+                } else if (relativePath.includes('.zh/')) {
+                    // Nested: /genesis/zh/xxx/yyy.zh/ -> /genesis/xxx/yyy/
+                    newPath = '/genesis/' + relativePath.replace('.zh/', '/');
                 } else {
-                    newPath = '/genesis/';
+                    // Fallback
+                    newPath = '/genesis/' + relativePath;
                 }
             } else {
                 newPath = '/genesis/';
