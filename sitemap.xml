@@ -2,90 +2,110 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://phonism.github.io/genesis/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/api/autograd/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/api/ndarray/</loc>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/api/nn/functional/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/api/nn/modules/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/api/optim/optimizers/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/api/utils/</loc>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/api-reference/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/architecture/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/contributing/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/contributing/development/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/contributing/testing/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/core-components/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/core-components/autograd/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/core-components/cuda-memory/</loc>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/core-components/cuda-tensor/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/core-components/dtypes/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/getting-started/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/getting-started/first-steps/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/getting-started/installation/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/models/qwen/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/performance/optimization-guide/</loc>
+         <lastmod>2025-08-13</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/training/advanced-features/</loc>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/tutorials/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/tutorials/basic-training/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/tutorials/custom-ops/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/tutorials/performance-tuning/</loc>
-         <lastmod>2025-08-11</lastmod>
+         <lastmod>2025-08-13</lastmod>
     </url>
 </urlset>

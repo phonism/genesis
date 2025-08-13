@@ -172,6 +172,8 @@ nav:
     - 基础训练: tutorials/basic-training.md
     - 自定义算子: tutorials/custom-ops.md
     - 性能调优: tutorials/performance-tuning.md
+  - 性能优化:
+    - performance/optimization-guide.md
   - API参考:
     - api-reference/index.md
     - genesis: api-reference/genesis.md
