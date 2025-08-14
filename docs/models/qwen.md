@@ -1,27 +1,27 @@
-# Qwen模型实现
+# Qwen Model Implementation
 
-## 概述
+## Overview
 
-Genesis框架内置了Qwen（通义千问）大语言模型的实现，支持完整的训练和推理流程。
+The Genesis framework includes a built-in implementation of the Qwen (Tongyi Qianwen) large language model, supporting complete training and inference workflows.
 
-## 模型架构
+## Model Architecture
 
-Qwen模型基于Transformer架构，具有以下特点：
+The Qwen model is based on the Transformer architecture with the following features:
 
-- **注意力机制**: Multi-Head Attention with RoPE (Rotary Position Embedding)
-- **激活函数**: SwiGLU activation
-- **层归一化**: RMSNorm
-- **位置编码**: Rotary Position Embedding (RoPE)
+- **Attention Mechanism**: Multi-Head Attention with RoPE (Rotary Position Embedding)
+- **Activation Function**: SwiGLU activation
+- **Layer Normalization**: RMSNorm
+- **Position Encoding**: Rotary Position Embedding (RoPE)
 
-## 快速使用
+## Quick Start
 
-### 基础推理
+### Basic Inference
 
 ```python
 import genesis
 from genesis.models.qwen import QwenModel, QwenConfig
 
-# 创建模型配置
+# Create model configuration
 config = QwenConfig(
     vocab_size=32000,
     n_layer=24,

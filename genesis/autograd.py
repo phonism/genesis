@@ -517,6 +517,10 @@ class Tensor:
     def sum(self, axis=None, keepdims=False):
         return genesis.nn.functional.summation(self, axis=axis, keepdims=keepdims)
 
+    def max(self, axis=None, keepdims=False):
+        """Find maximum values along specified axis"""
+        return genesis.nn.functional.max(self, axis=axis, keepdims=keepdims)
+
     def broadcast_to(self, shape):
         return genesis.nn.functional.broadcast_to(self, shape)
 
@@ -534,6 +538,14 @@ class Tensor:
 
     def sqrt(self):
         return genesis.nn.functional.sqrt(self)
+
+    def sigmoid(self):
+        """Apply sigmoid activation function"""
+        return genesis.nn.functional.sigmoid(self)
+
+    def tanh(self):
+        """Apply tanh activation function"""
+        return genesis.nn.functional.tanh(self)
 
     def view(self, *new_shape):
         if len(new_shape) == 1 and isinstance(new_shape[0], (tuple, list)):

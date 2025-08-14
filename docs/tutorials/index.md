@@ -1,90 +1,90 @@
-# 教程总览
+# Tutorial Overview
 
-欢迎来到Genesis深度学习框架的教程系列！这些教程将帮助你从入门到精通Genesis框架的各个方面。
+Welcome to the Genesis deep learning framework tutorial series! These tutorials will help you master all aspects of the Genesis framework from beginner to expert.
 
-## 📚 教程分类
+## 📚 Tutorial Categories
 
-### 🎯 基础教程
-适合初学者，涵盖Genesis的基本概念和用法。
+### 🎯 Basic Tutorials
+Suitable for beginners, covering Genesis basic concepts and usage.
 
-- **[基础训练教程](basic-training.md)** - 学习如何使用Genesis训练你的第一个神经网络
-- **[数据处理教程](data-loading.md)** - 数据加载、预处理和数据管道构建
-- **[模型定义教程](model-definition.md)** - 如何定义和组织神经网络模型
+- **[Basic Training Tutorial](basic-training.md)** - Learn how to train your first neural network with Genesis
+- **[Data Processing Tutorial](data-loading.md)** - Data loading, preprocessing, and pipeline construction
+- **[Model Definition Tutorial](model-definition.md)** - How to define and organize neural network models
 
-### 🚀 进阶教程  
-深入了解Genesis的高级特性和优化技巧。
+### 🚀 Advanced Tutorials  
+Deep dive into Genesis advanced features and optimization techniques.
 
-- **[混合精度训练](amp-training.md)** - 使用AMP加速训练并节省显存
-- **[自定义算子](custom-ops.md)** - 实现自定义的神经网络操作
-- **[性能调优](performance-tuning.md)** - 优化训练性能和内存使用
-- **[分布式训练](distributed-training.md)** - 多GPU并行训练实现
+- **[Mixed Precision Training](amp-training.md)** - Use AMP to accelerate training and save memory
+- **[Custom Operators](custom-ops.md)** - Implement custom neural network operations
+- **[Performance Tuning](performance-tuning.md)** - Optimize training performance and memory usage
+- **[Distributed Training](distributed-training.md)** - Multi-GPU parallel training implementation
 
-### 🛠️ 实战项目
-通过完整的项目学习Genesis的实际应用。
+### 🛠️ Practical Projects
+Learn Genesis practical applications through complete projects.
 
-- **[Qwen大模型训练](qwen-training.md)** - 使用Genesis训练Qwen语言模型
-- **[图像分类项目](image-classification.md)** - 构建完整的图像分类系统
-- **[语言模型微调](llm-finetuning.md)** - 大语言模型微调实战
+- **[Qwen Large Model Training](qwen-training.md)** - Use Genesis to train Qwen language models
+- **[Image Classification Project](image-classification.md)** - Build a complete image classification system
+- **[Language Model Fine-tuning](llm-finetuning.md)** - Large language model fine-tuning in practice
 
-## 🎓 学习路径
+## 🎓 Learning Path
 
-### 初学者路径 (1-2周)
-1. [安装和环境配置](../getting-started/installation.md)
-2. [第一个程序](../getting-started/first-steps.md)  
-3. [基础训练教程](basic-training.md)
-4. [数据处理教程](data-loading.md)
+### Beginner Path (1-2 weeks)
+1. [Installation and Environment Setup](../getting-started/installation.md)
+2. [First Program](../getting-started/first-steps.md)  
+3. [Basic Training Tutorial](basic-training.md)
+4. [Data Processing Tutorial](data-loading.md)
 
-### 进阶用户路径 (2-4周)
-1. 完成初学者路径
-2. [自定义算子](custom-ops.md)
-3. [混合精度训练](amp-training.md)  
-4. [性能调优](performance-tuning.md)
-5. [分布式训练](distributed-training.md)
+### Advanced User Path (2-4 weeks)
+1. Complete beginner path
+2. [Custom Operators](custom-ops.md)
+3. [Mixed Precision Training](amp-training.md)  
+4. [Performance Tuning](performance-tuning.md)
+5. [Distributed Training](distributed-training.md)
 
-### 研究者路径 (4-8周)
-1. 完成进阶用户路径
-2. [架构深入理解](../architecture/index.md)
-3. [核心组件源码分析](../core-components/index.md)
-4. [Qwen大模型训练](qwen-training.md)
-5. [贡献代码](../contributing/index.md)
+### Researcher Path (4-8 weeks)
+1. Complete advanced user path
+2. [Deep Architecture Understanding](../architecture/index.md)
+3. [Core Component Source Analysis](../core-components/index.md)
+4. [Qwen Large Model Training](qwen-training.md)
+5. [Contributing Code](../contributing/index.md)
 
-## 💡 教程特色
+## 💡 Tutorial Features
 
-- **🎯 实战导向** - 每个教程都包含完整的可运行代码
-- **📊 性能对比** - 与其他框架的性能对比和分析
-- **🔍 源码解析** - 深入理解Genesis内部实现原理
-- **⚡ 最佳实践** - 总结实际项目中的经验和技巧
+- **🎯 Practical-oriented** - Every tutorial includes complete runnable code
+- **📊 Performance comparison** - Performance comparison and analysis with other frameworks
+- **🔍 Source code analysis** - Deep understanding of Genesis internal implementation principles
+- **⚡ Best practices** - Summary of experience and techniques from real projects
 
-## 🤝 贡献教程
+## 🤝 Contributing Tutorials
 
-我们欢迎社区贡献更多高质量的教程！
+We welcome the community to contribute more high-quality tutorials!
 
-### 如何贡献
-1. Fork项目到你的GitHub账户
-2. 在`docs/tutorials/`目录下创建新的Markdown文件
-3. 按照现有教程的格式编写内容
-4. 提交Pull Request
+### How to Contribute
+1. Fork the project to your GitHub account
+2. Create new Markdown files in the `docs/tutorials/` directory
+3. Write content following the format of existing tutorials
+4. Submit a Pull Request
 
-### 教程标准
-- **清晰的标题和结构** - 使用适当的标题层级
-- **完整的代码示例** - 确保代码可以直接运行
-- **详细的解释** - 解释每个步骤的原理和目的
-- **实际的应用场景** - 结合真实的使用案例
+### Tutorial Standards
+- **Clear titles and structure** - Use appropriate heading levels
+- **Complete code examples** - Ensure code can run directly
+- **Detailed explanations** - Explain the principles and purpose of each step
+- **Practical application scenarios** - Combine real use cases
 
-## 📞 获取帮助
+## 📞 Getting Help
 
-在学习过程中遇到问题？
+Encountered problems during learning?
 
-- **GitHub Issues** - 报告问题或建议改进
-- **Discussions** - 与社区讨论技术问题
-- **API文档** - 查看详细的API参考文档
+- **GitHub Issues** - Report issues or suggest improvements
+- **Discussions** - Discuss technical issues with the community
+- **API Documentation** - View detailed API reference documentation
 
 ---
 
-!!! tip "学习建议"
-    建议按照推荐的学习路径循序渐进，每完成一个教程后实际动手练习，加深理解。
+!!! tip "Learning Suggestions"
+    It's recommended to follow the recommended learning path progressively, and practice hands-on after completing each tutorial to deepen understanding.
 
-**准备开始学习了吗？**
+**Ready to start learning?**
 
-[开始基础教程](basic-training.md){ .md-button .md-button--primary }
-[查看API文档](../api-reference/index.md){ .md-button }
+[Start Basic Tutorial](basic-training.md){ .md-button .md-button--primary }
+[View API Documentation](../api-reference/index.md){ .md-button }

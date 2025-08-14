@@ -27,35 +27,53 @@ class DropoutFunction(Function):
     @staticmethod
     def forward(ctx, x, prob):
         ctx.prob = prob
-        tx = x.data.data
-        if tx.is_contiguous() is False:
-            tx = tx.contiguous()
-        y = torch.empty_like(tx)
-        mask = torch.empty_like(tx, dtype=torch.int32)
+        
+        # Use Genesis tensors directly, just like FusedLayerNorm
+        device = x.device
+        
+        # Create output and mask tensors using Genesis
+        y = genesis.empty_like(x)
+        mask = genesis.empty(x.shape, dtype='int32', device=device)
+        
+        # Ensure contiguity
+        x_contiguous = x.contiguous()
         
         BLOCK_SIZE = 1024
-        grid = lambda meta: (triton.cdiv(tx.numel(), meta["BLOCK_SIZE"]),)
+        grid = lambda meta: (triton.cdiv(x.numel(), meta["BLOCK_SIZE"]),)
         
-        _dropout_forward[grid](tx, mask, y, prob, tx.numel(), BLOCK_SIZE=BLOCK_SIZE)
+        # Pass Genesis tensors directly to Triton kernel
+        _dropout_forward[grid](
+            x_contiguous, mask, y, prob, x.numel(), 
+            BLOCK_SIZE=BLOCK_SIZE
+        )
         
         ctx.save_for_backward(mask)
-        return Tensor(y, device=x.device, dtype=x.dtype)
+        return y
 
     @staticmethod
     def backward(ctx, dy):
         prob = ctx.prob
         mask, = ctx.saved_tensors
-        tdy = dy.data.data
-        if tdy.is_contiguous() is False:
-            tdy = tdy.contiguous()
-        dx = torch.empty_like(tdy)
+        
+        # Use Genesis tensors directly
+        device = dy.device
+        
+        # Create output tensor using Genesis
+        dx = genesis.empty_like(dy)
+        
+        # Ensure contiguity
+        dy_contiguous = dy.contiguous()
         
         BLOCK_SIZE = 1024
-        grid = lambda meta: (triton.cdiv(tdy.numel(), meta["BLOCK_SIZE"]),)
+        grid = lambda meta: (triton.cdiv(dy.numel(), meta["BLOCK_SIZE"]),)
         
-        _dropout_backward[grid](tdy, mask, dx, prob, tdy.numel(), BLOCK_SIZE=BLOCK_SIZE)
+        # Pass Genesis tensors directly to Triton kernel
+        _dropout_backward[grid](
+            dy_contiguous, mask, dx, prob, dy.numel(), 
+            BLOCK_SIZE=BLOCK_SIZE
+        )
         
-        return Tensor(dx, device=dy.device, requires_grad=False, dtype=dy.dtype), None
+        return dx, None
 
 def dropout(x, prob):
-    return TritonDropoutFunction.apply(x, prob)
+    return DropoutFunction.apply(x, prob)

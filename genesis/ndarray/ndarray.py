@@ -738,3 +738,35 @@ def split(a, cnt, dim=None):
 
 def view(a, new_shape):
     return a.view(new_shape)
+
+def cat(arrays, dim=0):
+    """
+    Concatenate arrays along specified dimension.
+    
+    Args:
+        arrays: List of NDArray objects to concatenate
+        dim: Dimension along which to concatenate
+        
+    Returns:
+        NDArray: Concatenated array
+    """
+    if not arrays:
+        raise ValueError("Cannot concatenate empty list of arrays")
+    
+    # Extract underlying data objects
+    data_arrays = []
+    for arr in arrays:
+        if hasattr(arr.data, 'data'):
+            data_arrays.append(arr.data.data)
+        else:
+            data_arrays.append(arr.data)
+    
+    # Use device's cat implementation
+    result_data = arrays[0].device.cat(data_arrays, dim=dim)
+    
+    # Wrap in NDArray
+    result = NDArray.__new__(NDArray)
+    result._device = arrays[0].device
+    result._dtype = arrays[0].dtype
+    result.data = result_data
+    return result

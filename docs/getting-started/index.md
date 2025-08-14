@@ -1,39 +1,39 @@
-# 快速开始
+# Getting Started
 
-欢迎使用Genesis深度学习框架！这个指南将帮助你在几分钟内开始使用Genesis。
+Welcome to the Genesis deep learning framework! This guide will help you start using Genesis in just a few minutes.
 
-## 🎯 概览
+## 🎯 Overview
 
-Genesis是一个轻量级的深度学习框架，专为学习和研究而设计。它提供了：
+Genesis is a lightweight deep learning framework designed specifically for learning and research. It provides:
 
-- 简洁易懂的API设计
-- 高性能的GPU加速计算
-- 完整的神经网络训练功能
-- 与PyTorch生态系统的良好兼容性
+- Simple and intuitive API design
+- High-performance GPU-accelerated computing
+- Complete neural network training capabilities
+- Good compatibility with PyTorch ecosystem
 
-## ⚡ 5分钟快速体验
+## ⚡ 5-Minute Quick Start
 
-### 1. 安装Genesis
+### 1. Install Genesis
 
 ```bash
-# 安装核心依赖
+# Install core dependencies
 pip install torch triton
 
-# 克隆源码
+# Clone source code
 git clone https://github.com/phonism/genesis.git
 cd genesis
 
-# 安装Genesis
+# Install Genesis
 pip install -e .
 ```
 
-### 2. 第一个神经网络
+### 2. Your First Neural Network
 
 ```python
 import genesis
 import genesis.nn as nn
 
-# 定义简单的多层感知机
+# Define a simple multi-layer perceptron
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
         super().__init__()
@@ -45,59 +45,59 @@ class MLP(nn.Module):
         x = self.relu(self.layer1(x))
         return self.layer2(x)
 
-# 创建模型和数据
+# Create model and data
 model = MLP(784, 128, 10)
-x = genesis.randn(32, 784)  # 批量大小32，输入维度784
+x = genesis.randn(32, 784)  # batch size 32, input dimension 784
 
-# 前向传播
+# Forward pass
 output = model(x)
-print(f"输出形状: {output.shape}")  # torch.Size([32, 10])
+print(f"Output shape: {output.shape}")  # torch.Size([32, 10])
 ```
 
-### 3. 训练循环
+### 3. Training Loop
 
 ```python
 import genesis.optim as optim
 
-# 创建优化器和损失函数
+# Create optimizer and loss function
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 criterion = nn.CrossEntropyLoss()
 
-# 模拟训练数据
+# Simulate training data
 targets = genesis.randint(0, 10, (32,))
 
-# 训练一个批次
-optimizer.zero_grad()        # 清零梯度
-output = model(x)           # 前向传播
-loss = criterion(output, targets)  # 计算损失
-loss.backward()             # 反向传播
-optimizer.step()            # 更新参数
+# Train one batch
+optimizer.zero_grad()        # Zero gradients
+output = model(x)           # Forward pass
+loss = criterion(output, targets)  # Compute loss
+loss.backward()             # Backward pass
+optimizer.step()            # Update parameters
 
-print(f"损失值: {loss.item():.4f}")
+print(f"Loss value: {loss.item():.4f}")
 ```
 
-## 📚 核心概念
+## 📚 Core Concepts
 
-### 张量 (Tensor)
-Genesis中的基础数据结构，支持自动微分：
+### Tensor
+The fundamental data structure in Genesis, supporting automatic differentiation:
 
 ```python
 import genesis
 
-# 创建张量
+# Create tensors
 x = genesis.tensor([1.0, 2.0, 3.0], requires_grad=True)
 y = genesis.tensor([4.0, 5.0, 6.0], requires_grad=True)
 
-# 计算操作
+# Compute operations
 z = x * y + x.sum()
 z.backward(genesis.ones_like(z))
 
-print(f"x的梯度: {x.grad}")  # [5., 6., 7.]
-print(f"y的梯度: {y.grad}")  # [1., 2., 3.]
+print(f"x gradients: {x.grad}")  # [5., 6., 7.]
+print(f"y gradients: {y.grad}")  # [1., 2., 3.]
 ```
 
-### 模块 (Module)
-神经网络组件的基类：
+### Module
+Base class for neural network components:
 
 ```python
 import genesis.nn as nn
@@ -111,86 +111,86 @@ class CustomLayer(nn.Module):
     def forward(self, x):
         return genesis.functional.linear(x, self.weight, self.bias)
 
-# 使用自定义层
+# Use custom layer
 layer = CustomLayer(10, 5)
 input_tensor = genesis.randn(3, 10)
 output = layer(input_tensor)
 ```
 
-### 优化器 (Optimizer)
-参数更新算法：
+### Optimizer
+Parameter update algorithms:
 
 ```python
 import genesis.optim as optim
 
-# 不同的优化器选择
+# Different optimizer choices
 sgd_optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
 adam_optimizer = optim.Adam(model.parameters(), lr=0.001)
 adamw_optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 ```
 
-## 🛠️ 环境配置
+## 🛠️ Environment Setup
 
-### 硬件要求
+### Hardware Requirements
 
-- **CPU**: 现代多核处理器
-- **内存**: 最少8GB RAM，推荐16GB+
-- **GPU**: NVIDIA GPU with CUDA支持 (推荐)
-- **存储**: 至少2GB可用空间
+- **CPU**: Modern multi-core processor
+- **Memory**: Minimum 8GB RAM, 16GB+ recommended
+- **GPU**: NVIDIA GPU with CUDA support (recommended)
+- **Storage**: At least 2GB available space
 
-### 软件依赖
+### Software Dependencies
 
 ```bash
-# Python环境
+# Python environment
 Python >= 3.8
 
-# 核心依赖
+# Core dependencies
 torch >= 2.0.0
 triton >= 2.0.0
 numpy >= 1.21.0
-cuda-python >= 11.8.0  # GPU支持
+cuda-python >= 11.8.0  # GPU support
 
-# 可选依赖
-matplotlib >= 3.5.0  # 用于可视化
-tqdm >= 4.64.0      # 进度条
-wandb >= 0.13.0     # 实验跟踪
+# Optional dependencies
+matplotlib >= 3.5.0  # For visualization
+tqdm >= 4.64.0      # Progress bars
+wandb >= 0.13.0     # Experiment tracking
 ```
 
-## 📖 下一步
+## 📖 Next Steps
 
-现在你已经了解了Genesis的基础用法，可以继续探索：
+Now that you understand the basics of Genesis, you can continue exploring:
 
-### 🎓 深入学习
-- [**完整安装指南**](installation.md) - 详细的安装和配置步骤
-- [**第一个完整程序**](first-steps.md) - 构建完整的训练流程
-- [**基础训练教程**](../tutorials/basic-training.md) - 系统性的训练教程
+### 🎓 Deep Learning
+- [**Complete Installation Guide**](installation.md) - Detailed installation and configuration steps
+- [**First Complete Program**](first-steps.md) - Build a complete training workflow
+- [**Basic Training Tutorial**](../tutorials/basic-training.md) - Systematic training tutorials
 
-### 🔍 架构理解
-- [**架构概述**](../architecture/index.md) - 了解Genesis的整体设计
-- [**核心组件**](../core-components/index.md) - 深入理解内部实现
-- [**API参考**](../api-reference/index.md) - 完整的API文档
+### 🔍 Architecture Understanding
+- [**Architecture Overview**](../architecture/index.md) - Understand Genesis's overall design
+- [**Core Components**](../core-components/index.md) - Deep dive into internal implementation
+- [**API Reference**](../api-reference/index.md) - Complete API documentation
 
-### 🚀 高级特性
-- [**自定义算子**](../tutorials/custom-ops.md) - 实现自定义操作
-- [**性能优化**](../tutorials/performance-tuning.md) - 训练性能调优
-- [**分布式训练**](../neural-networks/distributed.md) - 多GPU训练
+### 🚀 Advanced Features
+- [**Custom Operators**](../tutorials/custom-ops.md) - Implement custom operations
+- [**Performance Optimization**](../tutorials/performance-tuning.md) - Training performance tuning
+- [**Distributed Training**](../neural-networks/distributed.md) - Multi-GPU training
 
-## ❓ 常见问题
+## ❓ Frequently Asked Questions
 
-### Q: Genesis与PyTorch有什么区别？
-A: Genesis是教育导向的框架，代码更简洁易懂，适合学习深度学习的内部实现。PyTorch更适合生产环境使用。
+### Q: What's the difference between Genesis and PyTorch?
+A: Genesis is education-oriented with cleaner, more understandable code, suitable for learning deep learning internals. PyTorch is better suited for production environments.
 
-### Q: 可以在生产环境中使用Genesis吗？
-A: Genesis主要用于教育和研究，虽然功能完整，但建议生产环境使用更成熟的框架如PyTorch。
+### Q: Can Genesis be used in production?
+A: Genesis is primarily for education and research. While fully functional, we recommend more mature frameworks like PyTorch for production use.
 
-### Q: 如何获得帮助？
-A: 可以通过GitHub Issues、Discussions或查看详细文档获得帮助。
+### Q: How to get help?
+A: You can get help through GitHub Issues, Discussions, or by consulting the detailed documentation.
 
 ---
 
-## 🎉 准备好了吗？
+## 🎉 Ready?
 
-让我们开始深入了解Genesis吧！
+Let's start diving deep into Genesis!
 
-[详细安装指南](installation.md){ .md-button .md-button--primary }
-[完整教程](../tutorials/index.md){ .md-button }
+[Detailed Installation Guide](installation.md){ .md-button .md-button--primary }
+[Complete Tutorials](../tutorials/index.md){ .md-button }

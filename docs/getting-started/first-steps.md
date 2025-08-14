@@ -1,31 +1,31 @@
-# 第一个完整程序
+# Your First Complete Program
 
-完成安装后，让我们通过一个完整的例子来学习Genesis的基本用法。我们将实现一个图像分类器来演示完整的深度学习工作流程。
+After completing the installation, let's learn Genesis basics through a complete example. We will implement an image classifier to demonstrate the complete deep learning workflow.
 
-## 🎯 项目目标
+## 🎯 Project Goals
 
-构建一个手写数字识别器（类似MNIST），学习Genesis的核心概念：
+Build a handwritten digit recognizer (MNIST-like) to learn Genesis core concepts:
 
-- 数据加载和预处理
-- 模型定义和初始化
-- 训练循环和验证
-- 模型保存和加载
+- Data loading and preprocessing
+- Model definition and initialization
+- Training loop and validation
+- Model saving and loading
 
-## 📊 项目结构
+## 📊 Project Structure
 
-创建项目目录结构：
+Create the project directory structure:
 
 ```
 first_project/
-├── data/                # 数据目录
-├── models/              # 模型保存目录
-├── train.py            # 训练脚本
-├── model.py            # 模型定义
-├── dataset.py          # 数据加载
-└── utils.py            # 工具函数
+├── data/                # Data directory
+├── models/              # Model save directory
+├── train.py            # Training script
+├── model.py            # Model definition
+├── dataset.py          # Data loading
+└── utils.py            # Utility functions
 ```
 
-## 📁 1. 数据处理 (`dataset.py`)
+## 📁 1. Data Processing (`dataset.py`)
 
 ```python
 """数据加载和预处理模块"""

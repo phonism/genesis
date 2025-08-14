@@ -1,25 +1,25 @@
-# 测试规范
+# Testing Guidelines
 
-!!! warning "开发中"
-    此文档正在编写中，内容将持续更新。
+!!! warning "Under Development"
+    This document is currently being written and content will be continuously updated.
 
-本文档规定了Genesis项目的测试标准和最佳实践。
+This document defines testing standards and best practices for the Genesis project.
 
-## 🎯 测试原则
+## 🎯 Testing Principles
 
-### 1. 测试金字塔
-- **单元测试** (70%): 测试单个函数和类
-- **集成测试** (20%): 测试组件间交互
-- **端到端测试** (10%): 测试完整工作流
+### 1. Test Pyramid
+- **Unit Tests** (70%): Test individual functions and classes
+- **Integration Tests** (20%): Test component interactions
+- **End-to-End Tests** (10%): Test complete workflows
 
-### 2. 测试覆盖率
-- 目标覆盖率: 90%+
-- 关键模块要求: 95%+
-- 新代码要求: 100%
+### 2. Test Coverage
+- Target coverage: 90%+
+- Critical modules requirement: 95%+
+- New code requirement: 100%
 
-## 📋 测试分类
+## 📋 Test Categories
 
-### 单元测试
+### Unit Tests
 ```python
 def test_tensor_creation():
     """Test basic tensor creation."""
@@ -28,16 +28,16 @@ def test_tensor_creation():
     assert x.dtype == genesis.float32
 ```
 
-### 性能测试
+### Performance Tests
 ```python
 @pytest.mark.benchmark
 def test_matmul_performance():
     """Benchmark matrix multiplication performance."""
-    # WIP: 性能测试实现
+    # WIP: Performance test implementation
     pass
 ```
 
-### GPU测试
+### GPU Tests
 ```python
 @pytest.mark.cuda
 def test_cuda_operations():
@@ -50,26 +50,26 @@ def test_cuda_operations():
     assert y.device.type == 'cuda'
 ```
 
-## 🚀 运行测试
+## 🚀 Running Tests
 
 ```bash
-# 所有测试
+# All tests
 pytest tests/ -v
 
-# 特定标记
+# Specific markers
 pytest tests/ -m "not slow" -v
 
-# 覆盖率报告
+# Coverage report
 pytest tests/ --cov=genesis --cov-report=html
 ```
 
-## 📊 测试工具
+## 📊 Testing Tools
 
-- **pytest**: 主要测试框架
-- **pytest-cov**: 覆盖率统计
-- **pytest-benchmark**: 性能测试
-- **pytest-xdist**: 并行测试
+- **pytest**: Main testing framework
+- **pytest-cov**: Coverage statistics
+- **pytest-benchmark**: Performance testing
+- **pytest-xdist**: Parallel testing
 
 ---
 
-📘 **文档状态**: 正在编写中，预计在v0.2.0版本完成。
+📘 **Documentation Status**: Currently being written, expected completion in v0.2.0.

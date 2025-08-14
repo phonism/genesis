@@ -1,91 +1,91 @@
-# 开发环境配置
+# Development Environment Setup
 
-本指南将帮助你搭建Genesis开发环境，包括代码编辑、调试、测试等开发工作流程。
+This guide will help you set up a Genesis development environment, including code editing, debugging, testing, and other development workflows.
 
-## 🛠️ 系统要求
+## 🛠️ System Requirements
 
-### 硬件要求
-- **CPU**: x86_64架构，支持AVX指令集
-- **内存**: 最少16GB，推荐32GB+
-- **GPU**: NVIDIA GPU with CUDA支持 (开发GPU算子时需要)
-- **存储**: 20GB可用空间
+### Hardware Requirements
+- **CPU**: x86_64 architecture with AVX instruction set support
+- **Memory**: Minimum 16GB, recommended 32GB+
+- **GPU**: NVIDIA GPU with CUDA support (required for GPU operator development)
+- **Storage**: 20GB available space
 
-### 软件要求
-- **操作系统**: Linux (推荐Ubuntu 20.04+), macOS 10.15+
+### Software Requirements
+- **Operating System**: Linux (Ubuntu 20.04+ recommended), macOS 10.15+
 - **Python**: 3.8, 3.9, 3.10, 3.11
-- **Git**: 最新版本
-- **CUDA**: 11.8+ (GPU开发需要)
+- **Git**: Latest version
+- **CUDA**: 11.8+ (required for GPU development)
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 1. 克隆仓库
+### 1. Clone Repository
 
 ```bash
-# 克隆你的fork (推荐)
+# Clone your fork (recommended)
 git clone https://github.com/YOUR_USERNAME/genesis.git
 cd genesis
 
-# 或克隆主仓库
+# Or clone the main repository
 git clone https://github.com/phonism/genesis.git
 cd genesis
 
-# 添加上游仓库 (如果fork的话)
+# Add upstream repository (if forked)
 git remote add upstream https://github.com/phonism/genesis.git
 ```
 
-### 2. 创建Python环境
+### 2. Create Python Environment
 
-=== "使用conda"
+=== "Using conda"
     ```bash
-    # 创建环境
+    # Create environment
     conda create -n genesis-dev python=3.9
     conda activate genesis-dev
     
-    # 安装基础依赖
+    # Install base dependencies
     conda install numpy matplotlib ipython jupyter
     ```
 
-=== "使用venv"
+=== "Using venv"
     ```bash
-    # 创建环境
+    # Create environment
     python -m venv genesis-dev
     source genesis-dev/bin/activate  # Linux/macOS
     # genesis-dev\\Scripts\\activate  # Windows
     
-    # 升级pip
+    # Upgrade pip
     pip install --upgrade pip setuptools wheel
     ```
 
-### 3. 安装开发依赖
+### 3. Install Development Dependencies
 
 ```bash
-# 安装PyTorch (根据你的CUDA版本选择)
+# Install PyTorch (choose based on your CUDA version)
 # CUDA 11.8
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-# CPU版本
+# CPU version
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-# 安装Triton
+# Install Triton
 pip install triton
 
-# 安装开发工具
+# Install development tools
 pip install -r requirements-dev.txt
 ```
 
-### 4. 安装Genesis (开发模式)
+### 4. Install Genesis (Development Mode)
 
 ```bash
-# 开发模式安装 (推荐)
+# Development mode installation (recommended)
 pip install -e .
 
-# 验证安装
-python -c "import genesis; print('Genesis开发环境配置成功！')"
+# Verify installation
+python -c "import genesis; print('Genesis development environment setup successful!')"
 ```
 
-## 📦 依赖管理
+## 📦 Dependency Management
 
-### 核心依赖 (requirements.txt)
+### Core Dependencies (requirements.txt)
 ```
 torch>=2.0.0
 triton>=2.0.0
@@ -93,7 +93,7 @@ numpy>=1.21.0
 cuda-python>=11.8.0
 ```
 
-### 开发依赖 (requirements-dev.txt)
+### Development Dependencies (requirements-dev.txt)
 ```
 pytest>=7.0.0
 pytest-cov>=4.0.0
@@ -108,16 +108,16 @@ jupyter>=1.0.0
 ipython>=8.0.0
 ```
 
-## 🔧 开发工具配置
+## 🔧 Development Tools Configuration
 
-### 1. Git配置
+### 1. Git Configuration
 
 ```bash
-# 配置用户信息
+# Configure user information
 git config user.name "Your Name"
 git config user.email "your.email@example.com"
 
-# 配置提交模板
+# Configure commit template
 echo "feat: brief description
 
 More detailed explanation (optional)
@@ -129,23 +129,23 @@ Fixes #123" > ~/.gitmessage
 git config commit.template ~/.gitmessage
 ```
 
-### 2. Pre-commit钩子
+### 2. Pre-commit Hooks
 
 ```bash
-# 安装pre-commit
+# Install pre-commit
 pip install pre-commit
 
-# 安装钩子
+# Install hooks
 pre-commit install
 
-# 手动运行检查
+# Run checks manually
 pre-commit run --all-files
 ```
 
-### 3. IDE配置
+### 3. IDE Configuration
 
 === "VS Code"
-    推荐安装以下扩展：
+    Recommended extensions to install:
     
     ```json
     // .vscode/extensions.json
@@ -161,7 +161,7 @@ pre-commit run --all-files
     }
     ```
     
-    配置文件：
+    Configuration file:
     ```json
     // .vscode/settings.json
     {
@@ -176,61 +176,61 @@ pre-commit run --all-files
     ```
 
 === "PyCharm"
-    1. 打开项目设置 (File -> Settings)
-    2. 配置Python解释器指向虚拟环境
-    3. 启用代码格式化工具 (Black, isort)
-    4. 配置测试运行器为pytest
+    1. Open project settings (File -> Settings)
+    2. Configure Python interpreter to point to virtual environment
+    3. Enable code formatting tools (Black, isort)
+    4. Configure test runner to pytest
 
-### 4. 环境变量
+### 4. Environment Variables
 
 ```bash
-# 开发环境变量
+# Development environment variables
 export GENESIS_DEV=1
 export PYTHONPATH="${PWD}:${PYTHONPATH}"
-export CUDA_VISIBLE_DEVICES=0  # 指定GPU设备
+export CUDA_VISIBLE_DEVICES=0  # Specify GPU device
 
-# 添加到 ~/.bashrc 或 ~/.zshrc
+# Add to ~/.bashrc or ~/.zshrc
 echo 'export GENESIS_DEV=1' >> ~/.bashrc
 ```
 
-## 🧪 测试框架
+## 🧪 Testing Framework
 
-### 测试目录结构
+### Test Directory Structure
 ```
 tests/
-├── conftest.py              # pytest配置
-├── test_autograd.py         # 自动微分测试
-├── test_nn.py              # 神经网络测试
-├── test_cuda_tensor.py     # CUDA张量测试
-├── test_functional.py      # 函数式接口测试
-├── benchmarks/             # 性能测试
+├── conftest.py              # pytest configuration
+├── test_autograd.py         # Autograd tests
+├── test_nn.py              # Neural network tests
+├── test_cuda_tensor.py     # CUDA tensor tests
+├── test_functional.py      # Functional interface tests
+├── benchmarks/             # Performance tests
 │   ├── bench_matmul.py
 │   └── bench_attention.py
-└── integration/            # 集成测试
+└── integration/            # Integration tests
     ├── test_training.py
     └── test_models.py
 ```
 
-### 运行测试
+### Running Tests
 
 ```bash
-# 运行所有测试
+# Run all tests
 pytest tests/ -v
 
-# 运行特定测试文件
+# Run specific test file
 pytest tests/test_nn.py -v
 
-# 运行特定测试函数
+# Run specific test function
 pytest tests/test_nn.py::test_linear_layer -v
 
-# 运行带覆盖率的测试
+# Run tests with coverage
 pytest tests/ --cov=genesis --cov-report=html
 
-# 运行性能测试
+# Run performance tests
 pytest tests/benchmarks/ -v --benchmark-only
 ```
 
-### 编写测试
+### Writing Tests
 
 ```python
 # tests/test_example.py
@@ -277,47 +277,47 @@ class TestExample:
         assert x.is_cuda
 ```
 
-## 📊 性能分析
+## 📊 Performance Analysis
 
-### 1. 内置profiler
+### 1. Built-in Profiler
 
 ```python
 import genesis.utils.profile as profiler
 
-# 使用context manager
+# Using context manager
 with profiler.profile() as prof:
-    # 你的代码
+    # Your code
     x = genesis.randn(1000, 1000)
     y = genesis.matmul(x, x)
 
-# 打印结果
+# Print results
 prof.print_stats()
 
-# 保存结果
+# Save results
 prof.export_chrome_trace("profile.json")
 ```
 
-### 2. 内存分析
+### 2. Memory Analysis
 
 ```python
 import genesis
 
-# 启用内存跟踪
+# Enable memory tracking
 genesis.cuda.memory.enable_debug()
 
-# 你的代码
+# Your code
 x = genesis.randn(1000, 1000, device='cuda')
 y = genesis.matmul(x, x)
 
-# 查看内存使用
-print(f"内存使用: {genesis.cuda.memory_allocated() / 1024**2:.1f} MB")
-print(f"缓存内存: {genesis.cuda.memory_cached() / 1024**2:.1f} MB")
+# Check memory usage
+print(f"Memory used: {genesis.cuda.memory_allocated() / 1024**2:.1f} MB")
+print(f"Cached memory: {genesis.cuda.memory_cached() / 1024**2:.1f} MB")
 
-# 内存快照
+# Memory snapshot
 snapshot = genesis.cuda.memory.memory_snapshot()
 ```
 
-### 3. 基准测试
+### 3. Benchmarking
 
 ```python
 # benchmark/bench_example.py
@@ -357,135 +357,135 @@ if __name__ == "__main__":
     benchmark_matmul()
 ```
 
-## 🐛 调试技巧
+## 🐛 Debugging Tips
 
-### 1. 调试环境变量
+### 1. Debug Environment Variables
 
 ```bash
-# 启用调试模式
+# Enable debug mode
 export GENESIS_DEBUG=1
-export CUDA_LAUNCH_BLOCKING=1  # 同步CUDA执行
-export PYTHONFAULTHANDLER=1    # Python错误处理
+export CUDA_LAUNCH_BLOCKING=1  # Synchronous CUDA execution
+export PYTHONFAULTHANDLER=1    # Python error handling
 ```
 
-### 2. 日志配置
+### 2. Logging Configuration
 
 ```python
 import logging
 import genesis
 
-# 配置日志
+# Configure logging
 logging.basicConfig(level=logging.DEBUG)
 genesis.set_log_level('DEBUG')
 
-# 使用日志
+# Use logging
 logger = logging.getLogger(__name__)
-logger.debug("调试信息")
+logger.debug("Debug information")
 ```
 
-### 3. 断点调试
+### 3. Breakpoint Debugging
 
 ```python
 import pdb
 
 def buggy_function(x):
-    pdb.set_trace()  # 设置断点
+    pdb.set_trace()  # Set breakpoint
     y = x * 2
     return y
 
-# 或使用ipdb (需要安装: pip install ipdb)
+# Or use ipdb (install with: pip install ipdb)
 import ipdb
 ipdb.set_trace()
 ```
 
-## 📚 文档开发
+## 📚 Documentation Development
 
-### 构建文档
+### Building Documentation
 
 ```bash
-# 安装文档依赖
+# Install documentation dependencies
 pip install -r docs/requirements.txt
 
-# 本地服务器
+# Local server
 mkdocs serve
 
-# 构建静态文件
+# Build static files
 mkdocs build
 
-# 部署到GitHub Pages
+# Deploy to GitHub Pages
 mkdocs gh-deploy
 ```
 
-### API文档生成
+### API Documentation Generation
 
 ```bash
-# 自动生成API文档
+# Auto-generate API documentation
 python scripts/generate_api_docs.py
 
-# 检查docstring格式
+# Check docstring format
 pydocstyle genesis/
 ```
 
-## 🚀 提交代码
+## 🚀 Code Submission
 
-### 1. 代码检查
+### 1. Code Checks
 
 ```bash
-# 格式化代码
+# Format code
 black genesis/ tests/
 isort genesis/ tests/
 
-# 类型检查
+# Type checking
 mypy genesis/
 
-# 代码质量检查
+# Code quality checks
 flake8 genesis/ tests/
 
-# 运行测试
+# Run tests
 pytest tests/ -x
 ```
 
-### 2. 提交流程
+### 2. Submission Process
 
 ```bash
-# 1. 同步最新代码
+# 1. Sync latest code
 git fetch upstream
 git rebase upstream/main
 
-# 2. 创建功能分支
+# 2. Create feature branch
 git checkout -b feature/your-feature
 
-# 3. 开发和测试
-# ... 你的开发工作 ...
+# 3. Development and testing
+# ... your development work ...
 
-# 4. 提交代码
+# 4. Commit code
 git add .
 git commit -m "feat: add your feature"
 
-# 5. 推送分支
+# 5. Push branch
 git push origin feature/your-feature
 
-# 6. 创建Pull Request
+# 6. Create Pull Request
 ```
 
-## ❓ 常见问题
+## ❓ Common Issues
 
-### Q: CUDA相关错误？
-A: 检查CUDA版本兼容性，确保PyTorch和Triton版本匹配。
+### Q: CUDA-related errors?
+A: Check CUDA version compatibility, ensure PyTorch and Triton versions match.
 
-### Q: 测试失败？
-A: 运行 `pytest tests/ -v` 查看详细错误信息，检查环境配置。
+### Q: Test failures?
+A: Run `pytest tests/ -v` to see detailed error information, check environment configuration.
 
-### Q: 性能问题？
-A: 使用profiler分析瓶颈，检查是否启用了GPU加速。
+### Q: Performance issues?
+A: Use profiler to analyze bottlenecks, check if GPU acceleration is enabled.
 
-### Q: 内存不足？
-A: 减小测试用例的数据规模，启用CPU回退模式。
+### Q: Out of memory?
+A: Reduce test case data size, enable CPU fallback mode.
 
 ---
 
-!!! success "开发环境配置完成"
-    现在你可以开始为Genesis贡献代码了！
+!!! success "Development Environment Setup Complete"
+    You can now start contributing code to Genesis!
 
-[下一步：了解测试规范](testing.md){ .md-button .md-button--primary }
-[返回贡献指南](index.md){ .md-button }
+[Next: Testing Guidelines](testing.md){ .md-button .md-button--primary }
+[Back to Contributing Guide](index.md){ .md-button }

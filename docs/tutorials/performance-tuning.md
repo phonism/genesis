@@ -1,19 +1,19 @@
-# 性能调优指南
+# Performance Tuning Guide
 
-!!! warning "开发中"
-    此文档正在编写中，内容将持续更新。
+!!! warning "Under Development"
+    This document is being written and content will be continuously updated.
 
-本指南将教你如何优化Genesis模型的训练性能，包括内存使用、计算效率和I/O优化等方面。
+This guide will teach you how to optimize Genesis model training performance, including memory usage, computational efficiency, and I/O optimization.
 
-## 🎯 优化目标
+## 🎯 Optimization Goals
 
-- **训练速度**: 提高每秒处理的样本数
-- **内存效率**: 减少GPU显存占用
-- **吞吐量**: 最大化硬件利用率
+- **Training Speed**: Increase samples processed per second
+- **Memory Efficiency**: Reduce GPU memory usage
+- **Throughput**: Maximize hardware utilization
 
-## 📊 性能分析工具
+## 📊 Performance Analysis Tools
 
-### 内置性能分析器
+### Built-in Profiler
 
 ```python
 import genesis.utils.profile as profiler

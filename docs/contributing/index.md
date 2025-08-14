@@ -1,33 +1,33 @@
-# 贡献指南
+# Contributing Guide
 
-欢迎为Genesis深度学习框架贡献代码！本指南将帮助你了解如何参与项目开发。
+Welcome to contribute code to the Genesis deep learning framework! This guide will help you understand how to participate in project development.
 
-## 🤝 贡献方式
+## 🤝 Ways to Contribute
 
-### 代码贡献
-- 修复bug
-- 添加新特性
-- 性能优化
-- 测试完善
+### Code Contributions
+- Fix bugs
+- Add new features
+- Performance optimization
+- Test improvements
 
-### 文档贡献
-- 改进现有文档
-- 添加教程和示例
-- 翻译文档
-- API文档完善
+### Documentation Contributions
+- Improve existing documentation
+- Add tutorials and examples
+- Translate documentation
+- API documentation improvements
 
-### 社区贡献
-- 回答问题
-- 代码审查
-- 问题报告
-- 功能建议
+### Community Contributions
+- Answer questions
+- Code review
+- Issue reporting
+- Feature suggestions
 
-## 📋 开发流程
+## 📋 Development Workflow
 
-### 1. 准备工作
+### 1. Preparation
 
 ```bash
-# Fork项目到你的GitHub账户
+# Fork the project to your GitHub account
 # Clone你的fork
 git clone https://github.com/YOUR_USERNAME/genesis.git
 cd genesis

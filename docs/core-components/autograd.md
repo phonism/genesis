@@ -1,16 +1,16 @@
-# 自动微分系统
+# Automatic Differentiation System
 
-Genesis的自动微分系统是框架的核心，负责构建计算图、执行前向传播和反向传播。系统设计简洁而高效，支持复杂的神经网络训练。
+Genesis's automatic differentiation system is the core of the framework, responsible for building computation graphs, executing forward propagation and backpropagation. The system is designed to be simple yet efficient, supporting complex neural network training.
 
-## 🎯 系统概述
+## 🎯 System Overview
 
-自动微分系统基于动态计算图实现，主要包含三个核心组件：
+The automatic differentiation system is based on dynamic computation graph implementation, mainly including three core components:
 
-- **Tensor** - 携带梯度信息的张量
-- **Function** - 可微分操作的抽象基类
-- **Context** - 保存前向传播中间结果的上下文
+- **Tensor** - Tensors carrying gradient information
+- **Function** - Abstract base class for differentiable operations
+- **Context** - Context that saves intermediate results during forward propagation
 
-## 🏗️ 核心架构
+## 🏗️ Core Architecture
 
 ```mermaid
 graph TB

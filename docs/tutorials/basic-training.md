@@ -1,40 +1,40 @@
-# 基础训练教程
+# Basic Training Tutorial
 
-本教程将带你从零开始，使用Genesis深度学习框架构建和训练你的第一个神经网络。我们将通过一个完整的图像分类项目来学习Genesis的核心概念和用法。
+This tutorial will take you from zero to building and training your first neural network using the Genesis deep learning framework. We will learn Genesis core concepts and usage through a complete image classification project.
 
-## 🎯 学习目标
+## 🎯 Learning Objectives
 
-通过本教程，你将学会：
-- Genesis的基本API和数据结构
-- 如何定义和训练神经网络模型
-- 数据加载和预处理
-- 训练循环的构建和优化
-- 模型评估和保存
+Through this tutorial, you will learn:
+- Genesis basic APIs and data structures
+- How to define and train neural network models
+- Data loading and preprocessing
+- Building and optimizing training loops
+- Model evaluation and saving
 
-## 🛠️ 环境准备
+## 🛠️ Environment Setup
 
-### 安装依赖
+### Install Dependencies
 
 ```bash
-# 确保已安装Genesis
+# Ensure Genesis is installed
 pip install torch triton
 git clone https://github.com/phonism/genesis.git
 cd genesis
 pip install -e .
 
-# 安装额外依赖
+# Install additional dependencies
 pip install matplotlib torchvision tqdm
 ```
 
-### 验证安装
+### Verify Installation
 
 ```python
 import genesis
 import genesis.nn as nn
 import genesis.optim as optim
 
-print(f"Genesis版本: {genesis.__version__}")
-print(f"CUDA可用: {genesis.cuda.is_available()}")
+print(f"Genesis version: {genesis.__version__}")
+print(f"CUDA available: {genesis.cuda.is_available()}")
 ```
 
 ## 📊 项目：手写数字识别

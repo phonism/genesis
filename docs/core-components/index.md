@@ -1,29 +1,29 @@
-# 核心组件概述
+# Core Components Overview
 
-Genesis框架的核心组件提供了深度学习计算的基础设施，包括张量系统、自动微分引擎、数据类型系统和函数式操作接口。
+Genesis framework's core components provide the infrastructure for deep learning computation, including tensor systems, automatic differentiation engine, data type system, and functional operation interfaces.
 
-## 🧩 组件架构
+## 🧩 Component Architecture
 
 ```mermaid
 graph TB
-    subgraph "核心组件"
-        A[Tensor张量] --> B[自动微分引擎]
-        C[数据类型系统] --> A
-        D[函数式操作] --> A
-        E[初始化函数] --> A
+    subgraph "Core Components"
+        A[Tensor] --> B[Autograd Engine]
+        C[Data Type System] --> A
+        D[Functional Operations] --> A
+        E[Initialization Functions] --> A
     end
     
-    subgraph "自动微分详细"
-        B --> F[Function基类]
-        B --> G[Context上下文]
-        B --> H[计算图构建]
-        B --> I[反向传播]
+    subgraph "Autograd Details"
+        B --> F[Function Base Class]
+        B --> G[Context]
+        B --> H[Computation Graph Building]
+        B --> I[Backpropagation]
     end
     
-    subgraph "类型系统"
-        C --> J[DType类]
-        C --> K[类型转换]
-        C --> L[精度管理]
+    subgraph "Type System"
+        C --> J[DType Class]
+        C --> K[Type Conversion]
+        C --> L[Precision Management]
     end
     
     style A fill:#e1f5fe

@@ -122,3 +122,16 @@ def array(shape, device_id=None, dtype=None):
         # Default to float32
         arr = torch.empty(shape, dtype=torch.float32, device=torch.device("cpu"))
     return arr
+
+def cat(arrays, dim=0):
+    """
+    Concatenate tensors along specified dimension.
+    
+    Args:
+        arrays: List of tensors to concatenate
+        dim: Dimension along which to concatenate
+        
+    Returns:
+        torch.Tensor: Concatenated tensor
+    """
+    return torch.cat(arrays, dim=dim)

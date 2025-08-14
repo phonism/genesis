@@ -1,38 +1,78 @@
 #!/usr/bin/env python3
 """
-Genesis vs PyTorch Element-wise Operations Benchmark
+Genesis Comprehensive Operations Benchmark
 
-Comprehensive performance testing with two timing modes:
+Unified benchmark testing ALL operations in Genesis against PyTorch with:
 
 TIMING MODES:
 - Real: Per-operation timing (includes CUDA sync overhead) - real user experience
 - Pure: Batch timing (minimal overhead) - pure computational performance
 
+RELIABILITY IMPROVEMENTS (v2.0):
+- Statistical outlier detection using IQR or Z-score methods
+- Median-based timing (more robust than mean)
+- Reliability scoring with coefficient of variation
+- Automatic warning for low-reliability measurements
+- Configurable outlier filtering (--no-outlier-filter to disable)
+- Minimum iteration requirements for statistical validity
+
 FEATURES:
-- Multiple tensor sizes and operation types
-- Professional metrics: bandwidth, efficiency, performance categorization
+- Automatic operation discovery from genesis.nn.functional
+- Multiple tensor sizes and operation categories
+- Professional metrics: bandwidth, GFLOPS, efficiency
 - Adaptive iterations and statistical analysis
 - Detailed optimization recommendations
+- Support for all data types and operation categories
+
+CATEGORIES TESTED:
+1. Element-wise operations (add, sub, mul, div, pow, etc.)
+2. Activation functions (relu, sigmoid, tanh, etc.)
+3. Reduction operations (sum, max, logsumexp, etc.)
+4. Shape operations (transpose, reshape, expand, etc.)
+5. Matrix operations (matmul)
+6. Tensor manipulation (stack, cat, squeeze, etc.)
+7. Broadcasting operations
+8. Triton fused operations (when available)
 
 Usage:
-    python bench_ops.py                    # Full benchmark
-    python bench_ops.py --fast             # Quick test 
+    python bench_ops.py                    # Full comprehensive benchmark
+    python bench_ops.py --fast             # Quick test mode
     python bench_ops.py --op add           # Test specific operation
+    python bench_ops.py --category element # Test specific category
     python bench_ops.py --size large       # Test specific size category
     python bench_ops.py --dtype float16    # Test with different precision
+    python bench_ops.py --timing pure      # Use pure compute timing
+    python bench_ops.py --timing both      # Test with both timing modes
+    
+    # Reliability options (NEW):
+    python bench_ops.py --no-outlier-filter         # Disable outlier filtering
+    python bench_ops.py --outlier-method zscore     # Use Z-score instead of IQR
+    python bench_ops.py --min-iterations 200        # Force minimum iterations
+    python bench_ops.py --show-reliability          # Show detailed reliability metrics
 
 Options:
-    --fast          Quick mode with reduced iterations
-    --op OPERATION  Test specific operation: add, sub, mul, div, pow, relu, sigmoid, tanh
-    --size SIZE     Test specific size category: small, medium, large, very_large, batch
-    --dtype TYPE    Data type: float32, float16, bfloat16
-    --list-ops      List available operations
-    --list-sizes    List available size categories
+    --fast                  Quick mode with reduced iterations
+    --op OPERATION          Test specific operation (supports partial matching)
+    --category CAT          Test specific category: element, activation, reduction, shape, matrix, tensor, broadcast, triton
+    --size SIZE             Test specific size category: small, medium, large, very_large, batch
+    --dtype TYPE            Data type: float32, float16, bfloat16
+    --timing MODE           Timing mode: real, pure, both
+    --no-outlier-filter     Disable statistical outlier filtering
+    --outlier-method METHOD Outlier detection method: iqr, zscore (default: iqr)
+    --min-iterations N      Minimum iterations for statistical reliability
+    --show-reliability      Show detailed reliability metrics in output
+    --list-ops              List available operations
+    --list-categories       List available categories
+    --list-sizes            List available size categories
 """
 
 import sys
 import os
 import argparse
+import inspect
+from typing import Dict, List, Callable, Tuple, Any, Optional, Union
+from dataclasses import dataclass
+from enum import Enum
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
@@ -41,19 +81,383 @@ import torch
 import torch.nn.functional as F
 import genesis
 import genesis.nn.functional as gF
-from typing import Dict, List, Callable, Tuple
 import gc
+import statistics
 
 # Ensure we're using GPU
 assert torch.cuda.is_available(), "CUDA is not available"
 
-class BenchmarkTimer:
-    """Professional benchmark timer with comprehensive metrics"""
+class OpCategory(Enum):
+    """Operation categories for systematic testing"""
+    ELEMENT_WISE = "element"
+    ACTIVATION = "activation"
+    REDUCTION = "reduction"
+    SHAPE = "shape"
+    MATRIX_OPS = "matrix"
+    TENSOR_MANIPULATION = "tensor"
+    BROADCAST = "broadcast"
+    TRITON_FUSED = "triton"
+    MEMORY_OPS = "memory"
+
+@dataclass
+class OpSpec:
+    """Operation specification for benchmarking"""
+    name: str
+    category: OpCategory
+    genesis_func: Callable
+    torch_func: Callable
+    test_shapes: List[Tuple[int, ...]]
+    requires_second_tensor: bool = False
+    requires_scalar: bool = False
+    special_args: Optional[Dict[str, Any]] = None
+    description: str = ""
+    skip_reason: Optional[str] = None
+
+class ComprehensiveOpRegistry:
+    """Registry for all operations with automatic discovery and manual definitions"""
     
-    def __init__(self, warmup_iters=20, test_iters=100):
+    def __init__(self):
+        self.operations: Dict[str, OpSpec] = {}
+        self._discover_operations()
+    
+    def _get_test_shapes(self, category: OpCategory) -> List[Tuple[int, ...]]:
+        """Get appropriate test shapes for different operation categories"""
+        base_shapes = {
+            'small': [
+                (256, 256),          # 64K elements
+                (512, 512),          # 256K elements  
+                (1024, 1024),        # 1M elements
+                (32, 32, 32),        # 32K elements (3D)
+                (64, 64, 64),        # 256K elements (3D)
+            ],
+            'medium': [
+                (2048, 2048),        # 4M elements
+                (4096, 1024),        # 4M elements (non-square)
+                (1024, 4096),        # 4M elements (non-square)
+                (128, 128, 128),     # 2M elements (3D)
+                (32, 256, 256),      # 2M elements (3D)
+            ],
+            'large': [
+                (4096, 4096),        # 16M elements
+                (8192, 2048),        # 16M elements (non-square)
+                (2048, 8192),        # 16M elements (non-square)
+                (256, 256, 256),     # 16M elements (3D)
+                (64, 512, 512),      # 16M elements (3D)
+            ],
+            'very_large': [
+                (8192, 8192),        # 64M elements
+                (16384, 4096),       # 64M elements (non-square)
+                (512, 512, 512),     # 128M elements (3D)
+            ],
+            'batch': [
+                (32, 128, 768),      # Transformer-like (BERT base)
+                (64, 256, 256),      # CNN-like
+                (128, 512, 512),     # Large CNN-like
+                (16, 1024, 1024),    # Large batch
+            ]
+        }
+        
+        # Category-specific shape preferences
+        if category in [OpCategory.ELEMENT_WISE, OpCategory.ACTIVATION]:
+            return base_shapes['small'] + base_shapes['medium'][:2]
+        elif category == OpCategory.REDUCTION:
+            return base_shapes['small'] + base_shapes['medium'][:2]
+        elif category == OpCategory.SHAPE:
+            return base_shapes['medium'][:3] + base_shapes['batch'][:2]
+        elif category == OpCategory.MATRIX_OPS:
+            return [(512, 512), (256, 512), (1024, 256), (2048, 1024)]
+        elif category == OpCategory.TENSOR_MANIPULATION:
+            return base_shapes['small'][:3] + base_shapes['medium'][:2]
+        elif category == OpCategory.BROADCAST:
+            return [(1000, 1), (100, 100, 1), (32, 1, 768), (1, 512, 512)]
+        else:
+            return base_shapes['small'][:3] + base_shapes['medium'][:2]
+    
+    def _discover_operations(self):
+        """Automatically discover and categorize all operations"""
+        
+        # Element-wise binary operations
+        element_wise_binary = [
+            ("add", gF.add, lambda x, y: x + y, True),
+            ("sub", gF.sub, lambda x, y: x - y, True),
+            ("multiply", gF.multiply, lambda x, y: x * y, True),
+            ("divide", gF.divide, lambda x, y: x / y, True),
+        ]
+        
+        # Element-wise unary operations
+        element_wise_unary = [
+            ("negate", gF.negate, torch.neg, False),
+            ("sin", gF.sin, torch.sin, False),
+            ("cos", gF.cos, torch.cos, False),
+            ("log", gF.log, torch.log, False),
+            ("exp", gF.exp, torch.exp, False),
+            ("sqrt", gF.sqrt, torch.sqrt, False),
+        ]
+        
+        # Add binary operations
+        for name, gfunc, tfunc, needs_second in element_wise_binary:
+            if hasattr(gF, name):
+                self.operations[name] = OpSpec(
+                    name=name,
+                    category=OpCategory.ELEMENT_WISE,
+                    genesis_func=gfunc,
+                    torch_func=tfunc,
+                    test_shapes=self._get_test_shapes(OpCategory.ELEMENT_WISE),
+                    requires_second_tensor=needs_second,
+                    description=f"Element-wise {name} operation"
+                )
+        
+        # Add unary operations
+        for name, gfunc, tfunc, needs_second in element_wise_unary:
+            if hasattr(gF, name):
+                self.operations[name] = OpSpec(
+                    name=name,
+                    category=OpCategory.ELEMENT_WISE,
+                    genesis_func=gfunc,
+                    torch_func=tfunc,
+                    test_shapes=self._get_test_shapes(OpCategory.ELEMENT_WISE),
+                    requires_second_tensor=needs_second,
+                    description=f"Element-wise {name} operation"
+                )
+        
+        # Scalar operations
+        scalar_ops = [
+            ("add_scalar", gF.add_scalar, lambda x: x + 2.5, {"scalar": 2.5}),
+            ("mul_scalar", gF.mul_scalar, lambda x: x * 2.5, {"scalar": 2.5}),
+            ("divide_scalar", gF.divide_scalar, lambda x: x / 2.5, {"scalar": 2.5}),
+            ("pow_scalar", gF.pow_scalar, lambda x: x ** 2, {"scalar": 2}),
+        ]
+        
+        for name, gfunc, tfunc, args in scalar_ops:
+            if hasattr(gF, name):
+                self.operations[name] = OpSpec(
+                    name=name,
+                    category=OpCategory.ELEMENT_WISE,
+                    genesis_func=gfunc,
+                    torch_func=tfunc,
+                    test_shapes=self._get_test_shapes(OpCategory.ELEMENT_WISE),
+                    requires_scalar=True,
+                    special_args=args,
+                    description=f"Scalar {name.replace('_scalar', '')} operation"
+                )
+        
+        # Activation functions
+        activation_ops = [
+            ("relu", gF.relu, F.relu),
+        ]
+        
+        # Try to get triton fused activations if available
+        try:
+            from genesis.nn.triton_ops import softmax, dropout, safe_softmax
+            activation_ops.extend([
+                ("softmax_triton", lambda x: softmax(x), lambda x: F.softmax(x, dim=-1)),
+                ("safe_softmax_triton", lambda x: safe_softmax(x), lambda x: F.softmax(x, dim=-1)),
+                ("dropout_triton", lambda x: dropout(x, 0.1), lambda x: F.dropout(x, 0.1)),
+            ])
+        except ImportError:
+            pass
+        
+        for name, gfunc, tfunc in activation_ops:
+            category = OpCategory.TRITON_FUSED if 'triton' in name else OpCategory.ACTIVATION
+            self.operations[name] = OpSpec(
+                name=name,
+                category=category,
+                genesis_func=gfunc,
+                torch_func=tfunc,
+                test_shapes=self._get_test_shapes(category),
+                description=f"{name} activation function"
+            )
+        
+        # Reduction operations
+        reduction_ops = [
+            ("sum", lambda x: gF.sum(x), lambda x: x.sum()),
+            ("summation", lambda x: gF.summation(x), lambda x: x.sum()),
+            ("sum_axis0", lambda x: gF.sum(x, axis=0), lambda x: x.sum(dim=0)),
+            ("summation_axis0", lambda x: gF.summation(x, axis=0), lambda x: x.sum(dim=0)),
+            ("sum_axis1", lambda x: gF.sum(x, axis=1), lambda x: x.sum(dim=1)),
+            ("summation_axis1", lambda x: gF.summation(x, axis=1), lambda x: x.sum(dim=1)),
+            ("max", lambda x: gF.max(x), lambda x: x.max()),
+            ("max_axis0", lambda x: gF.max(x, axis=0), lambda x: x.max(dim=0)[0]),
+            ("max_axis1", lambda x: gF.max(x, axis=1), lambda x: x.max(dim=1)[0]),
+            ("logsumexp", lambda x: gF.logsumexp(x), lambda x: torch.logsumexp(x, dim=-1)),
+        ]
+        
+        for name, gfunc, tfunc in reduction_ops:
+            if hasattr(gF, name.split('_')[0]):  # Check if base function exists
+                self.operations[name] = OpSpec(
+                    name=name,
+                    category=OpCategory.REDUCTION,
+                    genesis_func=gfunc,
+                    torch_func=tfunc,
+                    test_shapes=self._get_test_shapes(OpCategory.REDUCTION),
+                    description=f"{name} reduction operation"
+                )
+        
+        # Shape operations
+        shape_ops = [
+            ("transpose", lambda x: gF.transpose(x), lambda x: x.transpose(-2, -1)),
+            ("reshape", lambda x: gF.reshape(x, (-1,)), lambda x: x.reshape(-1)),
+            ("flatten", lambda x: gF.flatten(x), lambda x: x.flatten()),
+            ("view", lambda x: gF.view(x, (-1,)), lambda x: x.view(-1)),
+            ("squeeze", lambda x: gF.squeeze(x.unsqueeze(0), 0), lambda x: x.unsqueeze(0).squeeze(0)),
+            ("unsqueeze", lambda x: gF.unsqueeze(x, 0), lambda x: x.unsqueeze(0)),
+        ]
+        
+        for name, gfunc, tfunc in shape_ops:
+            if hasattr(gF, name):
+                self.operations[name] = OpSpec(
+                    name=name,
+                    category=OpCategory.SHAPE,
+                    genesis_func=gfunc,
+                    torch_func=tfunc,
+                    test_shapes=self._get_test_shapes(OpCategory.SHAPE),
+                    description=f"{name} shape operation"
+                )
+        
+        # Tensor manipulation operations  
+        tensor_ops = [
+            ("broadcast_to", 
+             lambda x: gF.broadcast_to(x.unsqueeze(0), (3, *x.shape)), 
+             lambda x: x.unsqueeze(0).expand(3, *x.shape)),
+            ("stack", 
+             lambda x: gF.stack([x, x], dim=0),
+             lambda x: torch.stack([x, x], dim=0)),
+            ("cat",
+             lambda x: gF.cat([x, x], dim=0),
+             lambda x: torch.cat([x, x], dim=0)),
+        ]
+        
+        for name, gfunc, tfunc in tensor_ops:
+            if hasattr(gF, name):
+                self.operations[name] = OpSpec(
+                    name=name,
+                    category=OpCategory.TENSOR_MANIPULATION,
+                    genesis_func=gfunc,
+                    torch_func=tfunc,
+                    test_shapes=self._get_test_shapes(OpCategory.TENSOR_MANIPULATION),
+                    description=f"{name} tensor manipulation"
+                )
+        
+        # Matrix operations
+        self.operations["matmul"] = OpSpec(
+            name="matmul",
+            category=OpCategory.MATRIX_OPS,
+            genesis_func=gF.matmul,
+            torch_func=torch.matmul,
+            test_shapes=self._get_test_shapes(OpCategory.MATRIX_OPS),
+            requires_second_tensor=True,
+            description="Matrix multiplication"
+        )
+    
+    def get_operations_by_category(self, category: OpCategory) -> Dict[str, OpSpec]:
+        """Get all operations in a specific category"""
+        return {name: op for name, op in self.operations.items() 
+                if op.category == category and op.skip_reason is None}
+    
+    def get_operation(self, name: str) -> Optional[OpSpec]:
+        """Get a specific operation by name"""
+        return self.operations.get(name)
+    
+    def list_categories(self) -> List[str]:
+        """List all available categories"""
+        return list(set(op.category.value for op in self.operations.values()))
+    
+    def list_operations(self) -> List[str]:
+        """List all available operations"""
+        return [name for name, op in self.operations.items() if op.skip_reason is None]
+    
+    def filter_operations_by_name(self, target_op: str) -> Dict[str, OpSpec]:
+        """Filter operations by name (supports partial matching)"""
+        filtered = {}
+        for name, op in self.operations.items():
+            if target_op.lower() in name.lower() and op.skip_reason is None:
+                filtered[name] = op
+        return filtered
+
+def filter_outliers(times, method='iqr', iqr_factor=2.5):
+    """
+    Filter outliers from timing measurements using statistical methods optimized for GPU timing.
+    
+    Args:
+        times: List of timing measurements in milliseconds
+        method: 'iqr' (Interquartile Range), 'zscore' (Z-score), or 'gpu' (GPU-optimized)
+        iqr_factor: Factor for IQR method (2.5 is more conservative for GPU timing)
+    
+    Returns:
+        filtered_times: List of times with outliers removed
+        outlier_info: Dict with outlier statistics
+    """
+    if len(times) < 3:
+        return times, {'outliers_removed': 0, 'original_count': len(times)}
+    
+    times = np.array(times)
+    original_count = len(times)
+    
+    if method == 'gpu':
+        # GPU-specific outlier detection
+        # Remove only extreme outliers (>10x median or <0.1x median)
+        median_time = np.median(times)
+        lower_bound = median_time * 0.1   # 10倍以下
+        upper_bound = median_time * 10.0  # 10倍以上
+        
+        mask = (times >= lower_bound) & (times <= upper_bound)
+        filtered_times = times[mask]
+        
+    elif method == 'iqr':
+        q1 = np.percentile(times, 25)
+        q3 = np.percentile(times, 75)
+        iqr = q3 - q1
+        
+        # Handle case where IQR is very small (common in GPU timing)
+        if iqr < 0.001:  # If IQR < 0.001ms, use median-based filtering
+            median_time = np.median(times)
+            # Allow 5x variation around median for small timings
+            lower_bound = median_time * 0.2
+            upper_bound = median_time * 5.0
+        else:
+            lower_bound = q1 - iqr_factor * iqr
+            upper_bound = q3 + iqr_factor * iqr
+        
+        # Filter outliers
+        mask = (times >= lower_bound) & (times <= upper_bound)
+        filtered_times = times[mask]
+        
+    elif method == 'zscore':
+        mean_time = np.mean(times)
+        std_time = np.std(times)
+        z_scores = np.abs((times - mean_time) / std_time) if std_time > 0 else np.zeros_like(times)
+        
+        # Remove measurements with |z-score| > 2.5 (more conservative)
+        mask = z_scores <= 2.5
+        filtered_times = times[mask]
+    else:
+        filtered_times = times
+    
+    outliers_removed = original_count - len(filtered_times)
+    
+    # If too many outliers removed, use original data (safety measure)
+    if len(filtered_times) < max(3, original_count * 0.3):
+        filtered_times = times
+        outliers_removed = 0
+    
+    outlier_info = {
+        'outliers_removed': outliers_removed,
+        'original_count': original_count,
+        'outlier_percentage': (outliers_removed / original_count) * 100 if original_count > 0 else 0
+    }
+    
+    return filtered_times.tolist(), outlier_info
+
+
+class BenchmarkTimer:
+    """Professional benchmark timer with comprehensive metrics and outlier filtering"""
+    
+    def __init__(self, warmup_iters=20, test_iters=100, outlier_filter=True):
         self.warmup_iters = warmup_iters
         self.test_iters = test_iters
-        self.gpu_properties = torch.cuda.get_device_properties(0)
+        self.outlier_filter = outlier_filter
+        self.gpu_props = torch.cuda.get_device_properties(0)
+        self.gpu_properties = self.gpu_props  # For backward compatibility
         self.theoretical_bandwidth_gb_s = self._get_theoretical_bandwidth()
         # Create CUDA events for precise timing
         self.start_event = torch.cuda.Event(enable_timing=True)
@@ -72,12 +476,38 @@ class BenchmarkTimer:
         return 500  # Conservative default
     
     def calculate_flops(self, operation: str, tensor_size: int) -> float:
-        """Calculate FLOPs for operations"""
+        """Calculate FLOPs for different operations"""
         flop_counts = {
-            'add': tensor_size, 'sub': tensor_size, 'mul': tensor_size,
-            'div': tensor_size, 'pow': tensor_size * 2,
-            'relu': tensor_size, 'sigmoid': tensor_size * 4,
-            'tanh': tensor_size * 6
+            # Element-wise binary operations
+            'add': tensor_size, 'sub': tensor_size, 'multiply': tensor_size,
+            'divide': tensor_size, 'pow': tensor_size * 2,
+            
+            # Element-wise unary operations
+            'negate': tensor_size, 'sin': tensor_size * 4, 'cos': tensor_size * 4,
+            'log': tensor_size * 2, 'exp': tensor_size * 2, 'sqrt': tensor_size * 2,
+            
+            # Scalar operations
+            'add_scalar': tensor_size, 'mul_scalar': tensor_size,
+            'divide_scalar': tensor_size, 'pow_scalar': tensor_size * 2,
+            
+            # Activation functions
+            'relu': tensor_size, 'sigmoid': tensor_size * 4, 'tanh': tensor_size * 6,
+            'softmax_triton': tensor_size * 6, 'safe_softmax_triton': tensor_size * 6,
+            'dropout_triton': tensor_size,
+            
+            # Reduction operations
+            'sum': tensor_size, 'summation': tensor_size, 'max': tensor_size,
+            'logsumexp': tensor_size * 6,
+            
+            # Shape operations (memory-bound, minimal compute)
+            'transpose': 0, 'reshape': 0, 'expand': 0, 'view': 0, 'flatten': 0,
+            'broadcast_to': 0, 'squeeze': 0, 'unsqueeze': 0,
+            
+            # Tensor manipulation
+            'stack': tensor_size, 'cat': tensor_size, 'split': tensor_size,
+            
+            # Matrix operations
+            'matmul': tensor_size * 2,  # Simplified, actual depends on dimensions
         }
         return flop_counts.get(operation.lower(), tensor_size)
     
@@ -87,17 +517,36 @@ class BenchmarkTimer:
         if not tensor_sizes or time_ms <= 0:
             return 0
         
-        # Define read/write patterns for each operation
+        # Define read/write patterns for operations
         op_patterns = {
-            'add': (2, 1),     # 2 reads (A, B), 1 write (C)
-            'sub': (2, 1),     # 2 reads (A, B), 1 write (C)
-            'mul': (2, 1),     # 2 reads (A, B), 1 write (C)
-            'div': (2, 1),     # 2 reads (A, B), 1 write (C)
-            'pow': (1, 1),     # 1 read (A), 1 write (C)
-            'relu': (1, 1),    # 1 read (A), 1 write (C)
-            'sigmoid': (1, 1), # 1 read (A), 1 write (C)
-            'tanh': (1, 1),    # 1 read (A), 1 write (C)
-            'silu': (1, 1),    # 1 read (A), 1 write (C)
+            # Binary element-wise: 2 reads, 1 write
+            'add': (2, 1), 'sub': (2, 1), 'multiply': (2, 1), 'divide': (2, 1),
+            
+            # Unary operations: 1 read, 1 write
+            'pow': (1, 1), 'negate': (1, 1), 'sin': (1, 1), 'cos': (1, 1),
+            'log': (1, 1), 'exp': (1, 1), 'sqrt': (1, 1),
+            'relu': (1, 1), 'sigmoid': (1, 1), 'tanh': (1, 1),
+            
+            # Scalar operations: 1 read, 1 write
+            'add_scalar': (1, 1), 'mul_scalar': (1, 1),
+            'divide_scalar': (1, 1), 'pow_scalar': (1, 1),
+            
+            # Triton fused operations
+            'softmax_triton': (1, 1), 'safe_softmax_triton': (1, 1), 'dropout_triton': (1, 1),
+            
+            # Reductions: 1 read, smaller write
+            'sum': (1, 0.1), 'summation': (1, 0.1), 'max': (1, 0.1), 'logsumexp': (1, 0.1),
+            
+            # Shape ops: varies
+            'transpose': (1, 1), 'reshape': (0, 0), 'view': (0, 0),
+            'expand': (1, 1), 'broadcast_to': (1, 1),
+            'flatten': (0, 0), 'squeeze': (0, 0), 'unsqueeze': (0, 0),
+            
+            # Tensor manipulation
+            'stack': (1, 1), 'cat': (1, 1), 'split': (1, 1),
+            
+            # Matrix operations
+            'matmul': (2, 1),
         }
         
         reads, writes = op_patterns.get(operation.lower(), (1, 1))
@@ -155,24 +604,54 @@ class BenchmarkTimer:
         if not times:
             return {'mean': float('inf'), 'std': 0, 'min': float('inf'),
                    'max': float('inf'), 'median': float('inf'),
-                   'gflops': 0, 'bandwidth_gb_s': 0}
+                   'gflops': 0, 'bandwidth_gb_s': 0,
+                   'reliability_score': 0.0, 'outliers_removed': 0}
         
-        mean_time = np.mean(times)
+        # Apply outlier filtering if enabled
+        if self.outlier_filter and len(times) >= 5:
+            # Use more conservative outlier detection for GPU timing
+            # GPU measurements often have systematic timing variations
+            filtered_times, outlier_info = filter_outliers(times, method='iqr', iqr_factor=2.5)
+            # Print warning if too many outliers detected (raised threshold)
+            if outlier_info['outlier_percentage'] > 30:
+                print(f"  ⚠️  Warning: {outlier_info['outlier_percentage']:.1f}% outliers removed ({outlier_info['outliers_removed']}/{outlier_info['original_count']})")
+        else:
+            filtered_times = times
+            outlier_info = {'outliers_removed': 0, 'original_count': len(times)}
+        
+        if not filtered_times:
+            return {'mean': float('inf'), 'std': 0, 'min': float('inf'),
+                   'max': float('inf'), 'median': float('inf'),
+                   'gflops': 0, 'bandwidth_gb_s': 0,
+                   'reliability_score': 0.0, 'outliers_removed': 0}
+        
+        # Use median instead of mean for more robust statistics
+        median_time = np.median(filtered_times)
+        mean_time = np.mean(filtered_times)
+        std_time = np.std(filtered_times)
+        
+        # Calculate reliability score based on coefficient of variation and sample size
+        cv = std_time / mean_time if mean_time > 0 else float('inf')
+        reliability_score = max(0, 1.0 - min(cv, 1.0)) * min(1.0, len(filtered_times) / 10.0)
+        
         tensor_size = tensor_sizes[0] if tensor_sizes else 0
         
-        # Calculate professional metrics
+        # Calculate professional metrics using median (more robust)
         flops = self.calculate_flops(operation, tensor_size)
-        gflops = (flops / 1e9) / (mean_time / 1000) if mean_time > 0 else 0
-        bandwidth = self.calculate_memory_bandwidth(operation, tensor_sizes, mean_time, 4)  # Default to float32
+        gflops = (flops / 1e9) / (median_time / 1000) if median_time > 0 else 0
+        bandwidth = self.calculate_memory_bandwidth(operation, tensor_sizes, median_time, 4)  # Default to float32
         
         return {
             'mean': mean_time,
-            'std': np.std(times),
-            'min': np.min(times),
-            'max': np.max(times),
-            'median': np.median(times),
+            'median': median_time,
+            'std': std_time,
+            'min': np.min(filtered_times),
+            'max': np.max(filtered_times),
             'gflops': gflops,
-            'bandwidth_gb_s': bandwidth
+            'bandwidth_gb_s': bandwidth,
+            'reliability_score': reliability_score,
+            'outliers_removed': outlier_info['outliers_removed'],
+            'coefficient_of_variation': cv
         }
 
     def benchmark_pure_compute(self, fn, operation: str = "unknown", 
@@ -290,8 +769,20 @@ def categorize_performance(efficiency: float) -> Tuple[str, str]:
         return "❌ CRITICAL", "Major performance issues"
 
 def format_results(results: Dict[str, float]) -> str:
-    """Format benchmark results"""
-    return f"{results['mean']:.3f}±{results['std']:.3f}ms"
+    """Format benchmark results using median for more reliability"""
+    median_time = results.get('median', results.get('mean', 0))
+    std_time = results.get('std', 0)
+    reliability = results.get('reliability_score', 1.0)
+    
+    # Use different formatting based on reliability
+    if reliability > 0.8:
+        status_indicator = ""
+    elif reliability > 0.5:
+        status_indicator = "~"
+    else:
+        status_indicator = "?"
+    
+    return f"{median_time:.3f}±{std_time:.3f}ms{status_indicator}"
 
 def print_professional_header():
     """Print professional result table header"""
@@ -301,14 +792,27 @@ def print_professional_header():
 
 def print_professional_row(shape: Tuple[int, ...], pytorch_result: Dict, 
                           genesis_real_result: Dict, genesis_pure_result: Dict, operation: str):
-    """Print formatted result row with dual performance metrics"""
-    real_speedup = pytorch_result['mean'] / genesis_real_result['mean'] if genesis_real_result['mean'] > 0 else 0
-    pure_speedup = pytorch_result['mean'] / genesis_pure_result['mean'] if genesis_pure_result['mean'] > 0 else 0
+    """Print formatted result row with dual performance metrics and reliability indicators"""
+    # Use median for more reliable comparison
+    pytorch_time = pytorch_result.get('median', pytorch_result.get('mean', float('inf')))
+    genesis_real_time = genesis_real_result.get('median', genesis_real_result.get('mean', float('inf')))
+    genesis_pure_time = genesis_pure_result.get('median', genesis_pure_result.get('mean', float('inf')))
+    
+    real_speedup = pytorch_time / genesis_real_time if genesis_real_time > 0 else 0
+    pure_speedup = pytorch_time / genesis_pure_time if genesis_pure_time > 0 else 0
     
     # Calculate relative efficiency vs PyTorch 
     relative_efficiency = real_speedup * 100  # Convert speedup to percentage
     
     status, _ = categorize_performance(real_speedup)  # Use real performance for status
+    
+    # Add reliability indicators
+    pytorch_reliability = pytorch_result.get('reliability_score', 1.0)
+    genesis_reliability = genesis_real_result.get('reliability_score', 1.0)
+    
+    # Add warning for low reliability
+    if pytorch_reliability < 0.5 or genesis_reliability < 0.5:
+        status = "⚠️  " + status
     
     shape_str = "×".join(map(str, shape))
     if len(shape_str) > 14:
@@ -317,7 +821,7 @@ def print_professional_row(shape: Tuple[int, ...], pytorch_result: Dict,
     tensor_size = np.prod(shape)
     
     print(f"{shape_str:<15} {format_size(tensor_size):<8} "
-          f"{pytorch_result['mean']:.3f}ms{'':<2} {genesis_real_result['mean']:.3f}ms{'':<4} {genesis_pure_result['mean']:.3f}ms{'':<4} "
+          f"{pytorch_time:.3f}ms{'':<2} {genesis_real_time:.3f}ms{'':<4} {genesis_pure_time:.3f}ms{'':<4} "
           f"{real_speedup:.2f}x{'':<7} {pure_speedup:.2f}x{'':<7} "
           f"{relative_efficiency:.1f}%{'':<8} {status:<15}")
 
@@ -1009,6 +1513,479 @@ def benchmark_activation_functions_professional(shapes_dict: Dict[str, List[Tupl
         all_results[category] = category_results
     
     return all_results
+
+class ComprehensiveBenchmarkRunner:
+    """Main benchmark runner for all operations"""
+    
+    def __init__(self, warmup_iters: int = 20, test_iters: int = 100):
+        self.timer = BenchmarkTimer(warmup_iters, test_iters)
+        self.registry = ComprehensiveOpRegistry()
+        self.results = []
+    
+    def _create_test_data(self, shape: Tuple[int, ...], dtype=torch.float32):
+        """Create test data for benchmarking"""
+        np_data = np.random.randn(*shape).astype(np.float32)
+        torch_data = torch.from_numpy(np_data).to(dtype).cuda()
+        genesis_data = genesis.tensor(np_data, device=genesis.cuda())
+        return np_data, torch_data, genesis_data
+    
+    def _benchmark_operation(self, op_spec: OpSpec, shape: Tuple[int, ...], 
+                           dtype=torch.float32, timing_mode="real"):
+        """Benchmark a single operation"""
+        try:
+            # Create test data
+            np_data, torch_data, genesis_data = self._create_test_data(shape, dtype)
+            
+            # Create second tensor if needed
+            if op_spec.requires_second_tensor:
+                if op_spec.name == "matmul":
+                    # Special case for matmul - ensure compatible shapes
+                    second_shape = (shape[-1], shape[-1]) if len(shape) >= 2 else (shape[0], shape[0])
+                else:
+                    second_shape = shape
+                    
+                _, torch_data2, genesis_data2 = self._create_test_data(second_shape, dtype)
+            
+            tensor_size = np.prod(shape)
+            tensor_sizes = [tensor_size]
+            
+            # Prepare arguments
+            if op_spec.requires_second_tensor:
+                torch_args = (torch_data, torch_data2)
+                genesis_args = (genesis_data, genesis_data2)
+            elif op_spec.requires_scalar:
+                scalar = op_spec.special_args.get("scalar", 2.0)
+                torch_args = (torch_data,)
+                genesis_args = (genesis_data, scalar)
+            else:
+                torch_args = (torch_data,)
+                genesis_args = (genesis_data,)
+            
+            # Run benchmarks
+            pytorch_result = self.timer.benchmark(
+                op_spec.torch_func, op_spec.name, tensor_sizes, *torch_args
+            )
+            
+            if timing_mode == "pure":
+                genesis_result = self.timer.benchmark_pure_compute(
+                    op_spec.genesis_func, op_spec.name, tensor_sizes, *genesis_args
+                )
+            else:
+                genesis_result = self.timer.benchmark(
+                    op_spec.genesis_func, op_spec.name, tensor_sizes, *genesis_args
+                )
+            
+            # Calculate metrics
+            speedup = pytorch_result['mean'] / genesis_result['mean'] if genesis_result['mean'] > 0 else 0
+            efficiency = min(speedup, 1.0)  # Cap at 100%
+            
+            # Determine status
+            if speedup >= 0.9:
+                status = "🟢 EXCELLENT"
+            elif speedup >= 0.7:
+                status = "🟡 GOOD"
+            elif speedup >= 0.5:
+                status = "🟠 FAIR"
+            elif speedup >= 0.2:
+                status = "🔴 POOR"
+            else:
+                status = "❌ CRITICAL"
+            
+            return {
+                'operation': op_spec.name,
+                'category': op_spec.category.value,
+                'shape': shape,
+                'pytorch_time_ms': pytorch_result['mean'],
+                'genesis_time_ms': genesis_result['mean'],
+                'speedup': speedup,
+                'efficiency': efficiency,
+                'gflops': genesis_result['gflops'],
+                'bandwidth_gb_s': genesis_result['bandwidth_gb_s'],
+                'status': status,
+                'error': None
+            }
+            
+        except Exception as e:
+            return {
+                'operation': op_spec.name,
+                'category': op_spec.category.value,
+                'shape': shape,
+                'pytorch_time_ms': float('inf'),
+                'genesis_time_ms': float('inf'),
+                'speedup': 0,
+                'efficiency': 0,
+                'gflops': 0,
+                'bandwidth_gb_s': 0,
+                'status': "❌ ERROR",
+                'error': str(e)
+            }
+        finally:
+            # Clean up
+            gc.collect()
+            torch.cuda.empty_cache()
+    
+    def _format_size(self, size: int) -> str:
+        """Format tensor size in human readable form"""
+        if size >= 1e9:
+            return f"{size/1e9:.1f}B"
+        elif size >= 1e6:
+            return f"{size/1e6:.1f}M"
+        elif size >= 1e3:
+            return f"{size/1e3:.1f}K"
+        else:
+            return str(size)
+    
+    def _print_result_row(self, result):
+        """Print a formatted result row"""
+        shape_str = "×".join(map(str, result['shape']))
+        if len(shape_str) > 18:
+            shape_str = shape_str[:15] + "..."
+        
+        size_str = self._format_size(np.prod(result['shape']))
+        
+        if result['error']:
+            print(f"  {shape_str:<20} {size_str:<8} ERROR: {result['error'][:50]}")
+        else:
+            print(f"  {shape_str:<20} {size_str:<8} "
+                  f"PyTorch: {result['pytorch_time_ms']:.3f}ms | "
+                  f"Genesis: {result['genesis_time_ms']:.3f}ms | "
+                  f"Speedup: {result['speedup']:.2f}x | "
+                  f"BW: {result['bandwidth_gb_s']:.1f}GB/s | {result['status']}")
+    
+    def benchmark_category(self, category_name: str, max_shapes_per_op: Optional[int] = None,
+                          timing_mode: str = "real"):
+        """Benchmark all operations in a category"""
+        try:
+            category = OpCategory(category_name)
+        except ValueError:
+            print(f"❌ Invalid category: {category_name}")
+            return []
+        
+        operations = self.registry.get_operations_by_category(category)
+        category_results = []
+        
+        print(f"\n{'='*100}")
+        print(f"BENCHMARKING {category.value.upper().replace('_', ' ')} OPERATIONS ({timing_mode.upper()} TIMING)")
+        print(f"{'='*100}")
+        
+        for op_name, op_spec in operations.items():
+            print(f"\n🔧 Testing {op_name}: {op_spec.description}")
+            
+            shapes_to_test = op_spec.test_shapes
+            if max_shapes_per_op:
+                shapes_to_test = shapes_to_test[:max_shapes_per_op]
+            
+            for shape in shapes_to_test:
+                result = self._benchmark_operation(op_spec, shape, timing_mode=timing_mode)
+                category_results.append(result)
+                self._print_result_row(result)
+        
+        self.results.extend(category_results)
+        return category_results
+    
+    def benchmark_operation(self, op_name: str, max_shapes: Optional[int] = None,
+                          timing_mode: str = "real"):
+        """Benchmark a specific operation"""
+        # Try exact match first
+        op_spec = self.registry.get_operation(op_name)
+        if not op_spec:
+            # Try partial match
+            matching_ops = self.registry.filter_operations_by_name(op_name)
+            if not matching_ops:
+                print(f"❌ Operation '{op_name}' not found")
+                return []
+            elif len(matching_ops) == 1:
+                op_spec = list(matching_ops.values())[0]
+                op_name = list(matching_ops.keys())[0]
+            else:
+                print(f"❌ Multiple operations match '{op_name}': {list(matching_ops.keys())}")
+                return []
+        
+        print(f"\n{'='*100}")
+        print(f"BENCHMARKING {op_name.upper()} OPERATION ({timing_mode.upper()} TIMING)")
+        print(f"{'='*100}")
+        print(f"Description: {op_spec.description}")
+        print(f"Category: {op_spec.category.value}")
+        
+        shapes_to_test = op_spec.test_shapes
+        if max_shapes:
+            shapes_to_test = shapes_to_test[:max_shapes]
+        
+        op_results = []
+        for shape in shapes_to_test:
+            result = self._benchmark_operation(op_spec, shape, timing_mode=timing_mode)
+            op_results.append(result)
+            self._print_result_row(result)
+        
+        self.results.extend(op_results)
+        return op_results
+    
+    def benchmark_all(self, max_shapes_per_op: Optional[int] = None,
+                     timing_mode: str = "real"):
+        """Benchmark all operations"""
+        print(f"🚀 COMPREHENSIVE GENESIS OPERATIONS BENCHMARK ({timing_mode.upper()} TIMING)")
+        print(f"GPU: {self.timer.gpu_props.name}")
+        print(f"Memory: {self.timer.gpu_props.total_memory / 1024**3:.1f} GB")
+        print(f"Theoretical Bandwidth: {self.timer.theoretical_bandwidth_gb_s:.0f} GB/s")
+        
+        all_results = []
+        
+        # Benchmark each category
+        for category in OpCategory:
+            try:
+                category_results = self.benchmark_category(category.value, max_shapes_per_op, timing_mode)
+                all_results.extend(category_results)
+            except Exception as e:
+                print(f"⚠️  Category {category.value} failed: {e}")
+        
+        return all_results
+    
+    def generate_comprehensive_summary(self, results=None):
+        """Generate comprehensive benchmark summary"""
+        if results is None:
+            results = self.results
+        
+        if not results:
+            print("❌ No results to summarize")
+            return
+        
+        print(f"\n{'='*120}")
+        print("COMPREHENSIVE OPERATIONS BENCHMARK SUMMARY")
+        print(f"{'='*120}")
+        
+        # System information
+        print(f"\n📊 SYSTEM INFORMATION")
+        print(f"GPU: {self.timer.gpu_props.name}")
+        print(f"Memory: {self.timer.gpu_props.total_memory / 1024**3:.1f} GB")
+        print(f"Theoretical Bandwidth: {self.timer.theoretical_bandwidth_gb_s:.0f} GB/s")
+        
+        # Overall statistics
+        valid_results = [r for r in results if r['error'] is None and r['speedup'] > 0]
+        failed_results = [r for r in results if r['error'] is not None]
+        
+        if valid_results:
+            speedups = [r['speedup'] for r in valid_results]
+            bandwidths = [r['bandwidth_gb_s'] for r in valid_results if r['bandwidth_gb_s'] > 0]
+            
+            print(f"\n📈 OVERALL PERFORMANCE STATISTICS")
+            print(f"Total Operations Tested: {len(results)}")
+            print(f"Successful Tests: {len(valid_results)}")
+            print(f"Failed Tests: {len(failed_results)}")
+            print(f"Success Rate: {len(valid_results)/len(results)*100:.1f}%")
+            print(f"Average Speedup: {np.mean(speedups):.2f}x")
+            print(f"Median Speedup: {np.median(speedups):.2f}x")
+            print(f"Best Speedup: {np.max(speedups):.2f}x")
+            print(f"Worst Speedup: {np.min(speedups):.2f}x")
+            if bandwidths:
+                print(f"Average Bandwidth: {np.mean(bandwidths):.1f} GB/s")
+                print(f"Peak Bandwidth: {np.max(bandwidths):.1f} GB/s")
+                print(f"Bandwidth Efficiency: {np.mean(bandwidths)/self.timer.theoretical_bandwidth_gb_s*100:.1f}%")
+        
+        # Category breakdown
+        print(f"\n📊 PERFORMANCE BY CATEGORY")
+        print(f"{'Category':<20} {'Tests':<8} {'Success':<8} {'Avg Speedup':<12} {'Best':<8} {'Status':<15}")
+        print("-" * 85)
+        
+        categories = set(r['category'] for r in results)
+        for category in categories:
+            cat_results = [r for r in results if r['category'] == category]
+            cat_valid = [r for r in cat_results if r['error'] is None and r['speedup'] > 0]
+            
+            if cat_valid:
+                speedups = [r['speedup'] for r in cat_valid]
+                avg_speedup = np.mean(speedups)
+                best_speedup = np.max(speedups)
+                success_rate = len(cat_valid) / len(cat_results) * 100
+                
+                if avg_speedup >= 0.8:
+                    status = "🟢 EXCELLENT"
+                elif avg_speedup >= 0.6:
+                    status = "🟡 GOOD"
+                elif avg_speedup >= 0.4:
+                    status = "🟠 FAIR"
+                else:
+                    status = "🔴 POOR"
+                
+                print(f"{category:<20} {len(cat_results):<8} {success_rate:5.1f}%{'':<2} "
+                      f"{avg_speedup:.2f}x{'':<7} {best_speedup:.2f}x{'':<3} {status}")
+            else:
+                print(f"{category:<20} {len(cat_results):<8} {'0.0%':<7} {'N/A':<12} {'N/A':<8} {'❌ FAILED'}")
+        
+        # Top and bottom performers
+        if valid_results:
+            print(f"\n🏆 TOP 5 PERFORMERS")
+            top_performers = sorted(valid_results, key=lambda x: x['speedup'], reverse=True)[:5]
+            for i, result in enumerate(top_performers, 1):
+                shape_str = "×".join(map(str, result['shape']))
+                print(f"{i}. {result['operation']} ({shape_str}): {result['speedup']:.2f}x")
+            
+            print(f"\n⚠️  BOTTOM 5 PERFORMERS")
+            bottom_performers = sorted(valid_results, key=lambda x: x['speedup'])[:5]
+            for i, result in enumerate(bottom_performers, 1):
+                shape_str = "×".join(map(str, result['shape']))
+                print(f"{i}. {result['operation']} ({shape_str}): {result['speedup']:.2f}x - {result['status']}")
+        
+        print(f"\n✅ BENCHMARK COMPLETED")
+        success_rate = len(valid_results) / len(results) * 100 if results else 0
+        avg_performance = np.mean([r['speedup'] for r in valid_results]) if valid_results else 0
+        print(f"Overall Efficiency: {avg_performance*100:.1f}%")
+        print(f"Success Rate: {success_rate:.1f}%")
+
+
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Comprehensive Genesis Operations Benchmark",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python bench_ops.py                           # Full comprehensive benchmark
+    python bench_ops.py --fast                    # Quick test mode
+    python bench_ops.py --category element        # Test specific category
+    python bench_ops.py --op add                  # Test specific operation
+    python bench_ops.py --size medium             # Test medium-sized tensors
+    python bench_ops.py --timing pure             # Use pure compute timing
+    python bench_ops.py --op matmul --timing both # Test matmul with both timing modes
+        """
+    )
+    
+    parser.add_argument("--fast", action="store_true",
+                       help="Quick mode with reduced iterations and shapes")
+    parser.add_argument("--category", type=str, 
+                       choices=[cat.value for cat in OpCategory],
+                       help="Test specific category only")
+    parser.add_argument("--op", type=str,
+                       help="Test specific operation only (supports partial matching)")
+    parser.add_argument("--size", type=str, choices=["small", "medium", "large", "batch"],
+                       help="Test specific tensor size category")
+    parser.add_argument("--timing", type=str, choices=["real", "pure", "both"], default="real",
+                       help="Timing mode: real (with sync overhead), pure (batch timing), both")
+    parser.add_argument("--dtype", type=str, choices=["float32", "float16", "bfloat16"], 
+                       default="float32", help="Data type for testing")
+    parser.add_argument("--list-categories", action="store_true",
+                       help="List available categories and exit")
+    parser.add_argument("--list-ops", action="store_true",
+                       help="List available operations and exit")
+    parser.add_argument("--list-sizes", action="store_true",
+                       help="List available size categories and exit")
+    parser.add_argument("--no-outlier-filter", action="store_true",
+                       help="Disable outlier filtering (use all raw measurements)")
+    parser.add_argument("--outlier-method", type=str, choices=["iqr", "zscore", "gpu"], 
+                       default="iqr", help="Outlier detection method: iqr(conservative), zscore(statistical), gpu(extreme-only)")
+    parser.add_argument("--min-iterations", type=int, default=None,
+                       help="Minimum iterations for statistical reliability (overrides fast mode)")
+    parser.add_argument("--show-reliability", action="store_true",
+                       help="Show detailed reliability metrics in output")
+    
+    return parser.parse_args()
+
+
+def main():
+    """Main benchmark execution"""
+    args = parse_args()
+    
+    # Create registry for listing
+    registry = ComprehensiveOpRegistry()
+    
+    if args.list_categories:
+        print("Available Categories:")
+        print("=" * 60)
+        for category in OpCategory:
+            ops = registry.get_operations_by_category(category)
+            print(f"\n{category.value.upper().replace('_', ' ')} ({len(ops)} operations):")
+            for op_name in sorted(ops.keys()):
+                print(f"  • {op_name}")
+        return
+    
+    if args.list_ops:
+        print("Available Operations:")
+        print("=" * 60)
+        all_ops = registry.list_operations()
+        by_category = {}
+        for op_name in all_ops:
+            op_spec = registry.get_operation(op_name)
+            if op_spec:
+                cat = op_spec.category.value
+                if cat not in by_category:
+                    by_category[cat] = []
+                by_category[cat].append(op_name)
+        
+        for category in sorted(by_category.keys()):
+            print(f"\n{category.upper().replace('_', ' ')}:")
+            for op in sorted(by_category[category]):
+                print(f"  {op}")
+        
+        print(f"\nTotal: {len(all_ops)} operations")
+        return
+    
+    if args.list_sizes:
+        print("Available Size Categories:")
+        print("=" * 50)
+        shapes_dict = get_comprehensive_shapes()
+        for category, shapes in shapes_dict.items():
+            print(f"\n{category.upper()}:")
+            for shape in shapes:
+                size = np.prod(shape)
+                print(f"  - {shape} ({format_size(size)} elements)")
+        return
+    
+    # Configure benchmark
+    if args.fast:
+        warmup_iters, test_iters = 5, 20
+        max_shapes = 2
+        print("⚡ Fast mode: Reduced iterations and shapes")
+    else:
+        warmup_iters, test_iters = 20, 100
+        max_shapes = None
+    
+    # Override with minimum iterations if specified
+    if args.min_iterations:
+        test_iters = max(test_iters, args.min_iterations)
+        print(f"📊 Using minimum {test_iters} iterations for statistical reliability")
+    
+    # Configure outlier filtering
+    outlier_filter = not args.no_outlier_filter
+    if not outlier_filter:
+        print("⚠️  Outlier filtering disabled - using all raw measurements")
+    elif args.show_reliability:
+        print(f"📈 Using {args.outlier_method.upper()} outlier detection with reliability metrics")
+    
+    # Print configuration
+    mode = "FAST" if args.fast else "COMPREHENSIVE"
+    print(f"🚀 Genesis {mode} Operations Benchmark")
+    print("=" * 80)
+    
+    if args.op:
+        print(f"🎯 Testing operation: {args.op.upper()}")
+    if args.category:
+        print(f"📏 Testing category: {args.category.upper()}")
+    if args.timing != "real":
+        print(f"⏱️  Timing mode: {args.timing.upper()}")
+    if args.dtype != "float32":
+        print(f"🔢 Data type: {args.dtype.upper()}")
+    
+    # Create benchmark runner
+    runner = ComprehensiveBenchmarkRunner(warmup_iters, test_iters)
+    # Update outlier filtering setting
+    runner.timer.outlier_filter = outlier_filter
+    
+    # Run benchmarks
+    all_results = []
+    timing_modes = ["real", "pure"] if args.timing == "both" else [args.timing]
+    
+    for timing_mode in timing_modes:
+        if args.op:
+            results = runner.benchmark_operation(args.op, max_shapes, timing_mode)
+        elif args.category:
+            results = runner.benchmark_category(args.category, max_shapes, timing_mode)
+        else:
+            results = runner.benchmark_all(max_shapes, timing_mode)
+        
+        all_results.extend(results)
+    
+    # Generate summary
+    runner.generate_comprehensive_summary(all_results)
+
 
 if __name__ == "__main__":
     main()
