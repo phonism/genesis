@@ -1,104 +1,104 @@
-# 安装指南
+# Installation Guide
 
-本指南将帮助你在不同环境下安装Genesis深度学习框架。
+This guide will help you install the Genesis deep learning framework in different environments.
 
-## 📋 系统要求
+## 📋 System Requirements
 
-### 硬件要求
-- **CPU**: x86_64架构，支持AVX指令集
-- **内存**: 最少8GB，推荐16GB+
-- **GPU**: NVIDIA GPU with Compute Capability ≥ 6.0 (可选但推荐)
-- **存储**: 2GB可用空间
+### Hardware Requirements
+- **CPU**: x86_64 architecture with AVX instruction set support
+- **Memory**: Minimum 8GB, recommended 16GB+
+- **GPU**: NVIDIA GPU with Compute Capability ≥ 6.0 (optional but recommended)
+- **Storage**: 2GB available space
 
-### 软件要求
-- **操作系统**: Linux (Ubuntu 20.04+), macOS (10.15+), Windows 10+
+### Software Requirements
+- **Operating System**: Linux (Ubuntu 20.04+), macOS (10.15+), Windows 10+
 - **Python**: 3.8, 3.9, 3.10, 3.11
-- **CUDA**: 11.0+ (GPU加速需要)
+- **CUDA**: 11.0+ (required for GPU acceleration)
 
-## 🚀 快速安装
+## 🚀 Quick Installation
 
-### 方式一：从源码安装 (推荐)
+### Method 1: Install from Source (Recommended)
 
 ```bash
-# 1. 克隆仓库
+# 1. Clone the repository
 git clone https://github.com/phonism/genesis.git
 cd genesis
 
-# 2. 创建虚拟环境 (推荐)
+# 2. Create virtual environment (recommended)
 python -m venv genesis-env
 source genesis-env/bin/activate  # Linux/macOS
 # genesis-env\\Scripts\\activate  # Windows
 
-# 3. 安装依赖
+# 3. Install dependencies
 pip install -r genesis/requirements.txt
 
-# 4. 安装Genesis
+# 4. Install Genesis
 pip install -e genesis/
 ```
 
-### 方式二：使用pip安装
+### Method 2: Install via pip
 
 ```bash
-# 安装发布版本
+# Install release version
 pip install genesis-dl
 
-# 安装预发布版本
+# Install pre-release version
 pip install --pre genesis-dl
 ```
 
-## 🔧 详细安装步骤
+## 🔧 Detailed Installation Steps
 
-### 第一步：准备Python环境
+### Step 1: Prepare Python Environment
 
 === "Ubuntu/Debian"
     ```bash
-    # 安装Python和pip
+    # Install Python and pip
     sudo apt update
     sudo apt install python3.9 python3.9-pip python3.9-venv
     
-    # 创建软链接 (可选)
+    # Create symbolic link (optional)
     sudo ln -sf /usr/bin/python3.9 /usr/bin/python
     ```
 
 === "CentOS/RHEL"
     ```bash
-    # 安装EPEL仓库
+    # Install EPEL repository
     sudo yum install epel-release
     
-    # 安装Python
+    # Install Python
     sudo yum install python39 python39-pip
     ```
 
 === "macOS"
     ```bash
-    # 使用Homebrew安装
+    # Install using Homebrew
     brew install python@3.9
     
-    # 或使用官方安装包
-    # 从 https://python.org 下载安装
+    # Or use official installer
+    # Download from https://python.org
     ```
 
 === "Windows"
     ```powershell
-    # 下载Python安装包
+    # Download Python installer
     # https://python.org/downloads/windows/
     
-    # 或使用Chocolatey
+    # Or use Chocolatey
     choco install python39
     ```
 
-### 第二步：安装CUDA (GPU加速)
+### Step 2: Install CUDA (GPU Acceleration)
 
-!!! note "GPU支持说明"
-    如果你只需要CPU版本，可以跳过此步骤。但强烈推荐安装CUDA以获得最佳性能。
+!!! note "GPU Support Note"
+    You can skip this step if you only need CPU version. However, installing CUDA is strongly recommended for optimal performance.
 
 === "Ubuntu/Debian"
     ```bash
-    # 下载CUDA Toolkit
+    # Download CUDA Toolkit
     wget https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
     sudo sh cuda_11.8.0_520.61.05_linux.run
     
-    # 设置环境变量
+    # Set environment variables
     echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
     echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
     source ~/.bashrc
@@ -106,141 +106,141 @@ pip install --pre genesis-dl
 
 === "CentOS/RHEL"
     ```bash
-    # 安装NVIDIA驱动仓库
+    # Install NVIDIA driver repository
     sudo yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
     
-    # 安装CUDA
+    # Install CUDA
     sudo yum install cuda-11-8
     ```
 
 === "Windows"
     ```powershell
-    # 下载CUDA安装包
+    # Download CUDA installer
     # https://developer.nvidia.com/cuda-downloads
     
-    # 运行安装程序并按照提示操作
+    # Run the installer and follow the prompts
     ```
 
-### 第三步：安装核心依赖
+### Step 3: Install Core Dependencies
 
 ```bash
-# 创建并激活虚拟环境
+# Create and activate virtual environment
 python -m venv genesis-env
 source genesis-env/bin/activate
 
-# 升级pip
+# Upgrade pip
 pip install --upgrade pip setuptools wheel
 
-# 安装PyTorch (根据你的CUDA版本选择)
+# Install PyTorch (choose based on your CUDA version)
 # CUDA 11.8
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-# CPU版本
+# CPU version
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-# 安装Triton
+# Install Triton
 pip install triton
 
-# 安装其他依赖
+# Install other dependencies
 pip install numpy matplotlib tqdm
 ```
 
-### 第四步：安装Genesis
+### Step 4: Install Genesis
 
 ```bash
-# 克隆源码
+# Clone source code
 git clone https://github.com/phonism/genesis.git
 cd genesis
 
-# 查看可用版本
+# View available versions
 git tag
 
-# 切换到稳定版本 (可选)
+# Switch to stable version (optional)
 git checkout v0.1.0
 
-# 安装Genesis
+# Install Genesis
 pip install -e genesis/
 ```
 
-## ✅ 验证安装
+## ✅ Verify Installation
 
-运行以下代码验证安装是否成功：
+Run the following code to verify that the installation was successful:
 
 ```python
 #!/usr/bin/env python3
-"""Genesis安装验证脚本"""
+"""Genesis installation verification script"""
 
 def test_basic_import():
-    """测试基础导入"""
+    """Test basic import"""
     try:
         import genesis
-        print("✅ Genesis导入成功")
-        print(f"   版本: {genesis.__version__}")
+        print("✅ Genesis import successful")
+        print(f"   Version: {genesis.__version__}")
     except ImportError as e:
-        print(f"❌ Genesis导入失败: {e}")
+        print(f"❌ Genesis import failed: {e}")
         return False
     return True
 
 def test_tensor_operations():
-    """测试张量操作"""
+    """Test tensor operations"""
     try:
         import genesis
         
-        # 创建张量
+        # Create tensors
         x = genesis.randn(3, 4)
         y = genesis.randn(3, 4)
         
-        # 基础运算
+        # Basic operations
         z = x + y
-        print("✅ 张量运算正常")
-        print(f"   张量形状: {z.shape}")
+        print("✅ Tensor operations normal")
+        print(f"   Tensor shape: {z.shape}")
     except Exception as e:
-        print(f"❌ 张量运算失败: {e}")
+        print(f"❌ Tensor operations failed: {e}")
         return False
     return True
 
 def test_neural_networks():
-    """测试神经网络模块"""
+    """Test neural network modules"""
     try:
         import genesis.nn as nn
         
-        # 创建简单模型
+        # Create simple model
         model = nn.Sequential(
             nn.Linear(10, 5),
             nn.ReLU(),
             nn.Linear(5, 1)
         )
         
-        # 测试前向传播
+        # Test forward pass
         x = genesis.randn(2, 10)
         y = model(x)
-        print("✅ 神经网络模块正常")
-        print(f"   输出形状: {y.shape}")
+        print("✅ Neural network modules normal")
+        print(f"   Output shape: {y.shape}")
     except Exception as e:
-        print(f"❌ 神经网络模块失败: {e}")
+        print(f"❌ Neural network modules failed: {e}")
         return False
     return True
 
 def test_cuda_support():
-    """测试CUDA支持"""
+    """Test CUDA support"""
     try:
         import genesis
         
         if genesis.cuda.is_available():
             device = genesis.device('cuda')
             x = genesis.randn(10, 10, device=device)
-            print("✅ CUDA支持正常")
-            print(f"   GPU设备数量: {genesis.cuda.device_count()}")
-            print(f"   GPU名称: {genesis.cuda.get_device_name()}")
+            print("✅ CUDA support normal")
+            print(f"   GPU device count: {genesis.cuda.device_count()}")
+            print(f"   GPU name: {genesis.cuda.get_device_name()}")
         else:
-            print("⚠️  CUDA不可用 (将使用CPU)")
+            print("⚠️  CUDA unavailable (will use CPU)")
     except Exception as e:
-        print(f"❌ CUDA测试失败: {e}")
+        print(f"❌ CUDA test failed: {e}")
         return False
     return True
 
 def test_autograd():
-    """测试自动微分"""
+    """Test automatic differentiation"""
     try:
         import genesis
         
@@ -248,15 +248,15 @@ def test_autograd():
         y = (x ** 2).sum()
         y.backward()
         
-        print("✅ 自动微分正常")
-        print(f"   梯度形状: {x.grad.shape}")
+        print("✅ Automatic differentiation normal")
+        print(f"   Gradient shape: {x.grad.shape}")
     except Exception as e:
-        print(f"❌ 自动微分失败: {e}")
+        print(f"❌ Automatic differentiation failed: {e}")
         return False
     return True
 
 if __name__ == "__main__":
-    print("🔍 Genesis安装验证\n")
+    print("🔍 Genesis Installation Verification\n")
     
     tests = [
         test_basic_import,
@@ -274,171 +274,171 @@ if __name__ == "__main__":
             passed += 1
         print()
     
-    print(f"📊 测试结果: {passed}/{total} 通过")
+    print(f"📊 Test Results: {passed}/{total} passed")
     
     if passed == total:
-        print("🎉 恭喜！Genesis安装成功，所有功能正常！")
+        print("🎉 Congratulations! Genesis installation successful, all features working!")
     else:
-        print("⚠️  部分功能异常，请检查安装步骤")
+        print("⚠️  Some features abnormal, please check installation steps")
 ```
 
-将上述代码保存为 `test_installation.py` 并运行：
+Save the above code as `test_installation.py` and run:
 
 ```bash
 python test_installation.py
 ```
 
-## 🔧 常见问题解决
+## 🔧 Common Issues and Solutions
 
-### 问题1：CUDA版本不匹配
+### Issue 1: CUDA Version Mismatch
 
-**错误信息**：
+**Error Message**:
 ```
 RuntimeError: CUDA version mismatch
 ```
 
-**解决方案**：
+**Solution**:
 ```bash
-# 检查系统CUDA版本
+# Check system CUDA version
 nvidia-smi
 
-# 检查PyTorch CUDA版本
+# Check PyTorch CUDA version
 python -c "import torch; print(torch.version.cuda)"
 
-# 重新安装匹配版本的PyTorch
+# Reinstall matching PyTorch version
 pip uninstall torch torchvision torchaudio
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### 问题2：Triton编译失败
+### Issue 2: Triton Compilation Failure
 
-**错误信息**：
+**Error Message**:
 ```
 Failed to compile Triton kernel
 ```
 
-**解决方案**：
+**Solution**:
 ```bash
-# 升级Triton
+# Upgrade Triton
 pip install --upgrade triton
 
-# 或安装开发版本
+# Or install development version
 pip install --pre triton
 ```
 
-### 问题3：内存不足
+### Issue 3: Out of Memory
 
-**错误信息**：
+**Error Message**:
 ```
 CUDA out of memory
 ```
 
-**解决方案**：
+**Solution**:
 ```python
 import genesis
 
-# 启用内存优化
+# Enable memory optimization
 genesis.cuda.empty_cache()
 
-# 减小批量大小
-batch_size = 16  # 替代原来的32
+# Reduce batch size
+batch_size = 16  # Instead of 32
 
-# 启用梯度检查点 (如果支持)
+# Enable gradient checkpointing (if supported)
 model.gradient_checkpointing = True
 ```
 
-### 问题4：导入错误
+### Issue 4: Import Error
 
-**错误信息**：
+**Error Message**:
 ```
 ModuleNotFoundError: No module named 'genesis'
 ```
 
-**解决方案**：
+**Solution**:
 ```bash
-# 检查虚拟环境
+# Check virtual environment
 which python
 pip list | grep genesis
 
-# 重新安装
+# Reinstall
 pip uninstall genesis-dl
 pip install -e genesis/
 ```
 
-## 🐳 Docker安装
+## 🐳 Docker Installation
 
-如果你遇到环境问题，可以使用Docker：
+If you encounter environment issues, you can use Docker:
 
 ```bash
-# 下载预构建镜像
+# Download pre-built image
 docker pull genesis/genesis:latest
 
-# 或构建自己的镜像
+# Or build your own image
 git clone https://github.com/phonism/genesis.git
 cd genesis
 docker build -t genesis:local .
 
-# 运行容器
+# Run container
 docker run -it --gpus all genesis:local bash
 ```
 
-Dockerfile内容：
+Dockerfile contents:
 ```dockerfile
 FROM nvidia/cuda:11.8-devel-ubuntu22.04
 
-# 设置环境变量
+# Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/opt/conda/bin:$PATH"
 
-# 安装系统依赖
+# Install system dependencies
 RUN apt-get update && apt-get install -y \\
     wget git build-essential && \\
     rm -rf /var/lib/apt/lists/*
 
-# 安装Miniconda
+# Install Miniconda
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \\
     bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda && \\
     rm Miniconda3-latest-Linux-x86_64.sh
 
-# 创建环境并安装依赖
+# Create environment and install dependencies
 RUN conda create -n genesis python=3.9 -y
 SHELL ["conda", "run", "-n", "genesis", "/bin/bash", "-c"]
 
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 && \\
     pip install triton numpy matplotlib tqdm
 
-# 复制并安装Genesis
+# Copy and install Genesis
 COPY . /workspace/genesis
 WORKDIR /workspace/genesis
 RUN pip install -e genesis/
 
-# 设置启动命令
+# Set startup command
 ENTRYPOINT ["conda", "run", "-n", "genesis"]
 CMD ["bash"]
 ```
 
-## 📊 性能优化建议
+## 📊 Performance Optimization Tips
 
-安装完成后，可以通过以下方式优化性能：
+After installation, you can optimize performance with:
 
 ```bash
-# 设置环境变量
-export CUDA_VISIBLE_DEVICES=0  # 指定GPU
+# Set environment variables
+export CUDA_VISIBLE_DEVICES=0  # Specify GPU
 export PYTHONPATH=$PWD:$PYTHONPATH
 
-# 启用优化选项
+# Enable optimization options
 export GENESIS_OPTIMIZE=1
 export TRITON_CACHE_DIR=/tmp/triton_cache
 ```
 
-## 🎯 下一步
+## 🎯 Next Steps
 
-安装完成后，建议：
+After installation, it's recommended to:
 
-1. [**运行第一个程序**](first-steps.md) - 验证安装并学习基础用法
-2. [**查看教程**](../tutorials/basic-training.md) - 系统学习Genesis的使用
-3. [**阅读架构文档**](../architecture/index.md) - 理解框架设计理念
+1. [**Run your first program**](first-steps.md) - Verify installation and learn basic usage
+2. [**Check tutorials**](../tutorials/basic-training.md) - Systematically learn Genesis usage
+3. [**Read architecture documentation**](../architecture/index.md) - Understand framework design principles
 
 ---
 
-如果在安装过程中遇到问题，请查看[FAQ](../contributing/index.md#faq)或在GitHub上提交issue。
+If you encounter problems during installation, please check the [FAQ](../contributing/index.md#faq) or submit an issue on GitHub.

@@ -1,15 +1,15 @@
-# 数据类型系统
+# Data Type System
 
-Genesis实现了一套统一的数据类型系统，提供与PyTorch对齐的类型管理，支持混合精度训练和跨设备类型转换。
+Genesis implements a unified data type system that provides PyTorch-aligned type management, supporting mixed precision training and cross-device type conversion.
 
-## 🎯 设计目标
+## 🎯 Design Goals
 
-- **统一接口**：CPU和GPU后端使用相同的类型定义
-- **PyTorch兼容**：与PyTorch的dtype系统保持一致性
-- **混合精度**：无缝支持FP16、BF16等混合精度训练
-- **类型安全**：编译时和运行时的类型检查
+- **Unified Interface**: CPU and GPU backends use the same type definitions
+- **PyTorch Compatibility**: Maintain consistency with PyTorch's dtype system
+- **Mixed Precision**: Seamless support for FP16, BF16 and other mixed precision training
+- **Type Safety**: Compile-time and runtime type checking
 
-## 🏗️ 核心架构
+## 🏗️ Core Architecture
 
 ```mermaid
 graph TB

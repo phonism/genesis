@@ -1,28 +1,28 @@
-# Genesis 性能优化指南
+# Genesis Performance Optimization Guide
 
-## 概述
+## Overview
 
-本文档提供Genesis框架的性能特征、当前实现状态和优化策略的全面指南。Genesis设计为轻量级深度学习框架，在保持教育价值的同时追求竞争性能。
+This document provides a comprehensive guide to the performance characteristics, current implementation status, and optimization strategies of the Genesis framework. Genesis is designed as a lightweight deep learning framework that pursues competitive performance while maintaining educational value.
 
-## 当前性能状态
+## Current Performance Status
 
-### 元素操作 (ADD) 基准测试结果
+### Element-wise Operation (ADD) Benchmark Results
 
-**测试环境:**
+**Test Environment:**
 - GPU: NVIDIA A800-SXM4-80GB
-- 显存: 79.3 GB
-- 理论带宽: 1555 GB/s
-- 测试日期: 2025年8月
+- Memory: 79.3 GB
+- Theoretical Bandwidth: 1555 GB/s
+- Test Date: August 2025
 
-**性能总结:**
-- **平均效率**: 18.0% 理论带宽利用率
-- **最佳性能**: 33.1% (批处理张量)
-- **最差性能**: 3.1% (大张量)
-- **整体状态**: 开发阶段
+**Performance Summary:**
+- **Average Efficiency**: 18.0% theoretical bandwidth utilization
+- **Best Performance**: 33.1% (batch tensors)
+- **Worst Performance**: 3.1% (large tensors)
+- **Overall Status**: Development phase
 
-### 按张量大小分类的性能
+### Performance by Tensor Size Category
 
-| 类别 | 平均效率 | 状态 | vs PyTorch |
+| Category | Average Efficiency | Status | vs PyTorch |
 |------|---------|------|------------|
 | 小张量 (64K-262K) | 18.9% | ❌ 严重 | 0.19x |
 | 中等张量 (4.2M) | 29.6% | 🔴 较差 | 0.27-0.32x |

@@ -298,19 +298,29 @@ class CUDAMemoryManager:
         # Initialize CUDA and context
         self._init_cuda()
         
-        # Initialize segments, cache, and statistics
+        # Phase 2: Bucket caching for small allocations
+        self.free_blocks = defaultdict(list)  # size -> [ptr_list] 
+        self.active_blocks = {}  # ptr -> size
+        self.lock = threading.RLock()
+        
+        # Phase 3: Block allocator for large allocations
         self.segments: List[Segment] = []
         self.next_segment_id = 0
-        self.cache = TwoLevelCache()
-        self.small_segment_size = 4 * 1024 * 1024    # 4MB for small allocations
-        self.large_segment_size = 32 * 1024 * 1024   # 32MB for large allocations
-        self.small_threshold = 1 * 1024 * 1024       # 1MB threshold
-        self.total_allocated = 0
+        self.segment_size = 1024 * 1024 * 1024  # 1GB per segment
+        self.block_allocator_threshold = 1024 * 1024  # 1MB threshold
+        
+        # Configuration
+        self.alignment = 512  # 512B alignment
+        self.max_cache_size = 1024 * 1024 * 1024  # 1GB cache limit
+        self.current_cache_size = 0
+        
+        # Statistics  
         self.alloc_count = 0
-        self.cuda_alloc_count = 0
-        self.ptr_to_segment: Dict[int, Segment] = {}
-        self.ptr_to_size: Dict[int, int] = {}
-        self.lock = threading.Lock()
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.block_alloc_count = 0
+        self.block_hits = 0
+        self.block_misses = 0
         
         # Initialize default stream (already have current context)
         self.default_stream = self._create_stream()
@@ -332,42 +342,221 @@ class CUDAMemoryManager:
         segment = Segment(self.next_segment_id, size)
         self.next_segment_id += 1
         self.segments.append(segment)
-        self.cuda_alloc_count += 1
+        self.block_alloc_count += 1
         return segment
+    
+    def _round_up(self, size: int, alignment: int) -> int:
+        """Round up size to alignment boundary"""
+        return ((size + alignment - 1) // alignment) * alignment
+    
+    def _get_bucket_size(self, size: int) -> int:
+        """
+        Phase 2: Get bucket size for given allocation size
+        Uses power-of-2 buckets with minimum 512B alignment
+        """
+        # Minimum bucket size is 512B (our alignment)
+        if size <= self.alignment:
+            return self.alignment
+        
+        # Find the smallest power of 2 that is >= size
+        bucket = self.alignment
+        while bucket < size:
+            bucket *= 2
+        
+        # Cap at 16MB for very large allocations to avoid excessive waste
+        max_bucket = 16 * 1024 * 1024
+        if bucket > max_bucket:
+            # For very large allocations, use exact size alignment
+            return self._round_up(size, self.alignment)
+        
+        return bucket
     
     def allocate(self, nbytes: int, stream: Optional[int] = None) -> int:
         """
-        Simple allocation - directly call cuMemAlloc, remove all optimizations
+        Phase 3: Hybrid allocator
+        - Small allocations (<1MB): bucket caching
+        - Large allocations (>=1MB): block allocator
         """
         if nbytes == 0:
             return 0
             
-        # Direct allocation, no alignment, no caching
-        ptr = _ok(cuda.cuMemAlloc(nbytes))
-        self.alloc_count += 1
+        # Decide allocation strategy based on size
+        if nbytes < self.block_allocator_threshold:
+            return self._allocate_small(nbytes)
+        else:
+            return self._allocate_large(nbytes)
+    
+    def _allocate_small(self, nbytes: int) -> int:
+        """Allocate small memory using bucket caching"""
+        bucket_size = self._get_bucket_size(nbytes)
+        
+        with self.lock:
+            # Try to get from cache (bucket match)
+            if self.free_blocks[bucket_size]:
+                ptr = self.free_blocks[bucket_size].pop()
+                self.active_blocks[ptr] = bucket_size
+                self.current_cache_size -= bucket_size
+                self.cache_hits += 1
+                return ptr
+        
+        # Cache miss - allocate from CUDA
+        ptr = _ok(cuda.cuMemAlloc(bucket_size))
+        with self.lock:
+            self.active_blocks[ptr] = bucket_size
+            self.alloc_count += 1
+            self.cache_misses += 1
         return ptr
+    
+    def _allocate_large(self, nbytes: int) -> int:
+        """Allocate large memory using block allocator"""
+        aligned_size = self._round_up(nbytes, self.alignment)
+        
+        with self.lock:
+            # Try to allocate from existing segments
+            for segment in self.segments:
+                ptr = segment.allocate(aligned_size)
+                if ptr is not None:
+                    self.active_blocks[ptr] = aligned_size
+                    self.block_hits += 1
+                    return ptr
+            
+            # No suitable block found - create new segment
+            segment = self._create_segment(max(aligned_size * 2, self.segment_size))
+            ptr = segment.allocate(aligned_size)
+            if ptr is not None:
+                self.active_blocks[ptr] = aligned_size
+                self.block_misses += 1
+                return ptr
+            
+            # Fallback: direct allocation
+            ptr = _ok(cuda.cuMemAlloc(aligned_size))
+            self.active_blocks[ptr] = aligned_size
+            self.block_misses += 1
+            return ptr
     
     def free(self, ptr: int, stream: Optional[int] = None):
         """
-        Simple deallocation - directly call cuMemFree, remove all optimizations
+        Phase 3: Hybrid free
+        - Small allocations: bucket cache
+        - Large allocations: block allocator
         """
-        if ptr and int(ptr) != 0:
-            try:
-                _ok(cuda.cuMemFree(ptr))
-            except:
-                pass
+        if not ptr or int(ptr) == 0:
+            return
+            
+        with self.lock:
+            if ptr not in self.active_blocks:
+                return  # Already freed or not from our allocator
+                
+            size = self.active_blocks.pop(ptr)
+            
+            # Decide free strategy based on size
+            if size < self.block_allocator_threshold:
+                self._free_small(ptr, size)
+            else:
+                self._free_large(ptr, size)
+    
+    def _free_small(self, ptr: int, size: int):
+        """Free small memory to bucket cache"""
+        # Try to return to cache
+        if self.current_cache_size + size <= self.max_cache_size:
+            self.free_blocks[size].append(ptr)
+            self.current_cache_size += size
+            return
+        
+        # Cache full - actually free to CUDA
+        try:
+            _ok(cuda.cuMemFree(ptr))
+        except:
+            pass
+    
+    def _free_large(self, ptr: int, size: int):
+        """Free large memory to block allocator"""
+        # Try to free to segment
+        for segment in self.segments:
+            if segment.free(ptr):
+                return
+        
+        # Not found in any segment - direct free
+        try:
+            _ok(cuda.cuMemFree(ptr))
+        except:
+            pass
     
     def get_stats(self) -> Dict:
-        """Get simple statistics"""
-        return {
-            'alloc_count': self.alloc_count,
-            'cache_hit_rate': '0.0%',  # No cache
-            'efficiency': '1.0x'
-        }
+        """Get comprehensive allocator statistics"""
+        with self.lock:
+            # Small allocation stats
+            total_small_requests = self.cache_hits + self.cache_misses
+            small_hit_rate = (self.cache_hits / total_small_requests * 100) if total_small_requests > 0 else 0
+            
+            # Large allocation stats
+            total_large_requests = self.block_hits + self.block_misses
+            large_hit_rate = (self.block_hits / total_large_requests * 100) if total_large_requests > 0 else 0
+            
+            # Count cached blocks and total cached memory
+            cached_blocks = sum(len(block_list) for block_list in self.free_blocks.values())
+            
+            # Bucket statistics
+            bucket_info = {}
+            for bucket_size, block_list in self.free_blocks.items():
+                if block_list:
+                    bucket_info[f'{bucket_size//1024}KB'] = len(block_list)
+            
+            # Segment statistics
+            segment_stats = []
+            total_segment_memory = 0
+            total_used_memory = 0
+            for segment in self.segments:
+                total_segment_memory += segment.total_size
+                total_used_memory += segment.used_bytes
+                segment_stats.append({
+                    'id': segment.segment_id,
+                    'total_mb': segment.total_size // (1024 * 1024),
+                    'used_mb': segment.used_bytes // (1024 * 1024),
+                    'utilization': f'{segment.used_bytes / segment.total_size * 100:.1f}%'
+                })
+            
+            stats = {
+                # Overall stats
+                'total_alloc_count': self.alloc_count + self.block_alloc_count,
+                'active_blocks': len(self.active_blocks),
+                
+                # Small allocation (bucket cache) stats
+                'small_cache_hits': self.cache_hits,
+                'small_cache_misses': self.cache_misses,
+                'small_hit_rate': f'{small_hit_rate:.1f}%',
+                'cached_memory_mb': self.current_cache_size / (1024 * 1024),
+                'cached_blocks': cached_blocks,
+                'bucket_distribution': bucket_info,
+                
+                # Large allocation (block allocator) stats
+                'large_block_hits': self.block_hits,
+                'large_block_misses': self.block_misses,
+                'large_hit_rate': f'{large_hit_rate:.1f}%',
+                'segment_count': len(self.segments),
+                'segment_memory_mb': total_segment_memory // (1024 * 1024),
+                'segment_used_mb': total_used_memory // (1024 * 1024),
+                'segment_utilization': f'{total_used_memory / max(1, total_segment_memory) * 100:.1f}%',
+                'segments': segment_stats
+            }
+            
+            return stats
     
     def empty_cache(self):
-        """No cache, no cleanup needed"""
-        pass
+        """Phase 2: Empty all bucket cached memory"""
+        with self.lock:
+            # Free all cached blocks to CUDA
+            for size, ptr_list in self.free_blocks.items():
+                for ptr in ptr_list:
+                    try:
+                        _ok(cuda.cuMemFree(ptr))
+                    except:
+                        pass
+            
+            # Clear cache
+            self.free_blocks.clear()
+            self.current_cache_size = 0
+            print(f"Cache cleared: freed all cached blocks")
     
     def __del__(self):
         """Cleanup CUDA resources in proper order"""
@@ -415,8 +604,8 @@ def allocate_memory(nbytes: int, stream: Optional[int] = None) -> int:
     """Allocate GPU memory"""
     return get_memory_manager().allocate(nbytes, stream)
 
-def free_memory(ptr: int, stream: Optional[int] = None):
-    """Free GPU memory"""
+def free_memory(ptr: int, nbytes: int = 0, stream: Optional[int] = None):
+    """Free GPU memory with size info for caching"""
     get_memory_manager().free(ptr, stream)
 
 def memory_stats() -> Dict:

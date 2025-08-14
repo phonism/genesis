@@ -1,40 +1,40 @@
-# 架构概述
+# Architecture Overview
 
-Genesis深度学习框架采用分层的模块化架构设计，既保持了代码的清晰性，又实现了高性能的计算能力。
+The Genesis deep learning framework adopts a layered modular architecture design that maintains code clarity while achieving high-performance computational capabilities.
 
-## 🏗️ 总体架构
+## 🏗️ Overall Architecture
 
 ```mermaid
 graph TB
-    subgraph "用户API层"
+    subgraph "User API Layer"
         A[genesis.Tensor] --> B[genesis.nn.*]
         A --> C[genesis.optim.*]
         A --> D[genesis.functional.*]
     end
     
-    subgraph "自动微分层"
-        E[autograd.Tensor] --> F[Function基类]
-        F --> G[Context上下文]
+    subgraph "Automatic Differentiation Layer"
+        E[autograd.Tensor] --> F[Function Base Class]
+        F --> G[Context]
     end
     
-    subgraph "张量系统"
-        H[backend.py] --> I[NDArray接口]
+    subgraph "Tensor System"
+        H[backend.py] --> I[NDArray Interface]
     end
     
-    subgraph "后端实现"
-        I --> J[CPU Backend<br/>PyTorch张量]
+    subgraph "Backend Implementation"
+        I --> J[CPU Backend<br/>PyTorch Tensors]
         I --> K[GPU Backend<br/>CUDA + Triton]
     end
     
-    subgraph "GPU独立实现"
-        K --> L[cuda_tensor.py<br/>纯CUDA内存管理]
+    subgraph "GPU Independent Implementation"
+        K --> L[cuda_tensor.py<br/>Pure CUDA Memory Management]
         K --> M[ndarray_ops_gpu.py<br/>Triton kernels]
         L --> N[CUDA Python API]
-        M --> O[Triton编译器]
+        M --> O[Triton Compiler]
     end
     
-    subgraph "CPU实现"
-        J --> P[ndarray_ops_cpu.py<br/>PyTorch操作]
+    subgraph "CPU Implementation"
+        J --> P[ndarray_ops_cpu.py<br/>PyTorch Operations]
         P --> Q[PyTorch Backend]
     end
     
