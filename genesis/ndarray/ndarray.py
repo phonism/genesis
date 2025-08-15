@@ -1,11 +1,11 @@
 import operator
-import torch
 import os
 import math
 from functools import reduce
 import numpy as np
 import genesis
 from typing import Optional, Any
+import torch
 
 def prod(x):
     """
@@ -27,8 +27,12 @@ class Device:
         self.mod = mod
         self.device_id = device_id
 
-    def __eq__(self, other: "Device") -> bool:
-        return self.name == other.name
+    def __eq__(self, other) -> bool:
+        if isinstance(other, Device):
+            return self.name == other.name
+        elif isinstance(other, str):
+            return self.name == other
+        return False
 
     def __repr__(self) -> str:
         return self.name + "()"
@@ -43,41 +47,27 @@ class Device:
         return self.mod is not None
 
     def randn(self, *shape, dtype: Optional[str] = genesis.float32) -> "NDArray":
-        if self.name == "cuda":
-            return NDArray(torch.randn(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
-        else:
-            return NDArray(torch.randn(*shape, device=torch.device("cuda")).cpu(), device=self)
+        """Create tensor with random normal distribution using backend."""
+        # Convert dtype to string format for backend compatibility
+        dtype_str = dtype.name if hasattr(dtype, 'name') else str(dtype)
+        backend_data = self.mod.randn(shape, dtype=dtype_str)
+        return NDArray(backend_data, device=self, dtype=dtype)
 
     def rand(self, *shape, dtype: Optional[str] = genesis.float32) -> "NDArray":
-        if self.name == "cuda":
-            return NDArray(torch.rand(*shape, device=torch.device("cuda:" + str(self.device_id))), device=self)
-        else:
-            return NDArray(torch.rand(*shape, device=torch.device("cuda")).cpu(), device=self)
+        """Create tensor with random uniform distribution using backend."""
+        # Convert dtype to string format for backend compatibility
+        dtype_str = dtype.name if hasattr(dtype, 'name') else str(dtype)
+        backend_data = self.mod.rand(shape, dtype=dtype_str)
+        return NDArray(backend_data, device=self, dtype=dtype)
 
     def one_hot(self, n, i, dtype: Optional[str] = genesis.float32) -> "NDArray":
-        # Pure Genesis implementation of one_hot
-        # i is an NDArray containing indices
-        indices = i.data  # CUDATensor or PyTorch Tensor containing indices
-        
-        # Create output tensor with shape (*indices.shape, n)
-        output_shape = indices.shape + (n,)
-        output = NDArray.make(output_shape, device=self, dtype=dtype)
-        
-        # Fill with zeros first
-        output.fill(0.0)
-        
-        # Convert indices to numpy for easier indexing
-        indices_np = indices.detach().cpu().numpy().astype(np.int64)
-        
-        # Create one-hot encoding
-        one_hot_np = np.eye(n, dtype=np.float32)[indices_np]
-        
-        # Copy result back to output tensor
-        # Create a new NDArray from numpy data and copy its data
-        temp_array = NDArray(one_hot_np, device=self, dtype=dtype)
-        output.data = temp_array.data
-        
-        return output
+        """
+        Device-agnostic one-hot encoding - delegates to device backend
+        """
+        # Delegate to device-specific implementation
+        dtype_str = dtype.name if hasattr(dtype, 'name') else str(dtype)
+        result_data = self.mod.one_hot(n, i.data, dtype_str)
+        return NDArray(result_data, device=self)
 
     def empty(self, shape, dtype: Optional[str] = genesis.float32) -> "NDArray":
         dtype = genesis.float32 if dtype is None else dtype
@@ -134,6 +124,9 @@ class NDArray:
         elif isinstance(data, torch.Tensor):
             self._device = device
             self.data = self._device.from_tensor(data, device_id=self._device.device_id)
+        elif data.__class__.__name__ == 'CUDAStorage':  # CUDAStorage
+            self._device = device
+            self.data = data  # Use directly
         else:
             self._device = device
             self.data = self._device.from_numpy(np.array(data, dtype=np.float32), device_id=self._device.device_id, dtype=dtype)
@@ -220,34 +213,18 @@ class NDArray:
 
     def triu(self, k=0):
         out = NDArray.make(self.shape, device=self.device)
-        # Handle both PyTorch tensors and CUDATensors
-        if hasattr(self.data, 'to_numpy'):
-            # CUDATensor - convert to numpy, apply triu, then convert back
-            import numpy as np
-            np_data = self.data.to_numpy()
-            np_triu = np.triu(np_data, k=k)
-            out.data = self.device.from_numpy(np_triu, device_id=self.device.device_id)
-        else:
-            # PyTorch tensor
-            out.data = torch.triu(self.data, diagonal=k)
+        # Use device backend for triu operation
+        out.data = self.device.triu(self.data, k=k)
         return out
 
     def split(self, cnt, dim=None):
         result = []
-        # Handle both PyTorch tensors and CUDATensors
-        if hasattr(self.data, 'split'):
-            # CUDATensor has its own split method
-            splits = self.data.split(cnt, dim=dim if dim is not None else -1)
-            for tensor_data in splits:
-                out = NDArray.make(tensor_data.shape, device=self.device)
-                out.data = tensor_data
-                result.append(out)
-        else:
-            # PyTorch tensor
-            for ten in torch.split(self.data, cnt, dim=dim):
-                out = NDArray.make(ten.shape, device=self.device)
-                out.data = ten
-                result.append(out)
+        # Use device backend for split operation
+        splits = self.device.split(self.data, cnt, dim=dim if dim is not None else -1)
+        for tensor_data in splits:
+            out = NDArray.make(tensor_data.shape, device=self.device)
+            out.data = tensor_data
+            result.append(out)
         return result
 
     @property
@@ -388,13 +365,21 @@ class NDArray:
         return out
 
     def cos(self):
-        out = NDArray.make(self.shape, device=self.device)
-        out.data = self.device.cos(self.data)
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.cos(self.data)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     def sin(self):
-        out = NDArray.make(self.shape, device=self.device)
-        out.data = self.device.sin(self.data)
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.sin(self.data)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     def sqrt(self):
@@ -447,12 +432,38 @@ class NDArray:
 
     def half(self):
         out = NDArray.make(self.shape, dtype=genesis.float16, device=self.device)
-        out.data = self.data.to(torch.float16)
+        out.data = self.device.to_dtype(self.data, "float16")
         return out
     
     def long(self):
-        # TODO: implement long
-        return self
+        """Convert tensor to int64 (long) dtype."""
+        out = NDArray.make(self.shape, dtype=genesis.int64, device=self.device)
+        out.data = self.device.to_dtype(self.data, "int64")
+        return out
+    
+    def to(self, target):
+        """Convert tensor to target device or dtype."""
+        if isinstance(target, str):
+            if target.startswith('cuda') or target == 'cuda':
+                # Move to CUDA device
+                import genesis
+                target_device = genesis.device(target)
+                return NDArray(self.data, device=target_device, dtype=self.dtype)
+            else:
+                # Assume it's a dtype
+                out = NDArray.make(self.shape, dtype=target, device=self.device)
+                out.data = self.device.to_dtype(self.data, target)
+                return out
+        else:
+            # Could be device object or dtype object
+            if hasattr(target, 'name'):
+                # Device object
+                return NDArray(self.data, device=target, dtype=self.dtype)
+            else:
+                # Assume dtype
+                out = NDArray.make(self.shape, dtype=target, device=self.device)
+                out.data = self.device.to_dtype(self.data, str(target))
+                return out
 
     def broadcast_to(self, new_shape):
         out = NDArray.make(new_shape, dtype=self.dtype, device=self.device)
@@ -460,12 +471,21 @@ class NDArray:
         return out
 
     def __getitem__(self, idxs):
-        out = NDArray.make(self.shape, dtype=self.dtype, device=self.device)
-        out.data = self.device.getitem(self.data, idxs)
+        # Optimized: avoid NDArray.make() overhead
+        if isinstance(idxs, NDArray):
+            result_data = self.device.getitem(self.data, idxs.data)
+        else:
+            result_data = self.device.getitem(self.data, idxs)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
         return out
 
     def __setitem__(self, idxs, other):
         out = NDArray.make(self.shape, dtype=self.dtype, device=self.device)
+        if isinstance(idxs, NDArray):
+            idxs = idxs.data
         if isinstance(other, NDArray):
             out.data = self.device.setitem(self.data, idxs, other.data)
         else:

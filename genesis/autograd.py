@@ -234,6 +234,36 @@ class Tensor:
         assert value.dtype == self.dtype, "%s %s" % (value.dtype, self.dtype)
         self.data = value.data.clone()
 
+    def item(self):
+        """
+        Returns the value of this tensor as a standard Python number.
+        This only works for tensors with a single element.
+        """
+        # Check if tensor has exactly one element
+        if self.numel() != 1:
+            raise ValueError(f"only one element tensors can be converted to Python scalars, got {self.numel()} elements")
+        
+        # Convert to numpy and extract scalar value
+        if hasattr(self.data, 'numpy'):
+            # NDArray has numpy method
+            return self.data.numpy().item()
+        elif hasattr(self.data, 'cpu'):
+            # CUDA tensor, move to CPU first
+            return self.data.cpu().numpy().item()
+        else:
+            # Try direct conversion
+            import numpy as np
+            return np.array(self.data).item()
+
+    def detach(self):
+        """
+        Returns a new Tensor, detached from the current graph.
+        The result will never require gradient.
+        """
+        # Create a new tensor with the same data but no gradients
+        detached = Tensor(self.data, device=self.device, dtype=self.dtype, requires_grad=False)
+        return detached
+
     def backward(self, out_grad=None):
         import time
         # print(f"\n🔍 Starting backward for tensor shape {self.shape}")

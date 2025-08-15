@@ -32,101 +32,101 @@ graph TB
     style D fill:#fff3e0
 ```
 
-## 🎯 核心组件清单
+## 🎯 Core Component List
 
-| 组件 | 文件 | 主要功能 | 
-|------|------|----------|
-| 张量系统 | `autograd.py` | 基础数据结构、自动微分 |
-| 数据类型 | `dtypes.py` | 统一类型系统、精度管理 |
-| 函数式操作 | `functional.py` | 张量操作的函数式接口 |
-| 初始化 | `init.py` | 张量创建和初始化 |
-| 后端抽象 | `backend.py` | 设备和后端管理 |
+| Component | File | Main Functions | 
+|-----------|------|----------------|
+| Tensor System | `autograd.py` | Basic data structures, automatic differentiation |
+| Data Types | `dtypes.py` | Unified type system, precision management |
+| Functional Operations | `functional.py` | Functional interface for tensor operations |
+| Initialization | `init.py` | Tensor creation and initialization |
+| Backend Abstraction | `backend.py` | Device and backend management |
 
-## 🚀 设计特色
+## 🚀 Design Features
 
-### 1. 统一的张量接口
-- **一致的API**：无论CPU还是GPU，用户使用相同的接口
-- **透明的设备切换**：自动处理不同设备间的数据转换
-- **类型安全**：编译时和运行时的类型检查
+### 1. Unified Tensor Interface
+- **Consistent API**: Users use the same interface whether on CPU or GPU
+- **Transparent Device Switching**: Automatic handling of data conversion between different devices
+- **Type Safety**: Compile-time and runtime type checking
 
-### 2. 高效的自动微分
-- **惰性计算图**：按需构建计算图，节省内存
-- **智能梯度传播**：优化的反向传播算法
-- **内存优化**：自动释放不再需要的中间结果
+### 2. Efficient Automatic Differentiation
+- **Lazy Computation Graph**: Build computation graph on demand to save memory
+- **Smart Gradient Propagation**: Optimized backpropagation algorithm
+- **Memory Optimization**: Automatic release of intermediate results no longer needed
 
-### 3. 灵活的类型系统
-- **混合精度支持**：自动在FP32和FP16间转换
-- **设备无关**：类型定义独立于具体设备
-- **NumPy兼容**：无缝对接NumPy生态
+### 3. Flexible Type System
+- **Mixed Precision Support**: Automatic conversion between FP32 and FP16
+- **Device Agnostic**: Type definitions independent of specific devices
+- **NumPy Compatible**: Seamless integration with NumPy ecosystem
 
-## 📊 性能特性
+## 📊 Performance Characteristics
 
-### 内存效率
-- **视图操作零拷贝**：reshape、transpose等操作不复制数据
-- **智能内存管理**：基于引用计数的自动内存释放
-- **梯度累积优化**：减少临时张量创建
+### Memory Efficiency
+- **Zero-copy View Operations**: Operations like reshape, transpose don't copy data
+- **Smart Memory Management**: Automatic memory release based on reference counting
+- **Gradient Accumulation Optimization**: Reduce temporary tensor creation
 
-### 计算优化  
-- **延迟执行**：操作在需要时才真正执行
-- **融合优化**：相邻操作自动融合以减少内存访问
-- **并行计算**：充分利用GPU并行能力
+### Compute Optimization  
+- **Lazy Execution**: Operations execute only when needed
+- **Fusion Optimization**: Adjacent operations automatically fused to reduce memory access
+- **Parallel Computing**: Full utilization of GPU parallel capabilities
 
-## 🔗 组件间协作
+## 🔗 Component Collaboration
 
-### 张量创建流程
+### Tensor Creation Process
 ```python
-# 用户调用
+# User call
 x = genesis.randn(3, 4)
 
-# 内部流程
+# Internal flow
 init.randn() -> 
 NDArray.randn() -> 
 Device.randn() -> 
 Tensor.__init__() ->
-设置requires_grad等属性
+Set attributes like requires_grad
 ```
 
-### 自动微分流程
+### Automatic Differentiation Process
 ```python
-# 前向传播
+# Forward pass
 z = x * y + x.sum()
 
-# 构建计算图
+# Build computation graph
 MulFunction.apply(x, y) -> 
 SumFunction.apply(x) ->
 AddFunction.apply(mul_result, sum_result) ->
-设置creator关系
+Set creator relationships
 
-# 反向传播
+# Backward pass
 z.backward()
 
-# 计算梯度
+# Compute gradients
 topo_sort(z) ->
-逆拓扑序遍历 ->
-调用各Function的backward() ->
-梯度累积到叶子节点
+Reverse topological traversal ->
+Call backward() of each Function ->
+Gradient accumulation to leaf nodes
 ```
 
-## 🎓 学习路径建议
+## 🎓 Learning Path Recommendations
 
-### 初级用户
-1. **张量基础** - 了解Tensor的创建和基本操作
-2. **自动微分** - 理解requires_grad和backward()
-3. **设备管理** - 学习CPU/GPU切换
+### Beginner Users
+1. **Tensor Basics** - Understand Tensor creation and basic operations
+2. **Automatic Differentiation** - Understand requires_grad and backward()
+3. **Device Management** - Learn CPU/GPU switching
 
-### 中级用户  
-1. **数据类型** - 掌握不同精度的使用场景
-2. **函数式接口** - 使用functional模块
-3. **内存优化** - 理解视图操作和内存管理
+### Intermediate Users  
+1. **Data Types** - Master usage scenarios for different precisions
+2. **Functional Interface** - Use the functional module
+3. **Memory Optimization** - Understand view operations and memory management
 
-### 高级用户
-1. **自定义Function** - 实现自定义的前向和反向传播
-2. **性能调优** - 优化内存使用和计算效率
-3. **源码理解** - 深入理解各组件的实现细节
+### Advanced Users
+1. **Custom Functions** - Implement custom forward and backward propagation
+2. **Performance Tuning** - Optimize memory usage and computational efficiency
+3. **Source Code Understanding** - Deep understanding of component implementation details
 
-各组件的详细文档请查看对应的专门页面：
+For detailed documentation of each component, please check the corresponding dedicated pages:
 
-- [自动微分系统](autograd.md) - 深入理解计算图和梯度计算
-- [张量操作](tensor.md) - 全面的张量操作指南  
-- [数据类型](dtypes.md) - 类型系统和精度管理
-- [函数式接口](functional.md) - 函数式编程风格的操作
+- [Automatic Differentiation System](autograd.md) - Deep understanding of computation graphs and gradient computation
+- [Tensor Operations](tensor.md) - Comprehensive tensor operation guide  
+- [Data Types](dtypes.md) - Type system and precision management
+- [Functional Interface](functional.md) - Functional programming style operations

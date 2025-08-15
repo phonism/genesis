@@ -229,6 +229,50 @@ def maximum_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.
 
 
 @triton.jit
+def arange_kernel(output_ptr, start, step, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Arange kernel - GPU implementation of range generation.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Calculate values: start + step * index
+    values = start + step * offsets.to(tl.float32)
+    tl.store(output_ptr + offsets, values, mask=mask)
+
+
+@triton.jit  
+def one_hot_kernel(indices_ptr, output_ptr, n_classes, n_indices, 
+                   BLOCK_SIZE: tl.constexpr):
+    """
+    One-hot encoding kernel.
+    Args:
+        indices_ptr: Input indices
+        output_ptr: Output one-hot tensor (n_indices, n_classes)
+        n_classes: Number of classes
+        n_indices: Number of indices
+    """
+    pid = tl.program_id(axis=0)
+    idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = idx < n_indices
+    
+    # Load the index for this element
+    indices = tl.load(indices_ptr + idx, mask=mask, other=0)
+    
+    # For each index, fill the corresponding row in output
+    for i in range(BLOCK_SIZE):
+        if pid * BLOCK_SIZE + i < n_indices:
+            index_val = tl.load(indices_ptr + pid * BLOCK_SIZE + i)
+            # Fill entire row for this index
+            row_start = (pid * BLOCK_SIZE + i) * n_classes
+            for j in range(n_classes):
+                value = 1.0 if j == index_val else 0.0
+                tl.store(output_ptr + row_start + j, value)
+
+
+@triton.jit
 def maximum_kernel(x_ptr, y_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
     """
     Maximum kernel.
@@ -363,7 +407,9 @@ def mul(x, y):
     """
     Mul with broadcasting support.
     """
+    # Convert y to CUDAStorage if it's a scalar tensor (0-dimensional)
     if isinstance(y, CUDAStorage):
+        # Handle both tensor-tensor and tensor-scalar_tensor multiplication
         # Compute broadcasted shape
         broadcast_shape = broadcast_shapes(x.shape, y.shape)
         
@@ -397,6 +443,14 @@ def mul(x, y):
         n_elements = output.size
         
         # Use scalar mul kernel
+        # Ensure scalar type compatibility
+        if x.dtype == "float32":
+            y = float(y)
+        elif x.dtype == "float16" or x.dtype == "bfloat16":
+            y = float(y)
+        elif x.dtype in ["int32", "int64"]:
+            y = int(y)
+        
         grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
         mul_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     
@@ -656,7 +710,61 @@ def mul_scalar_kernel_wrapper(x, scalar):
     
     n_elements = x.size
     
+    # Ensure scalar type compatibility
+    if x.dtype == "float32":
+        scalar = float(scalar)
+    elif x.dtype == "float16" or x.dtype == "bfloat16":
+        scalar = float(scalar)
+    elif x.dtype in ["int32", "int64"]:
+        scalar = int(scalar)
+    
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     mul_scalar_kernel[grid](x, scalar, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+
+def arange_gpu(start, end, step, dtype="float32"):
+    """
+    GPU implementation of arange using Triton kernel.
+    """
+    length = max(0, int((end - start) / step))
+    if length == 0:
+        return CUDAStorage((0,), dtype=dtype)
+    
+    output = CUDAStorage((length,), dtype=dtype)
+    
+    grid = lambda meta: (triton.cdiv(length, meta["BLOCK_SIZE"]), )
+    arange_kernel[grid](output, float(start), float(step), length, BLOCK_SIZE=1024)
+    
+    return output
+
+def arange(start, end, step, dtype="float32"):
+    """
+    Alias for arange_gpu for consistency with CPU backend.
+    """
+    return arange_gpu(start, end, step, dtype)
+
+
+def one_hot(n_classes, indices, dtype="float32"):
+    """
+    GPU implementation of one-hot encoding using Triton kernel.
+    """
+    if not indices.is_contiguous():
+        indices = indices.contiguous()
+    
+    # Flatten indices for processing
+    original_shape = indices.shape
+    flat_indices = indices.reshape((-1,))
+    n_indices = flat_indices.size
+    
+    # Create output tensor
+    output_shape = original_shape + (n_classes,)
+    output = CUDAStorage(output_shape, dtype=dtype)
+    output.fill(0.0)
+    
+    # Launch kernel
+    grid = lambda meta: (triton.cdiv(n_indices, meta["BLOCK_SIZE"]), )
+    one_hot_kernel[grid](flat_indices, output, n_classes, n_indices, BLOCK_SIZE=256)
     
     return output

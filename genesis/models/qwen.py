@@ -4,22 +4,13 @@ sys.path.append("../../")
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-# use torch or genesis
-USE_TORCH = os.environ.get("QWEN_USE_TORCH", "false").lower() == "true"
-
-if USE_TORCH:
-    import torch as genesis
-    from torch import Tensor
-    import torch.nn as nn
-    import torch.nn.functional as F
-else:
-    import genesis
-    from genesis import Tensor
-    import genesis.nn as nn
-    import genesis.nn.functional as F
+# Genesis-only implementation - no framework switching
+import genesis
+from genesis import Tensor
+import genesis.nn as nn
+import genesis.nn.functional as F
 
 import time
-import torch
 import numpy as np
 import random
 
@@ -29,10 +20,7 @@ def set_seed(seed: int) -> None:
     """
     random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed) 
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed) 
+    # Genesis doesn't have global manual_seed, skip for now 
 
 set_seed(42)
 
@@ -322,19 +310,10 @@ def rotate_half(x):
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """
-    Apply rotary position embedding.
+    Apply rotary position embedding - Genesis version.
     """
-    if USE_TORCH:
-        # PyTorch version
-        cos = cos[position_ids.long()].unsqueeze(unsqueeze_dim)
-        sin = sin[position_ids.long()].unsqueeze(unsqueeze_dim)
-        q_embed = (q * cos) + (rotate_half(q) * sin)
-        k_embed = (k * cos) + (rotate_half(k) * sin)
-    else:
-        # Genesis version
-        cos = cos[position_ids.data.data.long()].unsqueeze(unsqueeze_dim)
-        sin = sin[position_ids.data.data.long()].unsqueeze(unsqueeze_dim)
-        q_embed = (q * cos) + (rotate_half(q) * sin)
-        k_embed = (k * cos) + (rotate_half(k) * sin)
-    
+    cos = cos[position_ids.long()].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids.long()].unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed

@@ -72,7 +72,7 @@ class Adam(Optimizer):
     def step(self):
         self.t += 1
         for theta_id, theta in enumerate(self.params):
-            grad = theta.grad.detach() + self.weight_decay * theta.data.detach()
+            grad = theta.grad.detach() + self.weight_decay * theta.detach()
 
             if theta_id not in self.m:
                 m_cur = (1 - self.beta1) * grad

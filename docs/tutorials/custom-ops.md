@@ -19,35 +19,35 @@ Before starting, please ensure you have:
 - Understanding of CUDA programming basics
 - Familiarity with Python C extension development
 
-## 🛠️ 开发环境
+## 🛠️ Development Environment
 
 ```bash
-# 安装开发依赖
+# Install development dependencies
 pip install triton pybind11 cmake ninja
 ```
 
-## 📝 示例：RMSNorm算子
+## 📝 Example: RMSNorm Operator
 
-我们将实现RMSNorm（Root Mean Square Normalization）作为示例。
+We will implement RMSNorm (Root Mean Square Normalization) as an example.
 
-### CPU实现
+### CPU Implementation
 
 ```python
-# WIP: CPU实现代码将在后续版本中添加
+# WIP: CPU implementation code will be added in future versions
 ```
 
-### GPU实现 (Triton)
+### GPU Implementation (Triton)
 
 ```python  
-# WIP: Triton实现代码将在后续版本中添加
+# WIP: Triton implementation code will be added in future versions
 ```
 
-## 🚀 高级特性
+## 🚀 Advanced Features
 
-- 自动微分支持
-- 内存优化技巧
-- 算子融合策略
+- Automatic differentiation support
+- Memory optimization techniques
+- Operator fusion strategies
 
 ---
 
-📘 **文档状态**: 正在编写中，预计在v0.2.0版本完成。
+📘 **Documentation Status**: Under development, expected to be completed in v0.2.0.

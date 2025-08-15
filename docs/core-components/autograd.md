@@ -14,26 +14,26 @@ The automatic differentiation system is based on dynamic computation graph imple
 
 ```mermaid
 graph TB
-    subgraph "计算图节点"
+    subgraph "Computation Graph Nodes"
         A[Tensor] --> B[data NDArray]
         A --> C[grad Tensor]
         A --> D[creator Function]
         A --> E[requires_grad bool]
     end
     
-    subgraph "操作节点"
+    subgraph "Operation Nodes"
         F[Function] --> G[forward]
         F --> H[backward]
         F --> I[Context]
         I --> J[saved_tensors]
     end
     
-    subgraph "执行流程"
-        K[前向传播] --> L[构建计算图]
-        L --> M[保存中间结果]
-        M --> N[反向传播]
-        N --> O[梯度计算]
-        O --> P[梯度累积]
+    subgraph "Execution Flow"
+        K[Forward Pass] --> L[Build Computation Graph]
+        L --> M[Save Intermediate Results]
+        M --> N[Backward Pass]
+        N --> O[Gradient Calculation]
+        O --> P[Gradient Accumulation]
     end
     
     A --> F
@@ -44,68 +44,68 @@ graph TB
     style I fill:#e8f5e8
 ```
 
-## 🧮 Tensor类详解
+## 🧮 Tensor Class Details
 
-### 核心属性
+### Core Attributes
 
 ```python
 class Tensor:
-    grad: "Tensor"          # 梯度张量
-    creator: Function       # 创建此张量的操作
-    inputs: List["Tensor"]  # 输入张量列表
-    data: NDArray          # 底层数据存储
-    requires_grad: bool    # 是否需要计算梯度
-    hooks: List[Callable]  # 梯度钩子函数
+    grad: "Tensor"          # Gradient tensor
+    creator: Function       # Operation that created this tensor
+    inputs: List["Tensor"]  # Input tensor list
+    data: NDArray          # Underlying data storage
+    requires_grad: bool    # Whether gradients are required
+    hooks: List[Callable]  # Gradient hook functions
 ```
 
-### 关键方法
+### Key Methods
 
-#### 1. 张量创建
+#### 1. Tensor Creation
 
 ```python
-# 从数组创建张量
+# Create tensor from array
 def __init__(self, array, *, device=None, dtype=None, requires_grad=True):
     if dtype is not None:
-        dtype = get_dtype(dtype)  # 转换为DType对象
+        dtype = get_dtype(dtype)  # Convert to DType object
     
-    # 处理不同输入类型
+    # Handle different input types
     if isinstance(array, Tensor):
-        # 从现有张量创建
+        # Create from existing tensor
         data = array.data if same_device_dtype else convert_data
     elif isinstance(array, NDArray):
-        # 从NDArray创建
+        # Create from NDArray
         data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
     else:
-        # 从Python对象创建
+        # Create from Python object
         device = device if device else default_device()
         data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
     
     self.init([], data=data, requires_grad=requires_grad)
 ```
 
-#### 2. 反向传播
+#### 2. Backward Propagation
 
 ```python
 def backward(self, out_grad=None):
-    # 设置输出梯度
+    # Set output gradient
     out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)
     
-    # 初始化梯度累积字典
+    # Initialize gradient accumulation dictionary
     node_to_output_grads_list: Dict[Tensor, List[Tensor]] = {}
     node_to_output_grads_list[self] = [out_grad]
     
-    # 拓扑排序获取计算顺序
+    # Get computation order through topological sorting
     topo_order = topo_sort(self)
     
-    # 逆拓扑序遍历计算梯度
+    # Traverse in reverse topological order to compute gradients
     for node in reversed(topo_order):
         if not node.requires_grad:
             continue
             
-        # 累积当前节点的梯度
+        # Accumulate gradients for current node
         if node.grad is None:
             node.grad = reduce(operator.add, node_to_output_grads_list[node])
-            # 确保梯度连续性（解决广播张量问题）
+            # Ensure gradient contiguity (solve broadcast tensor issues)
             if hasattr(node.grad, 'data') and hasattr(node.grad.data, 'data'):
                 cuda_tensor = node.grad.data.data
                 if hasattr(cuda_tensor, 'is_contiguous') and not cuda_tensor.is_contiguous():
@@ -113,21 +113,21 @@ def backward(self, out_grad=None):
         else:
             node.grad += reduce(operator.add, node_to_output_grads_list[node])
         
-        # 应用梯度钩子
+        # Apply gradient hooks
         node.apply_hooks(node.grad)
         
-        # 计算输入节点的梯度
+        # Compute gradients for input nodes
         if node.creator is not None:
-            # 处理混合精度
+            # Handle mixed precision
             grad = node.grad.half() if check_dtype(node.creator.ctx.saved_tensors, genesis.float16) else node.grad
             
-            # 调用对应操作的反向传播
+            # Call backward propagation of corresponding operation
             if node.creator.is_tuple_result:
                 backward_grad = node.creator.backward(node.creator.ctx, grad, node.idx)
             else:
                 backward_grad = node.creator.backward(node.creator.ctx, grad)
             
-            # 分发梯度到输入节点
+            # Distribute gradients to input nodes
             for i, input_node in enumerate(node.creator.inputs):
                 if input_node.requires_grad:
                     if input_node not in node_to_output_grads_list:
@@ -135,11 +135,11 @@ def backward(self, out_grad=None):
                     node_to_output_grads_list[input_node].append(backward_grad[i].float())
 ```
 
-#### 3. 拓扑排序
+#### 3. Topological Sort
 
 ```python
 def topo_sort(node):
-    """深度优先搜索实现拓扑排序"""
+    """Depth-first search implementation for topological sorting"""
     visited = set()
     topo_order = []
 
@@ -148,7 +148,7 @@ def topo_sort(node):
             return
         visited.add(n)
         
-        # 递归访问输入节点
+        # Recursively visit input nodes
         if n.creator is not None:
             for input_node in n.creator.inputs:
                 if isinstance(input_node, Tensor):
@@ -160,38 +160,38 @@ def topo_sort(node):
     return topo_order
 ```
 
-## ⚙️ Function基类
+## ⚙️ Function Base Class
 
-Function是所有可微分操作的基类，定义了前向和反向传播的接口。
+Function is the base class for all differentiable operations, defining the interface for forward and backward propagation.
 
-### 基本结构
+### Basic Structure
 
 ```python
 class Function:
     @staticmethod
     def forward(ctx: Context, *args) -> Union[Tensor, Tuple[Tensor, ...]]:
-        """前向传播实现"""
+        """Forward propagation implementation"""
         raise NotImplementedError
     
     @staticmethod  
     def backward(ctx: Context, grad_output, out_idx=None) -> Tuple[Tensor, ...]:
-        """反向传播实现"""
+        """Backward propagation implementation"""
         raise NotImplementedError
     
     @classmethod
     def apply(cls, *args, **kwargs):
-        """统一的调用接口"""
-        # 处理混合精度
+        """Unified call interface"""
+        # Handle mixed precision
         instance = cls()
         instance.ctx = Context()
         
-        # 执行前向传播
+        # Execute forward propagation
         if genesis.enable_autocast:
             result = cls.forward(instance.ctx, *_cast(args, genesis.float32), **_cast(kwargs, genesis.float32))
         else:
             result = cls.forward(instance.ctx, *args, **kwargs)
         
-        # 设置计算图连接
+        # Set computation graph connections
         instance.is_tuple_result = isinstance(result, tuple)
         
         if instance.is_tuple_result:
@@ -201,7 +201,7 @@ class Function:
         elif isinstance(result, Tensor) and result.requires_grad:
             result.set_creator(instance)
         
-        # 记录输入张量
+        # Record input tensors
         instance.inputs = []
         for t in args:
             if isinstance(t, Tensor):
@@ -212,28 +212,28 @@ class Function:
         return result
 ```
 
-### 实际操作示例
+### Practical Operation Examples
 
-#### 矩阵乘法
+#### Matrix Multiplication
 
 ```python
 class MatMul(Function):
     @staticmethod
     def forward(ctx, a, b):
-        # 保存输入用于反向传播
+        # Save inputs for backward propagation
         ctx.save_for_backward(a, b)
-        return a @ b  # 调用底层NDArray的矩阵乘法
+        return a @ b  # Call underlying NDArray matrix multiplication
     
     @staticmethod
     def backward(ctx, grad_output):
         a, b = ctx.saved_tensors
-        # 计算输入梯度
+        # Compute input gradients
         grad_a = grad_output @ b.T
         grad_b = a.T @ grad_output
         return grad_a, grad_b
 ```
 
-#### 加法（支持广播）
+#### Addition (with Broadcasting Support)
 
 ```python
 class Add(Function):
@@ -245,11 +245,11 @@ class Add(Function):
     
     @staticmethod
     def backward(ctx, grad_output):
-        # 处理广播的梯度
+        # Handle broadcasting gradients
         grad_a = grad_output
         grad_b = grad_output
         
-        # 对被广播的维度求和
+        # Sum over broadcasted dimensions
         for i, (da, db) in enumerate(zip(ctx.a_shape, ctx.b_shape)):
             if da == 1 and db > 1:
                 grad_a = grad_a.sum(axis=i, keepdims=True)
@@ -259,9 +259,9 @@ class Add(Function):
         return grad_a, grad_b
 ```
 
-## 📝 Context类
+## 📝 Context Class
 
-Context类用于在前向传播和反向传播之间传递信息。
+Context class is used to pass information between forward and backward propagation.
 
 ```python
 class Context:
@@ -269,7 +269,7 @@ class Context:
         self.saved_tensors = []
     
     def save_for_backward(self, *tensors):
-        """保存张量用于反向传播"""
+        """Save tensors for backward propagation"""
         self.saved_tensors.extend(tensors)
     
     @property
@@ -281,15 +281,15 @@ class Context:
         self._saved_tensors = tensors
 ```
 
-## 🔄 混合精度支持
+## 🔄 Mixed Precision Support
 
-自动微分系统内置混合精度训练支持：
+The automatic differentiation system has built-in mixed precision training support:
 
 ```python
-# 全局开关
+# Global switch
 genesis.enable_autocast = True
 
-# 自动类型转换
+# Automatic type conversion
 def _cast(value, dtype):
     if isinstance(value, Tensor) and value.is_floating_point():
         if dtype == genesis.float16:
@@ -298,83 +298,83 @@ def _cast(value, dtype):
             return value.float()
     return value
 
-# 在Function.apply中应用
+# Applied in Function.apply
 if genesis.enable_autocast:
     result = cls.forward(instance.ctx, *_cast(args, genesis.float32), **_cast(kwargs, genesis.float32))
 ```
 
-## 🪝 梯度钩子系统
+## 🪝 Gradient Hook System
 
-支持在梯度计算时执行自定义函数：
+Support for executing custom functions during gradient computation:
 
 ```python
 class Tensor:
     def register_hook(self, hook):
-        """注册梯度钩子"""
+        """Register gradient hook"""
         self.hooks.append(hook)
     
     def apply_hooks(self, grad):
-        """应用所有钩子"""
+        """Apply all hooks"""
         for hook in self.hooks:
             hook(grad)
 
-# 使用示例
+# Usage example
 def grad_clipping_hook(grad):
-    """梯度裁剪钩子"""
+    """Gradient clipping hook"""
     grad.clamp_(-1.0, 1.0)
 
 tensor.register_hook(grad_clipping_hook)
 ```
 
-## 🚀 性能优化
+## 🚀 Performance Optimization
 
-### 1. 内存管理优化
+### 1. Memory Management Optimization
 
-- **视图操作**：reshape、transpose等操作创建视图而非拷贝数据
-- **就地操作**：支持`+=`、`*=`等就地更新操作
-- **梯度累积优化**：智能的梯度累积策略
+- **View Operations**: reshape, transpose and other operations create views instead of copying data
+- **In-place Operations**: Support for in-place update operations like `+=`, `*=`
+- **Gradient Accumulation Optimization**: Smart gradient accumulation strategy
 
-### 2. 计算图优化
+### 2. Computation Graph Optimization
 
-- **惰性构建**：只有在需要梯度时才构建计算图
-- **智能释放**：自动释放不再需要的中间结果
-- **拓扑排序缓存**：缓存拓扑排序结果
+- **Lazy Construction**: Build computation graph only when gradients are needed
+- **Smart Release**: Automatically release intermediate results that are no longer needed
+- **Topological Sort Caching**: Cache topological sort results
 
-### 3. 设备间优化
+### 3. Cross-device Optimization
 
-- **自动设备推断**：自动选择合适的计算设备
-- **异步执行**：支持GPU异步计算
-- **内存预分配**：减少动态内存分配
+- **Automatic Device Inference**: Automatically select appropriate computing device
+- **Asynchronous Execution**: Support for GPU asynchronous computation
+- **Memory Pre-allocation**: Reduce dynamic memory allocation
 
-## 🎯 使用示例
+## 🎯 Usage Examples
 
-### 基础用法
+### Basic Usage
 
 ```python
 import genesis
 
-# 创建需要梯度的张量
+# Create tensors that require gradients
 x = genesis.randn(3, 4, requires_grad=True)
 y = genesis.randn(4, 2, requires_grad=True)
 
-# 前向传播（自动构建计算图）
+# Forward propagation (automatically build computation graph)
 z = x @ y
 loss = z.sum()
 
-# 反向传播（计算所有梯度）
+# Backward propagation (compute all gradients)
 loss.backward()
 
-print(f"x的梯度: {x.grad}")  # 输出x的梯度
-print(f"y的梯度: {y.grad}")  # 输出y的梯度
+print(f"Gradient of x: {x.grad}")  # Output gradient of x
+print(f"Gradient of y: {y.grad}")  # Output gradient of y
 ```
 
-### 自定义操作
+### Custom Operations
 
 ```python
 class CustomFunction(genesis.autograd.Function):
     @staticmethod
     def forward(ctx, input_tensor):
-        # 自定义前向计算
+        # Custom forward computation
         ctx.save_for_backward(input_tensor)
         result = input_tensor ** 2 + 2 * input_tensor + 1
         return result
@@ -382,24 +382,24 @@ class CustomFunction(genesis.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         input_tensor, = ctx.saved_tensors
-        # 自定义梯度计算：d/dx(x^2 + 2x + 1) = 2x + 2
+        # Custom gradient computation: d/dx(x^2 + 2x + 1) = 2x + 2
         grad_input = grad_output * (2 * input_tensor + 2)
         return grad_input
 
-# 使用自定义操作
+# Use custom operation
 x = genesis.randn(3, 4, requires_grad=True)
 y = CustomFunction.apply(x)
 y.sum().backward()
 ```
 
-### 梯度钩子
+### Gradient Hooks
 
 ```python
-# 梯度监控钩子
+# Gradient monitoring hook
 def monitor_grad(grad):
-    print(f"梯度统计: 均值={grad.mean():.4f}, 标准差={grad.std():.4f}")
+    print(f"Gradient stats: mean={grad.mean():.4f}, std={grad.std():.4f}")
 
-# 梯度裁剪钩子
+# Gradient clipping hook
 def clip_grad(grad):
     grad.data.clamp_(-1.0, 1.0)
 
@@ -407,9 +407,9 @@ x = genesis.randn(10, requires_grad=True)
 x.register_hook(monitor_grad)
 x.register_hook(clip_grad)
 
-# 执行一些计算
+# Perform some computation
 y = (x ** 3).sum()
-y.backward()  # 会触发钩子函数
+y.backward()  # Will trigger hook functions
 ```
 
-Genesis的自动微分系统设计简洁而强大，为深度学习提供了可靠的梯度计算基础，同时保持了良好的性能和可扩展性。
+Genesis's automatic differentiation system is designed to be simple yet powerful, providing a reliable foundation for gradient computation in deep learning while maintaining good performance and scalability.

@@ -19,6 +19,8 @@ from math import prod
 from ..dtypes import get_dtype
 from dataclasses import dataclass
 from enum import Enum
+import os
+
 from .cuda_memory_manager import allocate_memory, free_memory, memory_stats, get_memory_manager
 
 # ============= Index Plan Architecture =============
@@ -278,6 +280,29 @@ class CUDAStorage:
                 # Integer tensor indexing
                 return IndexPlan(kind=IndexKind.GATHER, index_tensor=key)
         
+        # Handle list indexing
+        if isinstance(key, list):
+            # Convert list to numpy array then to CUDAStorage
+            key_array = np.array(key)
+            if key_array.dtype == np.bool_ or key_array.dtype == bool:
+                mask_tensor = from_numpy(key_array.astype(np.bool_))
+                return IndexPlan(kind=IndexKind.GATHER, needs_mask_compaction=True, index_tensor=mask_tensor)
+            else:
+                # Integer list indexing
+                idx_tensor = from_numpy(key_array.astype(np.int64))
+                return IndexPlan(kind=IndexKind.GATHER, index_tensor=idx_tensor)
+        
+        # Handle tuple containing advanced indexing
+        if isinstance(key, tuple):
+            has_advanced = any(isinstance(idx, (list, CUDAStorage)) or 
+                              (hasattr(idx, 'shape') and hasattr(idx, 'dtype')) 
+                              for idx in key if idx is not None)
+            
+            if has_advanced:
+                # For mixed indexing, we need to handle it differently
+                # For now, use fallback to old implementation
+                return self._parse_mixed_index(key)
+        
         # Handle numpy array indexing
         if hasattr(key, 'shape') and hasattr(key, 'dtype'):
             if key.dtype == np.bool_ or key.dtype == bool:
@@ -291,6 +316,12 @@ class CUDAStorage:
         
         # Handle basic indexing (int, slice, tuple, etc.)
         return self._parse_basic_index(key)
+    
+    def _parse_mixed_index(self, key) -> IndexPlan:
+        """Handle mixed indexing (tuple with both basic and advanced indexing)"""
+        # For now, fall back to old implementation for mixed indexing
+        # This is complex and needs special handling
+        raise NotImplementedError("Mixed indexing needs special implementation")
     
     def _parse_basic_index(self, key) -> IndexPlan:
         """Parse basic indexing into view operations"""
@@ -333,6 +364,15 @@ class CUDAStorage:
             )
         
         elif isinstance(key, tuple):
+            # Check if this is mixed indexing (contains advanced indexing elements)
+            has_advanced = any(isinstance(idx, (list, CUDAStorage)) or 
+                              (hasattr(idx, 'shape') and hasattr(idx, 'dtype')) 
+                              for idx in key)
+            
+            if has_advanced:
+                # Mixed indexing - this should be handled as advanced indexing, not basic
+                raise NotImplementedError("Mixed indexing should be handled by advanced indexing path")
+            
             # Multi-dimensional indexing - simplified version, only handle all int/slice cases
             # Count non-None indices to validate against tensor dimensions
             non_none_count = sum(1 for idx in key if idx is not None)
@@ -410,6 +450,17 @@ class CUDAStorage:
                 result_shape=tuple(result_shape),
                 result_strides=tuple(result_strides),
                 ptr_offset_bytes=ptr_offset_bytes
+            )
+        
+        elif key is None:
+            # None (newaxis) - add dimension of size 1 at the beginning
+            result_shape = (1,) + self.shape
+            result_strides = (0,) + self.strides
+            return IndexPlan(
+                kind=IndexKind.VIEW,
+                result_shape=result_shape,
+                result_strides=result_strides,
+                ptr_offset_bytes=0
             )
         
         # Other cases return copy for now
@@ -788,58 +839,6 @@ class CUDAStorage:
         )
         return self
     
-    @staticmethod
-    def cat(arrays, dim=0):
-        """GPU-native concatenation operation"""
-        if not arrays:
-            raise ValueError("Cannot concatenate empty list of arrays")
-        
-        # Validate inputs
-        first_array = arrays[0]
-        for arr in arrays:
-            if not isinstance(arr, CUDAStorage):
-                raise TypeError("All arrays must be CUDAStorage objects")
-            if arr.dtype != first_array.dtype:
-                raise ValueError("All arrays must have the same dtype")
-        
-        # Calculate output shape
-        output_shape = list(first_array.shape)
-        cat_dim_size = sum(arr.shape[dim] for arr in arrays)
-        output_shape[dim] = cat_dim_size
-        
-        # Create output tensor
-        result = CUDAStorage(tuple(output_shape), dtype=first_array.dtype)
-        
-        # Copy data using GPU memcpy
-        offset = 0
-        item_size = np.dtype(first_array.dtype).itemsize
-        
-        for arr in arrays:
-            # Calculate source and destination parameters
-            src_ptr = arr.ptr
-            src_size = arr.nbytes
-            
-            # Calculate destination offset
-            if dim == 0:
-                # Simple case: concatenating along first dimension
-                dst_offset = offset * item_size
-            else:
-                # More complex: need to handle strided copy
-                # For now, use simple approach
-                elements_before = prod(output_shape[:dim])
-                elements_after = prod(output_shape[dim+1:])
-                dst_offset = (offset * elements_after * elements_before) * item_size
-            
-            dst_ptr = int(result.ptr) + dst_offset
-            
-            # Perform GPU-to-GPU copy
-            cuda_result = cuda.cuMemcpy(dst_ptr, src_ptr, src_size)
-            check_cuda_error(cuda_result)
-            
-            offset += arr.shape[dim]
-        
-        return result
-    
     def __getitem__(self, key):
         """GPU native getitem implementation - based on IndexPlan architecture + preserves original advanced indexing functionality"""
         # First try to parse as IndexPlan
@@ -876,18 +875,10 @@ class CUDAStorage:
                     
                     # Convert row indices to byte offsets for full rows  
                     row_size = int(np.prod(self.shape[1:]))  # elements per row
-                    flat_indices = []
                     
-                    # Create indices for all elements in selected rows
+                    # Use GPU-native expansion instead of CPU loop
                     idx_flat = idx.reshape((-1,))  # flatten index tensor
-                    idx_np = idx_flat.to_numpy()  # convert to numpy for iteration
-                    for row_idx in idx_np:
-                        row_idx = int(row_idx)  # ensure it's Python int
-                        for col_idx in range(row_size):
-                            flat_indices.append(row_idx * row_size + col_idx)
-                    
-                    # Convert to tensor and gather
-                    linear_idx_tensor = from_numpy(np.array(flat_indices, dtype=np.int64))
+                    linear_idx_tensor = _expand_row_indices_gpu(idx_flat, row_size)
                     
                     flat_src = self.contiguous()
                     flat_src = CUDAStorage((flat_src.size,), dtype=self.dtype, ptr=flat_src.ptr, strides=(1,), base=flat_src)
@@ -900,8 +891,12 @@ class CUDAStorage:
             else:
                 raise NotImplementedError(f"Unsupported indexing operation: {type(key)}")
                 
-        except (NotImplementedError, TypeError):
-            raise
+        except (NotImplementedError, TypeError) as e:
+            # Fall back to old implementation for unsupported cases
+            if "Mixed indexing" in str(e):
+                return self._getitem_fallback(key)
+            else:
+                raise
     
     def _getitem_fallback(self, key):
         """Original complex getitem implementation as fallback"""
@@ -966,6 +961,58 @@ class CUDAStorage:
                     return None
             return None  # Non-array type
 
+        # ---- Handle tuple with advanced indexing ----
+        if isinstance(key, tuple):
+            # Check if any element in the tuple is a list/array (advanced indexing)
+            has_advanced = False
+            for idx in key:
+                if isinstance(idx, (list, CUDAStorage)) or (hasattr(idx, 'shape') and hasattr(idx, 'dtype')):
+                    has_advanced = True
+                    break
+            
+            if has_advanced:
+                # For mixed indexing, we need special handling
+                # For now, let's handle the simple case of [list, slice] -> advanced indexing on first dim
+                first_idx = key[0]
+                if isinstance(first_idx, list) and len(key) == 2:
+                    # Convert list to tensor
+                    idx_tensor = from_numpy(np.array(first_idx).astype(np.int64))
+                    
+                    # Apply advanced indexing on first dimension
+                    # For tensor[idx_list, :] where idx_list selects rows
+                    row_size = int(np.prod(self.shape[1:]))  # elements per row
+                    idx_flat = idx_tensor.reshape((-1,))  # flatten index tensor
+                    
+                    # Convert row indices to linear indices
+                    linear_idx_tensor = _expand_row_indices_gpu(idx_flat, row_size)
+                    
+                    flat_src = self.contiguous()
+                    flat_src = CUDAStorage((flat_src.size,), dtype=self.dtype, ptr=flat_src.ptr, strides=(1,), base=flat_src)
+                    gathered_flat = _gather_linear(flat_src, linear_idx_tensor)
+                    
+                    # Reshape to correct shape: (len(indices),) + original_shape[1:]
+                    result_shape = (len(first_idx),) + self.shape[1:]
+                    gathered = gathered_flat.reshape(result_shape)
+                    
+                    # Then apply slice on remaining dimensions
+                    remaining_key = key[1:]
+                    if remaining_key:
+                        # For mixed indexing like A[indices, :2], we need to apply the slice
+                        # to the appropriate dimension of the gathered result
+                        # The gathered result has shape (len(indices), *original_shape[1:])
+                        # so remaining_key should be applied starting from dimension 1
+                        if len(remaining_key) == 1 and isinstance(remaining_key[0], slice):
+                            # Simple case: A[indices, slice] -> gathered[:, slice]
+                            slice_key = (slice(None),) + remaining_key
+                            return gathered[slice_key]
+                        else:
+                            # More complex case - just apply directly
+                            return gathered[remaining_key]
+                    else:
+                        return gathered
+                else:
+                    raise NotImplementedError(f"Complex mixed indexing not yet supported: {key}")
+        
         # ---- Boolean/integer array indexing (advanced indexing) priority handling ----
         dev_idx = _as_device_index(key)
         if dev_idx is not None:
@@ -1078,68 +1125,156 @@ class CUDAStorage:
                 # Integer indexing setitem: x[indices] = value  
                 return self._setitem_integer_indices(key, value)
         
-        # For other cases, fall back to CPU temporarily
-        # This is not efficient but ensures correctness
-        cpu_self = self.cpu()
-        if isinstance(value, CUDAStorage):
-            cpu_value = value.cpu()
-        else:
-            cpu_value = value
+        # NO MORE CPU FALLBACK! Implement GPU-only setitem
+        
+        # Handle basic indexing cases directly on GPU
+        if isinstance(key, int):
+            # Single integer index
+            if key < 0:
+                key = self.shape[0] + key
+            target_view = self[key]
+            self._copy_data_to_view(target_view, value)
+            return self
             
-        # Perform setitem on CPU
-        cpu_self.data.numpy()[key] = cpu_value.data.numpy() if hasattr(cpu_value, 'data') else cpu_value
-        
-        # Copy result back to GPU (in-place update)
-        updated_cuda = from_numpy(cpu_self.data.numpy())
-        # Copy data from updated tensor to self
-        result = cuda.cuMemcpy(self.ptr, updated_cuda.ptr, self.size * self.itemsize)
-        check_cuda_error(result)
-        
+        elif isinstance(key, slice):
+            # Slice indexing  
+            target_view = self[key]
+            self._copy_data_to_view(target_view, value)
+            return self
+            
+        elif isinstance(key, tuple):
+            # Multi-dimensional indexing
+            target_view = self[key]
+            self._copy_data_to_view(target_view, value)
+            return self
+            
+        elif isinstance(key, list):
+            # List indexing: treat as integer indices, use existing setitem for each
+            if isinstance(value, (int, float)):
+                # Scalar value: set each indexed element
+                for idx in key:
+                    self[idx] = value
+            else:
+                # Array value: set each indexed element from corresponding value element
+                if hasattr(value, '__len__') and len(value) == len(key):
+                    for i, idx in enumerate(key):
+                        self[idx] = value[i] if hasattr(value, '__getitem__') else value
+                else:
+                    # Broadcast single value
+                    for idx in key:
+                        self[idx] = value
+            return self
+            
+        else:
+            # For other cases, raise error instead of fallback
+            raise NotImplementedError(f"GPU-only setitem does not support indexing type: {type(key)}")
+            
         return self
     
     def _setitem_boolean_mask(self, mask, value):
-        """Set values using boolean mask"""
-        # For now, use CPU fallback for boolean setitem
-        # TODO: Implement efficient CUDA scatter operation
-        cpu_self = self.cpu()
-        cpu_mask = mask.cpu() if isinstance(mask, CUDAStorage) else mask
+        """Set values using boolean mask - Triton-optimized GPU implementation"""
+        # Use Triton kernel for efficient boolean mask setitem
         
-        if isinstance(value, CUDAStorage):
-            cpu_value = value.cpu()
+        # Convert to flat tensors
+        self_flat = self.reshape((-1,))
+        mask_flat = mask.reshape((-1,))
+        
+        if isinstance(value, (int, float)):
+            # Scalar value: use Triton kernel
+            self._triton_boolean_setitem_scalar(self_flat, mask_flat, float(value))
         else:
-            cpu_value = value
+            # Array value: need to handle properly
+            if isinstance(value, CUDAStorage):
+                value_flat = value.reshape((-1,))
+            else:
+                # Convert to CUDAStorage
+                import numpy as np
+                value_np = np.array(value, dtype=self._numpy_dtype)
+                value_flat = from_numpy(value_np).reshape((-1,))
             
-        # Perform boolean setitem on CPU
-        cpu_self.data.numpy()[cpu_mask.data.numpy()] = cpu_value.data.numpy() if hasattr(cpu_value, 'data') else cpu_value
+            self._triton_boolean_setitem_array(self_flat, mask_flat, value_flat)
         
-        # Copy result back to GPU (in-place update)
-        # Create new CUDA tensor and copy data
-        updated_cuda = from_numpy(cpu_self.data.numpy())
-        # Copy data from updated tensor to self
-        result = cuda.cuMemcpy(self.ptr, updated_cuda.ptr, self.size * self.itemsize)
-        check_cuda_error(result)
         return self
     
-    def _setitem_integer_indices(self, indices, value):
-        """Set values using integer indices"""  
-        # For now, use CPU fallback for integer setitem
-        # TODO: Implement efficient CUDA scatter operation
-        cpu_self = self.cpu()
-        cpu_indices = indices.cpu() if isinstance(indices, CUDAStorage) else indices
+    def _triton_boolean_setitem_scalar(self, target_flat, mask_flat, value):
+        """Triton kernel for boolean mask setitem with scalar value"""
+        n_elements = target_flat.size
         
-        if isinstance(value, CUDAStorage):
-            cpu_value = value.cpu()
-        else:
-            cpu_value = value
+        @triton.jit
+        def boolean_setitem_scalar_kernel(
+            target_ptr, mask_ptr, value,
+            n_elements,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
             
-        # Perform integer setitem on CPU
-        cpu_self.data.numpy()[cpu_indices.data.numpy()] = cpu_value.data.numpy() if hasattr(cpu_value, 'data') else cpu_value
+            # Load mask values
+            mask_vals = tl.load(mask_ptr + offsets, mask=mask, other=0)
+            
+            # Load current target values
+            target_vals = tl.load(target_ptr + offsets, mask=mask, other=0.0)
+            
+            # Set value where mask is true
+            new_vals = tl.where(mask_vals, value, target_vals)
+            
+            # Store back
+            tl.store(target_ptr + offsets, new_vals, mask=mask)
         
-        # Copy result back to GPU (in-place update)
-        updated_cuda = from_numpy(cpu_self.data.numpy())
-        # Copy data from updated tensor to self
-        result = cuda.cuMemcpy(self.ptr, updated_cuda.ptr, self.size * self.itemsize)
-        check_cuda_error(result)
+        BLOCK_SIZE = 1024
+        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+        
+        boolean_setitem_scalar_kernel[grid](
+            target_flat, mask_flat, value,
+            n_elements,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
+    
+    def _triton_boolean_setitem_array(self, target_flat, mask_flat, value_flat):
+        """Triton kernel for boolean mask setitem with array values"""
+        # For array values, we need to track which value element to use
+        # This is more complex - convert True indices and use scatter
+        
+        # For now, fallback to element-wise for array case
+        # TODO: Implement efficient Triton kernel for array values
+        value_idx = 0
+        for i in range(mask_flat.size):
+            mask_val = mask_flat[i]
+            if hasattr(mask_val, 'to_numpy'):
+                is_true = bool(mask_val.to_numpy().item())
+            else:
+                is_true = bool(mask_val)
+                
+            if is_true and value_idx < value_flat.size:
+                target_flat[i] = value_flat[value_idx]
+                value_idx += 1
+    
+    def _setitem_integer_indices(self, indices, value):
+        """Set values using integer indices - efficient GPU implementation"""
+        # Use existing __getitem__ to get indexed elements, then bulk copy
+        
+        # Get the integer-indexed view  
+        selected = self[indices]  # This uses existing efficient integer indexing
+        
+        # Assign value using existing copy operations
+        if isinstance(value, (int, float)):
+            # Scalar: use efficient fill
+            selected.fill(value)
+        elif isinstance(value, CUDAStorage):
+            # Another tensor: use efficient copy
+            if selected.size != value.size:
+                if value.size == 1:
+                    selected.fill(float(value.flat()[0]))
+                else:
+                    raise ValueError(f"Cannot broadcast value of size {value.size} to {selected.size} positions")
+            else:
+                result = cuda.cuMemcpyDtoD(selected.ptr, value.ptr, selected.nbytes)
+                check_cuda_error(result)
+        else:
+            self._copy_data_to_view(selected, value)
+        
         return self
     
     def _copy_data_to_view(self, target_view, value):
@@ -1154,8 +1289,8 @@ class CUDAStorage:
                 result = cuda.cuMemcpyDtoD(target_view.ptr, value.ptr, target_view.nbytes)
                 check_cuda_error(result)
             else:
-                # Need strided copy (temporarily use original method)
-                target_view.from_numpy(value.to_numpy())
+                # GPU strided copy using cuMemcpy2D
+                self._gpu_strided_copy(target_view, value)
         
         elif isinstance(value, (int, float)):
             # Scalar assignment: use fill operation
@@ -1173,6 +1308,139 @@ class CUDAStorage:
         else:
             raise TypeError(f"Cannot assign {type(value)} to CUDAStorage")
     
+    def _gpu_strided_copy(self, target_view, value):
+        """GPU-only strided copy without CPU fallback"""
+        if target_view.shape != value.shape:
+            raise ValueError(f"Shape mismatch: {target_view.shape} vs {value.shape}")
+        
+        # For 1D tensors, use element-wise copy with stride
+        if target_view.ndim == 1 and value.ndim == 1:
+            self._gpu_1d_strided_copy(target_view, value)
+        elif target_view.ndim == 2 and value.ndim == 2:
+            self._gpu_2d_strided_copy(target_view, value) 
+        else:
+            # For higher dimensions, flatten and copy
+            self._gpu_flattened_copy(target_view, value)
+    
+    def _gpu_1d_strided_copy(self, target_view, value):
+        """GPU 1D strided copy"""
+        size = target_view.size
+        target_stride = target_view.stride()[0] * target_view.itemsize
+        value_stride = value.stride()[0] * value.itemsize
+        itemsize = target_view.itemsize
+        
+        if target_stride == itemsize and value_stride == itemsize:
+            # Both contiguous, direct copy
+            result = cuda.cuMemcpyDtoD(target_view.ptr, value.ptr, size * itemsize)
+            check_cuda_error(result)
+        else:
+            # Strided copy - copy element by element
+            for i in range(size):
+                src_ptr = value.ptr + i * value_stride
+                dst_ptr = target_view.ptr + i * target_stride
+                result = cuda.cuMemcpyDtoD(dst_ptr, src_ptr, itemsize)
+                check_cuda_error(result)
+    
+    def _gpu_2d_strided_copy(self, target_view, value):
+        """GPU 2D strided copy using cuMemcpy2D"""
+        height, width = target_view.shape
+        
+        # Calculate strides in bytes
+        target_pitch = target_view.stride()[0] * target_view.itemsize
+        value_pitch = value.stride()[0] * value.itemsize
+        width_bytes = width * target_view.itemsize
+        
+        # Use cuMemcpy2D for efficient 2D copy
+        copy_params = cuda.CUDA_MEMCPY2D()
+        copy_params.srcMemoryType = cuda.CUmemorytype.CU_MEMORYTYPE_DEVICE
+        copy_params.srcDevice = value.ptr
+        copy_params.srcPitch = value_pitch
+        
+        copy_params.dstMemoryType = cuda.CUmemorytype.CU_MEMORYTYPE_DEVICE
+        copy_params.dstDevice = target_view.ptr
+        copy_params.dstPitch = target_pitch
+        
+        copy_params.WidthInBytes = width_bytes
+        copy_params.Height = height
+        
+        result = cuda.cuMemcpy2D(copy_params)
+        check_cuda_error(result)
+    
+    def _gpu_flattened_copy(self, target_view, value):
+        """GPU copy by flattening tensors"""
+        if target_view.is_contiguous():
+            # Contiguous case: use fast reshape+copy
+            target_flat = target_view.reshape((-1,))
+            value_flat = value.reshape((-1,))
+            self._gpu_1d_strided_copy(target_flat, value_flat)
+        else:
+            # Non-contiguous case: use optimized strided copy
+            self._gpu_strided_copy_fast(target_view, value)
+    
+    def _gpu_strided_copy_fast(self, target_view, value):
+        """Fast GPU strided copy for non-contiguous views"""
+        # For now, prioritize correctness over performance
+        # Use existing working 1D/2D strided copy when possible
+        
+        if target_view.ndim == 1 and value.ndim == 1:
+            # 1D case: use existing fast implementation
+            self._gpu_1d_strided_copy(target_view, value)
+        elif target_view.ndim == 2 and value.ndim == 2:
+            # 2D case: use existing fast implementation
+            self._gpu_2d_strided_copy(target_view, value)
+        else:
+            # Higher dimensions: use safe element-wise copy for small tensors
+            if target_view.size <= 1000:
+                self._gpu_elementwise_copy(target_view, value)
+            else:
+                # For large tensors, try to decompose into 2D operations
+                self._gpu_decompose_to_2d_copy(target_view, value)
+    
+    def _gpu_decompose_to_2d_copy(self, target_view, value):
+        """Decompose high-dimensional copy into 2D operations"""
+        # Try to reshape to 2D while preserving memory layout
+        if target_view.ndim >= 3:
+            # Merge all but the first dimension
+            outer_size = target_view.shape[0]
+            inner_size = target_view.size // outer_size
+            
+            # Check if we can safely create 2D views
+            if (target_view.stride()[0] * outer_size <= target_view.base.size if target_view.base else target_view.size):
+                try:
+                    # Create 2D view of target
+                    target_2d = CUDAStorage(
+                        shape=(outer_size, inner_size),
+                        dtype=target_view.dtype,
+                        ptr=target_view.ptr,
+                        strides=(target_view.stride()[0], 1),  # Assume inner stride = 1
+                        base=target_view.base or target_view
+                    )
+                    # Reshape value to 2D
+                    value_2d = value.reshape((outer_size, inner_size))
+                    
+                    self._gpu_2d_strided_copy(target_2d, value_2d)
+                    return
+                except:
+                    pass
+        
+        # Fallback to element-wise copy
+        self._gpu_elementwise_copy(target_view, value)
+    
+    def _gpu_elementwise_copy(self, target_view, value):
+        """Element-wise copy for small tensors"""
+        value_flat = value.reshape((-1,))
+        for i in range(value_flat.size):
+            # Convert linear index to multi-dimensional indices
+            indices = []
+            remaining = i
+            for dim_size in reversed(target_view.shape):
+                indices.append(remaining % dim_size)
+                remaining //= dim_size
+            indices.reverse()
+            
+            # Set individual element
+            target_view[tuple(indices)] = float(value_flat[i].to_numpy().item())
+
     def _fill_view(self, target_view, value):
         """Fill view with scalar value"""
         if target_view.is_contiguous():
@@ -1188,63 +1456,10 @@ class CUDAStorage:
                 result = cuda.cuMemcpyHtoD(target_view.ptr, fill_data, fill_data.nbytes)
                 check_cuda_error(result)
         else:
-            # Non-contiguous memory: temporarily use original method
-            import numpy as np
-            fill_data = np.full(target_view.shape, value, dtype=target_view._numpy_dtype)
-            target_view.from_numpy(fill_data)
+            # Non-contiguous memory: implement GPU fill for non-contiguous tensors
+            # For now, disable non-contiguous fill operations
+            raise NotImplementedError("Non-contiguous fill not implemented in GPU-only mode")
     
-    
-    def _setitem_fallback(self, key, value):
-        """Support tensor slice assignment with GPU acceleration"""
-        # Handle CUDAStorage as key (convert to numpy for processing)
-        if isinstance(key, CUDAStorage):
-            key_np = key.to_numpy()
-            if key_np.ndim == 0:  # scalar
-                key = int(key_np.item())
-            else:
-                # For array indexing, use numpy array but process on GPU
-                key = key_np
-        
-        if isinstance(key, int):
-            # Single integer index - zero-copy slice assignment
-            if key < 0:
-                key = self.shape[0] + key
-            if key >= self.shape[0]:
-                raise IndexError(f"Index {key} out of bounds for dimension 0 with size {self.shape[0]}")
-            
-            # Get the slice view (zero-copy)
-            slice_view = self[key]
-            
-            # GPU-native copy
-            self._copy_to_view(slice_view, value)
-        
-        elif isinstance(key, slice):
-            # Slice assignment - zero-copy view with GPU copy
-            slice_view = self[key]
-            self._copy_to_view(slice_view, value)
-            
-        elif isinstance(key, tuple):
-            # Multi-dimensional indexing for assignment - zero-copy view
-            slice_view = self[key]
-            self._copy_to_view(slice_view, value)
-            
-        elif isinstance(key, (list, tuple)) or (hasattr(key, 'shape') and hasattr(key, 'dtype')):
-            # Array-like indexing (boolean or integer arrays)
-            if hasattr(key, 'shape') and hasattr(key, 'dtype'):
-                key_np = key
-            else:
-                import numpy as np
-                key_np = np.array(key)
-            
-            if key_np.dtype == bool or key_np.dtype == 'bool':
-                # Boolean indexing assignment - GPU implementation
-                self._setitem_boolean_gpu(key_np, value)
-            else:
-                # Integer array indexing assignment - GPU implementation  
-                self._setitem_integer_array_gpu(key_np, value)
-        
-        else:
-            raise NotImplementedError(f"Unsupported indexing type for assignment: {type(key)}")
     
     def _copy_to_view(self, target_view, value):
         """Copy value to target view efficiently on GPU"""
@@ -1259,9 +1474,8 @@ class CUDAStorage:
                 result = cuda.cuMemcpyDtoD(target_view.ptr, value.ptr, target_view.nbytes)
                 check_cuda_error(result)
             else:
-                # Use strided copy (would need to implement strided copy kernel)
-                # For now, fallback to CPU method
-                target_view.from_numpy(value.to_numpy())
+                # GPU strided copy using cuMemcpy2D
+                self._gpu_strided_copy(target_view, value)
         
         elif isinstance(value, np.ndarray):
             # Copy from numpy array
@@ -1320,37 +1534,16 @@ class CUDAStorage:
         ndarray_ops_gpu.scatter_by_indices(value_tensor, indices_tensor, self)
     
     def float(self):
-        """Convert tensor to float32 type"""
-        if self.dtype == "float32":
-            return self  # Already float32
-        
-        # Convert to float32
-        np_data = self.to_numpy().astype(np.float32)
-        result = CUDAStorage(self.shape, "float32")
-        result.from_numpy(np_data)
-        return result
+        """Convert tensor to float32 type using GPU-native conversion"""
+        return _convert_dtype_gpu(self, "float32")
     
     def half(self):
-        """Convert tensor to float16 type"""
-        if self.dtype == "float16":
-            return self  # Already float16
-        
-        # Convert to float16
-        np_data = self.to_numpy().astype(np.float16)
-        result = CUDAStorage(self.shape, "float16")
-        result.from_numpy(np_data)
-        return result
+        """Convert tensor to float16 type using GPU-native conversion"""
+        return _convert_dtype_gpu(self, "float16")
     
     def long(self):
-        """Convert tensor to int64 type"""
-        if self.dtype == "int64":
-            return self  # Already int64
-        
-        # Convert to int64
-        np_data = self.to_numpy().astype(np.int64)
-        result = CUDAStorage(self.shape, "int64")
-        result.from_numpy(np_data)
-        return result
+        """Convert tensor to int64 type using GPU-native conversion"""
+        return _convert_dtype_gpu(self, "int64")
     
     def detach(self):
         """Detach tensor from computation graph (for PyTorch compatibility)"""
@@ -1410,13 +1603,8 @@ class CUDAStorage:
         if self.dtype == target_dtype_str:
             return self  # Already correct type
         
-        # Convert dtype
-        target_dtype_obj = get_dtype(target_dtype_str)
-        target_np_dtype = target_dtype_obj.numpy_dtype
-        np_data = self.to_numpy().astype(target_np_dtype)
-        result = CUDAStorage(self.shape, target_dtype_str)
-        result.from_numpy(np_data)
-        return result
+        # Convert dtype using GPU-native method
+        return _convert_dtype_gpu(self, target_dtype_str)
     
     
     def split(self, split_size_or_sections, dim=None):
@@ -1576,24 +1764,28 @@ class CUDAStorage:
                 ))
                 
             elif dim == ndim - 1:
-                # Concatenating along last dimension
-                # Need to copy row by row
-                elements_per_row = tensor.shape[dim]  # Elements in concat dimension
-                num_rows = tensor.size // elements_per_row  # Number of rows
-                output_elements_per_row = output_shape[dim]  # Output row size
-                
-                src_ptr = int(tensor.ptr)
-                element_size = tensor.itemsize
-                
-                for row in range(num_rows):
-                    src_row_ptr = src_ptr + row * elements_per_row * element_size
-                    dst_row_ptr = int(result.ptr) + (row * output_elements_per_row + current_offset) * element_size
+                # Concatenating along last dimension - use GPU-optimized path for 2 tensors
+                if len(non_empty_tensors) == 2 and current_offset == 0:
+                    # Special case: exactly 2 tensors, use optimized kernel
+                    return _cat_last_dim_gpu(non_empty_tensors[0], non_empty_tensors[1])
+                else:
+                    # Fallback to row-by-row copy for complex cases
+                    elements_per_row = tensor.shape[dim]  # Elements in concat dimension
+                    num_rows = tensor.size // elements_per_row  # Number of rows
+                    output_elements_per_row = output_shape[dim]  # Output row size
                     
-                    check_cuda_error(cuda.cuMemcpy(
-                        dst_row_ptr,
-                        src_row_ptr,
-                        elements_per_row * element_size
-                    ))
+                    src_ptr = int(tensor.ptr)
+                    element_size = tensor.itemsize
+                    
+                    for row in range(num_rows):
+                        src_row_ptr = src_ptr + row * elements_per_row * element_size
+                        dst_row_ptr = int(result.ptr) + (row * output_elements_per_row + current_offset) * element_size
+                        
+                        check_cuda_error(cuda.cuMemcpy(
+                            dst_row_ptr,
+                            src_row_ptr,
+                            elements_per_row * element_size
+                        ))
             else:
                 # For middle dimensions, use a simpler iterative approach
                 # Copy slice by slice
@@ -1643,6 +1835,89 @@ def _gather_linear_kernel(src_ptr, idx_ptr, out_ptr, N, BLOCK: tl.constexpr):
     idx  = tl.load(idx_ptr + offs, mask=m).to(tl.int64)
     val  = tl.load(src_ptr + idx, mask=m)
     tl.store(out_ptr + offs, val, mask=m)
+
+@triton.jit
+def _expand_row_indices_kernel(
+    row_indices_ptr, linear_indices_ptr,
+    num_rows, row_size,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    GPU-native expansion of row indices to linear indices.
+    Replaces CPU loop for advanced indexing.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Calculate which output element we're computing
+    output_idx = offsets
+    mask = output_idx < (num_rows * row_size)
+    
+    # Calculate which row and which column within row
+    row_idx = output_idx // row_size
+    col_idx = output_idx % row_size
+    
+    # Load the actual row index from input tensor
+    row_indices = tl.load(row_indices_ptr + row_idx, mask=mask, other=0)
+    
+    # Calculate linear index: actual_row * row_size + col_offset
+    linear_idx = row_indices * row_size + col_idx
+    
+    tl.store(linear_indices_ptr + output_idx, linear_idx, mask=mask)
+
+@triton.jit
+def _dtype_convert_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    GPU-native data type conversion kernel.
+    Triton handles type conversion automatically based on pointer types.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load and convert (Triton handles type conversion automatically)
+    input_vals = tl.load(input_ptr + offsets, mask=mask, other=0.0)
+    tl.store(output_ptr + offsets, input_vals, mask=mask)
+
+@triton.jit
+def _cat_last_dim_kernel(
+    tensor1_ptr, tensor2_ptr, output_ptr,
+    num_rows, size1, size2, output_size,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    Optimized concatenation along last dimension using Triton.
+    Replaces the CPU loop for last dimension concatenation.
+    """
+    pid = tl.program_id(axis=0)
+    row_idx = pid
+    
+    if row_idx >= num_rows:
+        return
+    
+    # Copy first tensor data
+    for i in range(0, size1, BLOCK_SIZE):
+        offset_range = i + tl.arange(0, BLOCK_SIZE)
+        mask = offset_range < size1
+        
+        src_ptr = tensor1_ptr + row_idx * size1 + offset_range
+        dst_ptr = output_ptr + row_idx * output_size + offset_range
+        
+        data = tl.load(src_ptr, mask=mask)
+        tl.store(dst_ptr, data, mask=mask)
+    
+    # Copy second tensor data
+    for i in range(0, size2, BLOCK_SIZE):
+        offset_range = i + tl.arange(0, BLOCK_SIZE)
+        mask = offset_range < size2
+        
+        src_ptr = tensor2_ptr + row_idx * size2 + offset_range
+        dst_ptr = output_ptr + row_idx * output_size + size1 + offset_range
+        
+        data = tl.load(src_ptr, mask=mask)
+        tl.store(dst_ptr, data, mask=mask)
 
 @triton.jit
 def _compact_mask_atomic_i32(
@@ -1748,41 +2023,195 @@ def _gather_linear(src: "CUDAStorage", linear_idx: "CUDAStorage") -> "CUDAStorag
     _gather_linear_kernel[grid](src, idx, out, N, BLOCK=BLOCK, num_warps=4)
     return out
 
+def _expand_row_indices_gpu(row_indices: "CUDAStorage", row_size: int) -> "CUDAStorage":
+    """
+    GPU-native expansion of row indices to linear indices.
+    Replaces the CPU loop in advanced indexing.
+    """
+    if row_indices.dtype != "int64":
+        row_indices = row_indices.to("int64")
+    
+    num_rows = row_indices.size
+    total_elements = num_rows * row_size
+    
+    # Create output tensor
+    linear_indices = CUDAStorage((total_elements,), dtype="int64")
+    
+    # Launch kernel
+    BLOCK_SIZE = 1024
+    grid = (triton.cdiv(total_elements, BLOCK_SIZE),)
+    
+    _expand_row_indices_kernel[grid](
+        row_indices, linear_indices,
+        num_rows, row_size,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    return linear_indices
+
+def _convert_dtype_gpu(self, target_dtype: str) -> "CUDAStorage":
+    """
+    GPU-native dtype conversion using Triton kernel.
+    Avoids expensive CPU round-trip.
+    """
+    if self.dtype == target_dtype:
+        return self
+    
+    output = CUDAStorage(self.shape, dtype=target_dtype)
+    
+    if not self.is_contiguous():
+        src = self.contiguous()
+    else:
+        src = self
+    
+    n_elements = src.size
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+    
+    _dtype_convert_kernel[grid](src, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+def _cat_last_dim_gpu(tensor1: "CUDAStorage", tensor2: "CUDAStorage") -> "CUDAStorage":
+    """
+    GPU-native concatenation along last dimension for two tensors.
+    Optimized for the common case in RoPE (rotate_half).
+    """
+    # Verify inputs
+    if tensor1.shape[:-1] != tensor2.shape[:-1]:
+        raise ValueError("All dimensions except last must match")
+    if tensor1.dtype != tensor2.dtype:
+        raise ValueError("Tensors must have same dtype")
+    
+    # Calculate output shape
+    output_shape = list(tensor1.shape)
+    output_shape[-1] = tensor1.shape[-1] + tensor2.shape[-1]
+    output_shape = tuple(output_shape)
+    
+    # Create output tensor
+    result = CUDAStorage(output_shape, dtype=tensor1.dtype)
+    
+    # Ensure contiguous
+    t1 = tensor1.contiguous() if not tensor1.is_contiguous() else tensor1
+    t2 = tensor2.contiguous() if not tensor2.is_contiguous() else tensor2
+    
+    # Launch kernel
+    num_rows = prod(t1.shape[:-1])
+    size1 = t1.shape[-1]
+    size2 = t2.shape[-1]
+    output_size = size1 + size2
+    
+    BLOCK_SIZE = 64  # Good for typical hidden sizes
+    grid = (num_rows,)
+    
+    _cat_last_dim_kernel[grid](
+        t1, t2, result,
+        num_rows, size1, size2, output_size,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    return result
+
 @triton.jit
-def _copy_strided_to_contig(
-    src_ptr, dst_ptr,            # Pointers to source / destination data
-    sizes_ptr, strides_ptr,      # size / stride for each dimension (int64)
-    total_numel,                 # Total number of tensor elements
-    ndim: tl.constexpr,          # Number of dimensions
-    BLOCK: tl.constexpr          # How many elements each CTA processes
+def _copy_strided_to_contig_optimized(
+    src_ptr, dst_ptr,
+    total_numel,
+    # Pass sizes and strides as compile-time constants for common cases
+    size0: tl.constexpr, stride0: tl.constexpr,
+    size1: tl.constexpr, stride1: tl.constexpr, 
+    size2: tl.constexpr, stride2: tl.constexpr,
+    size3: tl.constexpr, stride3: tl.constexpr,
+    ndim: tl.constexpr,
+    BLOCK: tl.constexpr
 ):
     """
-    Triton kernel based on user's successful solution
-    Uses vectorized operations, avoiding loops and break statements
+    Optimized Triton kernel for strided copy.
+    Uses compile-time constants and vectorized operations for better performance.
     """
-    # Linear index range handled by current CTA
-    pid  = tl.program_id(axis=0)
+    pid = tl.program_id(axis=0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < total_numel     # Mask out-of-bounds threads
-
-    # Linear idx → multi-dimensional coordinates → source offset
-    linear  = offs.to(tl.int64)
+    mask = offs < total_numel
+    
+    # Optimized address calculation using compile-time constants
+    linear = offs.to(tl.int64)
     src_off = tl.zeros_like(linear)
+    
+    # Unroll common dimension cases for performance
+    if ndim == 4:
+        coord3 = linear % size3
+        linear //= size3
+        coord2 = linear % size2  
+        linear //= size2
+        coord1 = linear % size1
+        linear //= size1
+        coord0 = linear
+        src_off = coord0 * stride0 + coord1 * stride1 + coord2 * stride2 + coord3 * stride3
+    elif ndim == 3:
+        coord2 = linear % size2
+        linear //= size2
+        coord1 = linear % size1
+        linear //= size1
+        coord0 = linear
+        src_off = coord0 * stride0 + coord1 * stride1 + coord2 * stride2
+    elif ndim == 2:
+        coord1 = linear % size1
+        coord0 = linear // size1
+        src_off = coord0 * stride0 + coord1 * stride1
+    else:
+        # General case for other dimensions
+        if ndim >= 1:
+            coord0 = linear % size0
+            linear //= size0
+            src_off += coord0 * stride0
+        if ndim >= 2:
+            coord1 = linear % size1
+            linear //= size1
+            src_off += coord1 * stride1
+        if ndim >= 3:
+            coord2 = linear % size2
+            linear //= size2
+            src_off += coord2 * stride2
+        if ndim >= 4:
+            coord3 = linear % size3
+            src_off += coord3 * stride3
+    
+    # Vectorized read/write with prefetch hint
+    data = tl.load(src_ptr + src_off, mask=mask)
+    tl.store(dst_ptr + offs, data, mask=mask)
 
+@triton.jit
+def _copy_strided_to_contig_general(
+    src_ptr, dst_ptr,
+    sizes_ptr, strides_ptr,
+    total_numel,
+    ndim: tl.constexpr,
+    BLOCK: tl.constexpr
+):
+    """
+    General fallback kernel for arbitrary dimensions.
+    """
+    pid = tl.program_id(axis=0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < total_numel
+    
+    linear = offs.to(tl.int64)
+    src_off = tl.zeros_like(linear)
+    
+    # Compute address using original approach (load on demand)
     for d in range(ndim - 1, -1, -1):
-        size_d   = tl.load(sizes_ptr + d)
-        stride_d = tl.load(strides_ptr + d)
-        coord    = linear % size_d
-        linear  //= size_d
+        size_d = tl.load(sizes_ptr + d)
+        stride_d = tl.load(strides_ptr + d) 
+        coord = linear % size_d
+        linear //= size_d
         src_off += coord * stride_d
+    
+    data = tl.load(src_ptr + src_off, mask=mask)
+    tl.store(dst_ptr + offs, data, mask=mask)
 
-    # Read & write back
-    tl.store(dst_ptr + offs,
-             tl.load(src_ptr + src_off, mask=mask),
-             mask=mask)
+# Cache for metadata to avoid repeated GPU allocations
+_metadata_cache = {}
 
 def copy_strided_kernel(src: CUDAStorage, dst: CUDAStorage):
-    """High-performance strided copy using proven Triton kernel (based on user's working solution)"""
+    """Optimized high-performance strided copy kernel"""
     assert src.size == dst.size
     assert dst.is_contiguous(), "Destination must be contiguous"
     
@@ -1790,33 +2219,66 @@ def copy_strided_kernel(src: CUDAStorage, dst: CUDAStorage):
         # Fast path: both contiguous, direct cudaMemcpy
         result = cuda.cuMemcpyDtoD(dst.ptr, src.ptr, src.nbytes)
         check_cuda_error(result)
+        return
+    
+    ndim = len(src.shape)
+    numel = src.size
+    
+    # Choose optimal block size based on problem size
+    if numel < 1024:
+        BLOCK = 256
+        num_warps = 2
+    elif numel < 1024 * 1024:
+        BLOCK = 512 
+        num_warps = 4
     else:
-        # Use proven Triton kernel approach
-        ndim = len(src.shape)
         BLOCK = 1024
-        numel = src.size
-        grid = (triton.cdiv(numel, BLOCK),)
-
-        # Create GPU tensors for shapes and strides (int64) - pass CUDAStorage objects directly
-        sizes_gpu = empty((ndim,), np.int64)
-        strides_gpu = empty((ndim,), np.int64)
+        num_warps = 8
+    
+    grid = (triton.cdiv(numel, BLOCK),)
+    
+    # Use optimized kernel for common cases (ndim <= 4)
+    if ndim <= 4:
+        # Pad with zeros for unused dimensions
+        sizes = list(src.shape) + [1] * (4 - ndim)
+        strides = list(src.strides) + [0] * (4 - ndim)
         
-        # Copy metadata to GPU
-        sizes = np.array(src.shape, dtype=np.int64)
-        strides = np.array(src.strides, dtype=np.int64)
-        result = cuda.cuMemcpyHtoD(sizes_gpu.ptr, sizes, sizes.nbytes)
-        check_cuda_error(result)
-        result = cuda.cuMemcpyHtoD(strides_gpu.ptr, strides, strides.nbytes)
-        check_cuda_error(result)
-
-        # Launch kernel - pass CUDAStorage objects directly like torch tensors
-        _copy_strided_to_contig[grid](
+        _copy_strided_to_contig_optimized[grid](
+            src, dst,
+            numel,
+            size0=sizes[0], stride0=strides[0],
+            size1=sizes[1], stride1=strides[1], 
+            size2=sizes[2], stride2=strides[2],
+            size3=sizes[3], stride3=strides[3],
+            ndim=ndim,
+            BLOCK=BLOCK,
+            num_warps=num_warps
+        )
+    else:
+        # General case for ndim > 4
+        cache_key = (tuple(src.shape), tuple(src.strides))
+        if cache_key not in _metadata_cache:
+            sizes_gpu = empty((ndim,), np.int64)
+            strides_gpu = empty((ndim,), np.int64)
+            _metadata_cache[cache_key] = (sizes_gpu, strides_gpu)
+            
+            # Copy metadata to GPU once
+            sizes = np.array(src.shape, dtype=np.int64)
+            strides = np.array(src.strides, dtype=np.int64)
+            result = cuda.cuMemcpyHtoD(sizes_gpu.ptr, sizes, sizes.nbytes)
+            check_cuda_error(result)
+            result = cuda.cuMemcpyHtoD(strides_gpu.ptr, strides, strides.nbytes)
+            check_cuda_error(result)
+        
+        sizes_gpu, strides_gpu = _metadata_cache[cache_key]
+        
+        _copy_strided_to_contig_general[grid](
             src, dst,
             sizes_gpu, strides_gpu,
             numel,
             ndim=ndim,
             BLOCK=BLOCK,
-            num_warps=4,
+            num_warps=num_warps
         )
 
 # Utility functions: create tensors

@@ -314,6 +314,18 @@ class CUDAMemoryManager:
         self.max_cache_size = 1024 * 1024 * 1024  # 1GB cache limit
         self.current_cache_size = 0
         
+        # Warmup configuration - preallocation for common sizes
+        self.warmup_enabled = True
+        self.warmup_sizes = [
+            # Common tensor sizes in Qwen model (based on profiling)
+            64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
+            896 * 4,      # hidden_size * sizeof(float32)
+            896 * 128 * 4, # (batch, seq_len, hidden_size) * sizeof(float32)
+            4864 * 4,     # intermediate_size * sizeof(float32)
+            14 * 64 * 4,  # num_heads * head_dim * sizeof(float32)
+        ]
+        self.warmup_count_per_size = 8  # Pre-allocate 8 blocks per size
+        
         # Statistics  
         self.alloc_count = 0
         self.cache_hits = 0
@@ -321,6 +333,10 @@ class CUDAMemoryManager:
         self.block_alloc_count = 0
         self.block_hits = 0
         self.block_misses = 0
+        
+        # Initialize warmup if enabled
+        if self.warmup_enabled:
+            self._warmup_cache()
         
         # Initialize default stream (already have current context)
         self.default_stream = self._create_stream()
@@ -351,14 +367,20 @@ class CUDAMemoryManager:
     
     def _get_bucket_size(self, size: int) -> int:
         """
-        Phase 2: Get bucket size for given allocation size
-        Uses power-of-2 buckets with minimum 512B alignment
+        Optimized bucket size for deep learning workloads
+        Uses smaller increments for common sizes to reduce waste
         """
-        # Minimum bucket size is 512B (our alignment)
-        if size <= self.alignment:
+        # For very small sizes, use smaller increments
+        if size <= 256:
+            return ((size + 63) // 64) * 64  # 64B increments
+        elif size <= 1024:
+            return ((size + 127) // 128) * 128  # 128B increments  
+        elif size <= 4096:
+            return ((size + 255) // 256) * 256  # 256B increments
+        elif size <= self.alignment:
             return self.alignment
         
-        # Find the smallest power of 2 that is >= size
+        # For larger sizes, use power of 2 with alignment
         bucket = self.alignment
         while bucket < size:
             bucket *= 2
@@ -370,6 +392,32 @@ class CUDAMemoryManager:
             return self._round_up(size, self.alignment)
         
         return bucket
+    
+    def _warmup_cache(self):
+        """Pre-allocate common sizes to improve cache hit rate"""
+        try:
+            for size in self.warmup_sizes:
+                bucket_size = self._get_bucket_size(size)
+                # Skip if already cached
+                if len(self.free_blocks[bucket_size]) >= self.warmup_count_per_size:
+                    continue
+                    
+                # Pre-allocate blocks
+                for _ in range(self.warmup_count_per_size):
+                    try:
+                        ptr = _ok(cuda.cuMemAlloc(bucket_size))
+                        self.free_blocks[bucket_size].append(ptr)
+                        self.current_cache_size += bucket_size
+                        
+                        # Don't exceed cache limit
+                        if self.current_cache_size >= self.max_cache_size * 0.8:
+                            return
+                    except Exception:
+                        # If allocation fails, skip this size
+                        break
+        except Exception:
+            # If warmup fails, continue without it
+            pass
     
     def allocate(self, nbytes: int, stream: Optional[int] = None) -> int:
         """
@@ -387,7 +435,7 @@ class CUDAMemoryManager:
             return self._allocate_large(nbytes)
     
     def _allocate_small(self, nbytes: int) -> int:
-        """Allocate small memory using bucket caching"""
+        """Allocate small memory using optimized bucket caching"""
         bucket_size = self._get_bucket_size(nbytes)
         
         with self.lock:
@@ -399,13 +447,38 @@ class CUDAMemoryManager:
                 self.cache_hits += 1
                 return ptr
         
-        # Cache miss - allocate from CUDA
+        # Cache miss - check if we should do batch allocation
+        batch_size = self._get_batch_allocation_size(bucket_size)
+        
+        # Allocate one block for immediate return
         ptr = _ok(cuda.cuMemAlloc(bucket_size))
+        
+        # If cache is not full, allocate additional blocks for future use
+        if batch_size > 1 and self.current_cache_size + (batch_size - 1) * bucket_size <= self.max_cache_size:
+            try:
+                for _ in range(batch_size - 1):
+                    extra_ptr = _ok(cuda.cuMemAlloc(bucket_size))
+                    self.free_blocks[bucket_size].append(extra_ptr)
+                    self.current_cache_size += bucket_size
+            except Exception:
+                # If batch allocation fails, continue with single allocation
+                pass
+        
         with self.lock:
             self.active_blocks[ptr] = bucket_size
             self.alloc_count += 1
             self.cache_misses += 1
         return ptr
+    
+    def _get_batch_allocation_size(self, bucket_size: int) -> int:
+        """Determine batch allocation size based on bucket size and usage patterns"""
+        # For very small sizes (common in deep learning), allocate more
+        if bucket_size <= 1024:
+            return 4  # Allocate 4 blocks at once
+        elif bucket_size <= 8192:
+            return 2  # Allocate 2 blocks at once
+        else:
+            return 1  # Single allocation for large blocks
     
     def _allocate_large(self, nbytes: int) -> int:
         """Allocate large memory using block allocator"""

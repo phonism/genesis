@@ -543,21 +543,202 @@ def test_cos(shape, device):
     TB.sum().backward()
     np.testing.assert_allclose(TA.grad.detach().numpy(), A.grad.detach().numpy(), atol=atol, rtol=rtol)
 
-GETITEM_SHAPES = [(4, 5, 6), (2, 3)]
+# Comprehensive getitem/setitem tests
+GETITEM_SHAPES = [(4, 5, 6), (2, 3), (10, 8), (3, 4, 5, 6)]
+
 @pytest.mark.parametrize("shape", GETITEM_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
-def test_getitem(shape, device):
-    _A = np.random.randint(0, 2, size=shape).astype(np.float32)
+def test_getitem_basic(shape, device):
+    """Test basic indexing: int, slice, ellipsis, None."""
+    _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
-    B = A[(A == 1)]
-    TB = TA[(TA == 1)]
-    np.testing.assert_allclose(TB.detach().numpy(), B.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Integer indexing
+    B1 = A[0]
+    TB1 = TA[0]
+    np.testing.assert_allclose(TB1.detach().numpy(), B1.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Slice indexing
+    B2 = A[1:3]
+    TB2 = TA[1:3]
+    np.testing.assert_allclose(TB2.detach().numpy(), B2.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Slice with step
+    B3 = A[::2]
+    TB3 = TA[::2]
+    np.testing.assert_allclose(TB3.detach().numpy(), B3.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Negative indexing
+    B4 = A[-1]
+    TB4 = TA[-1]
+    np.testing.assert_allclose(TB4.detach().numpy(), B4.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Ellipsis
+    if len(shape) > 2:
+        B5 = A[..., 0]
+        TB5 = TA[..., 0]
+        np.testing.assert_allclose(TB5.detach().numpy(), B5.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # None (newaxis)
+    B6 = A[None]
+    TB6 = TA[None]
+    np.testing.assert_allclose(TB6.detach().numpy(), B6.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Test backward - View/Slice path should use add_at with strides
+    B1.sum().backward()
+    TB1.sum().backward()
+    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
+@pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])  # Use smaller shapes for advanced indexing
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_getitem_advanced(shape, device):
+    """Test advanced indexing: boolean mask, integer array, tensor indexing."""
+    _A = np.random.randn(*shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device)
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    
+    # Boolean mask indexing
+    mask = A > 0
+    B1 = A[mask]
+    t_mask = TA > 0
+    TB1 = TA[t_mask]
+    np.testing.assert_allclose(TB1.detach().numpy(), B1.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Integer list indexing
+    if shape[0] >= 4:
+        indices = [0, 2, 3]
+        B2 = A[indices]
+        TB2 = TA[indices]
+        np.testing.assert_allclose(TB2.detach().numpy(), B2.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Test backward - Gather path should use scatter-add for duplicate indices
+    B1.sum().backward()
+    TB1.sum().backward()
+    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
+
+@pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_getitem_mixed(shape, device):
+    """Test mixed indexing: combining basic and advanced indexing."""
+    _A = np.random.randn(*shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device)
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    
+    if len(shape) >= 2 and shape[0] >= 3:
+        # Mix slice with integer
+        B1 = A[1:3, 0]
+        TB1 = TA[1:3, 0]
+        np.testing.assert_allclose(TB1.detach().numpy(), B1.detach().numpy(), atol=atol, rtol=rtol)
+        
+        # Mix integer array with slice
+        if shape[0] >= 4:
+            indices = [0, 2]
+            B2 = A[indices, :2]
+            TB2 = TA[indices, :2]
+            np.testing.assert_allclose(TB2.detach().numpy(), B2.detach().numpy(), atol=atol, rtol=rtol)
+        
+        # Test backward - Mixed indexing should use gather path (scatter-add)
+        B1.sum().backward()
+        TB1.sum().backward()
+        np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
+
+@pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_setitem_basic(shape, device):
+    """Test basic setitem: int, slice assignments."""
+    _A = np.random.randn(*shape).astype(np.float32)
+    
+    # Integer assignment
+    A1 = genesis.Tensor(_A.copy(), device=device)
+    TA1 = torch.Tensor(_A.copy())
+    A1[0] = 1.0
+    TA1[0] = 1.0
+    np.testing.assert_allclose(TA1.numpy(), A1.numpy(), atol=atol, rtol=rtol)
+    
+    # Slice assignment with scalar
+    A2 = genesis.Tensor(_A.copy(), device=device)
+    TA2 = torch.Tensor(_A.copy())
+    A2[1:3] = 2.0
+    TA2[1:3] = 2.0
+    np.testing.assert_allclose(TA2.numpy(), A2.numpy(), atol=atol, rtol=rtol)
+    
+    # Slice assignment with tensor
+    if shape[0] >= 3:
+        val_shape = list(shape)
+        val_shape[0] = 2
+        _val = np.random.randn(*val_shape).astype(np.float32)
+        A3 = genesis.Tensor(_A.copy(), device=device)
+        TA3 = torch.Tensor(_A.copy())
+        A3[1:3] = genesis.Tensor(_val, device=device)
+        TA3[1:3] = torch.Tensor(_val)
+        np.testing.assert_allclose(TA3.numpy(), A3.numpy(), atol=atol, rtol=rtol)
+    
+    # Note: Backward testing for setitem on requires_grad=True tensors is not supported
+    # as it violates the leaf variable in-place modification restriction
+
+@pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_setitem_advanced(shape, device):
+    """Test advanced setitem: boolean mask, integer array assignments."""
+    _A = np.random.randn(*shape).astype(np.float32)
+    
+    # Boolean mask assignment with scalar
+    A1 = genesis.Tensor(_A.copy(), device=device)
+    TA1 = torch.Tensor(_A.copy())
+    mask = A1 > 0
+    t_mask = TA1 > 0
+    A1[mask] = 1.0
+    TA1[t_mask] = 1.0
+    np.testing.assert_allclose(TA1.numpy(), A1.numpy(), atol=atol, rtol=rtol)
+    
+    # Boolean mask assignment with array
+    A2 = genesis.Tensor(_A.copy(), device=device)
+    TA2 = torch.Tensor(_A.copy())
+    mask2 = A2 < 0
+    t_mask2 = TA2 < 0
+    n_true = mask2.numpy().sum()
+    values = np.random.randn(n_true).astype(np.float32)
+    A2[mask2] = genesis.Tensor(values, device=device)
+    TA2[t_mask2] = torch.Tensor(values)
+    np.testing.assert_allclose(TA2.numpy(), A2.numpy(), atol=atol, rtol=rtol)
+    
+    # Integer list assignment
+    if shape[0] >= 4:
+        A3 = genesis.Tensor(_A.copy(), device=device)
+        TA3 = torch.Tensor(_A.copy())
+        indices = [0, 2, 3]
+        A3[indices] = -1.0
+        TA3[indices] = -1.0
+        np.testing.assert_allclose(TA3.numpy(), A3.numpy(), atol=atol, rtol=rtol)
+    
+    # Note: Backward testing for setitem on requires_grad=True tensors is not supported
+    # as it violates the leaf variable in-place modification restriction
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_getitem_duplicate_indices_backward(device):
+    """Test backward with duplicate indices to verify scatter-add behavior."""
+    _A = np.random.randn(5, 3).astype(np.float32)
+    
+    # Test with duplicate indices - this should test scatter-add in backward
+    A = genesis.Tensor(_A.copy(), device=device, requires_grad=True)
+    TA = torch.Tensor(_A.copy())
+    TA.requires_grad = True
+    
+    # Use duplicate indices to test scatter-add
+    indices = [0, 2, 0, 1, 2]  # Duplicates: 0 appears twice, 2 appears twice
+    B = A[indices]
+    TB = TA[indices]
+    
+    np.testing.assert_allclose(TB.detach().numpy(), B.detach().numpy(), atol=atol, rtol=rtol)
+    
+    # Test backward - should accumulate gradients for duplicate indices
     B.sum().backward()
     TB.sum().backward()
-    np.testing.assert_allclose(TA.grad.detach().numpy(), A.grad.detach().numpy(), atol=atol, rtol=rtol)
+    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
 UNSQUEEZE_SHAPES = [((4, 5, 6), 1)]
 @pytest.mark.parametrize("shape,dim", UNSQUEEZE_SHAPES)

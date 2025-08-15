@@ -30,91 +30,91 @@ config = QwenConfig(
     max_seq_len=2048
 )
 
-# 创建模型
+# Create model
 model = QwenModel(config)
 
-# 推理
+# Inference
 input_ids = genesis.tensor([[1, 2, 3, 4, 5]])  # [batch_size, seq_len]
 output = model(input_ids)
-print(f"输出形状: {output.shape}")  # [1, 5, 32000]
+print(f"Output shape: {output.shape}")  # [1, 5, 32000]
 ```
 
-### 训练示例
+### Training Example
 
 ```python
 import genesis.optim as optim
 import genesis.nn as nn
 
-# 创建优化器
+# Create optimizer
 optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.01)
 
-# 训练循环
+# Training loop
 for batch in dataloader:
     input_ids, labels = batch
     
-    # 前向传播
+    # Forward pass
     logits = model(input_ids)
     
-    # 计算损失
+    # Calculate loss
     loss = nn.functional.cross_entropy(
         logits.view(-1, logits.size(-1)),
         labels.view(-1)
     )
     
-    # 反向传播
+    # Backward pass
     optimizer.zero_grad()
     loss.backward()
     
-    # 梯度裁剪
+    # Gradient clipping
     nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     
-    # 参数更新
+    # Parameter update
     optimizer.step()
 ```
 
-## 配置参数
+## Configuration Parameters
 
 ### QwenConfig
 
-| 参数名 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `vocab_size` | int | 32000 | 词汇表大小 |
-| `n_layer` | int | 24 | Transformer层数 |
-| `n_head` | int | 16 | 注意力头数 |
-| `n_embd` | int | 2048 | 隐藏层维度 |
-| `max_seq_len` | int | 2048 | 最大序列长度 |
-| `dropout` | float | 0.1 | Dropout概率 |
-| `bias` | bool | False | 是否使用偏置 |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `vocab_size` | int | 32000 | Vocabulary size |
+| `n_layer` | int | 24 | Number of Transformer layers |
+| `n_head` | int | 16 | Number of attention heads |
+| `n_embd` | int | 2048 | Hidden dimension |
+| `max_seq_len` | int | 2048 | Maximum sequence length |
+| `dropout` | float | 0.1 | Dropout probability |
+| `bias` | bool | False | Whether to use bias |
 
-## 性能优化
+## Performance Optimization
 
-### 混合精度训练
+### Mixed Precision Training
 
 ```python
-# 启用混合精度
+# Enable mixed precision
 genesis.enable_autocast = True
 
 with genesis.autocast():
     logits = model(input_ids)
     loss = criterion(logits, labels)
 
-# 梯度缩放
+# Gradient scaling
 scaler = genesis.GradScaler()
 scaler.scale(loss).backward()
 scaler.step(optimizer)
 scaler.update()
 ```
 
-### 梯度检查点
+### Gradient Checkpointing
 
 ```python
-# 启用梯度检查点节省显存
+# Enable gradient checkpointing to save memory
 model.gradient_checkpointing = True
 ```
 
-## 应用示例
+## Application Examples
 
-### 文本生成
+### Text Generation
 
 ```python
 def generate_text(model, tokenizer, prompt, max_length=100):
@@ -132,24 +132,24 @@ def generate_text(model, tokenizer, prompt, max_length=100):
     
     return tokenizer.decode(input_tensor[0].tolist())
 
-# 使用示例
-generated = generate_text(model, tokenizer, "今天天气")
+# Usage example
+generated = generate_text(model, tokenizer, "Today's weather")
 print(generated)
 ```
 
-### 微调训练
+### Fine-tuning Training
 
-参考 `apps/llm/train_sft_qwen.py` 了解完整的SFT (Supervised Fine-tuning) 实现。
+Refer to `apps/llm/train_sft_qwen.py` for complete SFT (Supervised Fine-tuning) implementation.
 
-## 文件结构
+## File Structure
 
-- `genesis/models/qwen.py` - 模型实现
-- `apps/llm/qwen_model.py` - 训练配置和工具
-- `apps/llm/train_sft_qwen.py` - SFT训练脚本
-- `apps/llm/chat_qwen.py` - 推理聊天脚本
+- `genesis/models/qwen.py` - Model implementation
+- `apps/llm/qwen_model.py` - Training configuration and utilities
+- `apps/llm/train_sft_qwen.py` - SFT training script
+- `apps/llm/chat_qwen.py` - Inference chat script
 
-## 相关资源
+## Related Resources
 
-- [Qwen官方论文](https://arxiv.org/abs/2309.16609)
-- [RoPE位置编码详解](../tutorials/rope-attention.md)
-- [大模型训练最佳实践](../training/llm-training.md)
+- [Qwen Official Paper](https://arxiv.org/abs/2309.16609)
+- [RoPE Position Encoding Explained](../tutorials/rope-attention.md)
+- [LLM Training Best Practices](../training/llm-training.md)

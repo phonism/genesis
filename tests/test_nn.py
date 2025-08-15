@@ -275,7 +275,7 @@ def test_embedding(device):
     embedding_dim = 32
 
     _A = np.array([[5, 6], [3, 4]]).astype(np.int64)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=False).long()
     TA = torch.LongTensor(_A)
 
     embed = genesis.nn.Embedding(num_embeddings, embedding_dim)
