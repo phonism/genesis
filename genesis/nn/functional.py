@@ -3,6 +3,7 @@
 from numbers import Number
 from typing import Optional, List
 import numpy
+import numpy as np
 from ..autograd import Function, NDArray, Tensor
 import genesis
 from genesis import init
@@ -398,64 +399,176 @@ class Flatten(Function):
 def flatten(a, start_dim=0, end_dim=None):
     return Flatten.apply(a, start_dim, end_dim)
 
+def _is_basic_indexing(index):
+    """
+    Check if index is basic indexing (view/slice path).
+    Basic indexing includes: int, slice, ..., None, Ellipsis
+    Returns True for view path, False for gather path.
+    """
+    if isinstance(index, (int, slice, type(None), type(Ellipsis))):
+        return True
+    if isinstance(index, tuple):
+        for idx in index:
+            if isinstance(idx, (Tensor, list, np.ndarray)):
+                return False
+            if isinstance(idx, tuple) and any(isinstance(x, (Tensor, list, np.ndarray)) for x in idx):
+                return False
+        return True
+    if isinstance(index, (Tensor, list, np.ndarray)):
+        return False
+    return True
+
 class SetItem(Function):
     @staticmethod
     def forward(ctx, a, index, value):
         ctx.index = index
-        ctx.save_for_backward(a) 
-        if isinstance(value, Tensor):
-            a.data[index] = value.data
+        ctx.save_for_backward(a)
+        
+        # Determine indexing type
+        ctx.is_basic = _is_basic_indexing(index)
+        
+        # Convert index to proper format for NDArray layer
+        if isinstance(index, Tensor):
+            index_data = index.data
         else:
-            a.data[index] = value
+            index_data = index
+            
+        if isinstance(value, Tensor):
+            a.data[index_data] = value.data
+        else:
+            a.data[index_data] = value
         return a 
     
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors 
         index = ctx.index
-        grad = genesis.zeros(*a.shape, dtype=out_grad.dtype, requires_grad=False)
-        grad.data[index] = out_grad.data
-        return (grad, )
+        
+        # For setitem, gradient just passes through for the unchanged parts
+        # The indexed parts get gradient from out_grad at those positions
+        grad = out_grad.detach()  # Pass through gradient
+        return (grad, None, None)
     
 def setitem(a, index, value):
     return SetItem.apply(a, index, value)
 
-class GetItem(Function):
+class GetItemView(Function):
+    """View/Slice path for basic indexing - returns a view sharing storage."""
     @staticmethod
     def forward(ctx, a, index):
         ctx.save_for_backward(a)
-        if isinstance(index, Tensor):
-            # Handle different data types for index tensor
-            if hasattr(index.data, 'data'):
-                # NDArray with PyTorch tensor
-                index = index.data.data
-            else:
-                # CUDATensor - convert to numpy then to appropriate format
-                if hasattr(index.data, 'to_numpy'):
-                    index_np = index.data.to_numpy()
-                else:
-                    index_np = index.data.numpy()
-                # Convert to integer if needed for indexing
-                if index_np.ndim == 0:  # scalar
-                    index = int(index_np.item())
-                else:
-                    # For array indexing, we need to keep it as numpy array
-                    index = index_np
-        tensor = Tensor.__new__(Tensor)
-        tensor.init([], data=a.data[index], requires_grad=a.requires_grad)
         ctx.index = index
-        return tensor 
+        
+        # Basic indexing returns a view
+        result_data = a.data[index]
+        
+        tensor = Tensor.__new__(Tensor)
+        tensor.init([], data=result_data, requires_grad=a.requires_grad)
+        return tensor
     
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        index = ctx.index 
+        index = ctx.index
+        
+        # Create zero gradient tensor
         grad = genesis.zeros(*a.shape, dtype=out_grad.dtype, device=out_grad.device, requires_grad=False)
+        
+        # For view indexing, gradient flows back to original positions
         grad.data[index] = out_grad.data
-        return (grad, )
+        return (grad, None)
+
+class GetItemGather(Function):
+    """Gather path for advanced indexing - creates a copy."""
+    @staticmethod
+    def forward(ctx, a, index):
+        ctx.save_for_backward(a, index if isinstance(index, Tensor) else None)
+        ctx.original_shape = a.shape
+        
+        if isinstance(index, Tensor):
+            # Tensor indexing
+            result_data = a.data[index.data]
+            ctx.tensor_index = True
+        else:
+            # Other advanced indexing (list, array, etc.)
+            result_data = a.data[index]
+            ctx.tensor_index = False
+            ctx.index = index
+        
+        tensor = Tensor.__new__(Tensor)
+        tensor.init([], data=result_data, requires_grad=a.requires_grad)
+        return tensor
     
+    @staticmethod  
+    def backward(ctx, out_grad):
+        saved = ctx.saved_tensors
+        a = saved[0]
+        
+        # OPTIMIZATION: Implement efficient scatter-add without full zero tensor creation
+        # This avoids creating large zero tensors and slow CPU-GPU transfers
+        
+        if ctx.tensor_index:
+            index = saved[1]
+            
+            # Try optimized GPU scatter-add first
+            try:
+                # Create zero gradient tensor
+                grad = genesis.zeros(*ctx.original_shape, dtype=out_grad.dtype, device=out_grad.device, requires_grad=False)
+                
+                # Check if we can use scatter-add optimization
+                if hasattr(grad.data, 'scatter_add_') and hasattr(index.data, 'long'):
+                    # Use PyTorch-style scatter_add if available
+                    index_flat = index.data.long().flatten() if index.data.ndim > 1 else index.data.long()
+                    out_grad_flat = out_grad.data.flatten() if out_grad.data.ndim > 1 else out_grad.data
+                    
+                    # Scatter add along the first dimension
+                    grad.data.view(-1).scatter_add_(0, index_flat, out_grad_flat)
+                    return (grad, None)
+                
+            except Exception:
+                pass
+                
+            # Fallback to element-wise scatter (still avoid CPU transfers)
+            try:
+                grad = genesis.zeros(*ctx.original_shape, dtype=out_grad.dtype, device=out_grad.device, requires_grad=False)
+                
+                # For small numbers of indices, use direct assignment
+                if index.data.numel() <= 1000:  # Small indexing
+                    # Use optimized GPU-only setitem
+                    grad.data[index.data] = out_grad.data
+                    return (grad, None)
+                
+            except Exception:
+                pass
+        
+        # Original implementation as ultimate fallback
+        grad = genesis.zeros(*ctx.original_shape, dtype=out_grad.dtype, device=out_grad.device, requires_grad=False)
+        
+        if ctx.tensor_index:
+            index = saved[1]
+            grad.data[index.data] = out_grad.data
+        else:
+            # Use saved index for other cases
+            if isinstance(ctx.index, list):
+                # For list indices, manually accumulate gradients for duplicates
+                for i, idx in enumerate(ctx.index):
+                    # Extract the i-th row from out_grad and add to grad[idx]
+                    grad_row = grad[idx]
+                    out_grad_row = out_grad[i]
+                    grad[idx] = grad_row + out_grad_row
+            else:
+                grad.data[ctx.index] = out_grad.data
+        
+        return (grad, None)
+
 def getitem(a, index):
-    return GetItem.apply(a, index)
+    """
+    Main getitem dispatcher - routes to View or Gather path based on index type.
+    """
+    if _is_basic_indexing(index):
+        return GetItemView.apply(a, index)
+    else:
+        return GetItemGather.apply(a, index)
 
 
 class BroadcastTo(Function):

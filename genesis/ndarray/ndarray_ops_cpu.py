@@ -70,7 +70,19 @@ def getitem(x, idxs):
     return x.__getitem__(idxs)
 
 def setitem(x, idxs, other):
-    return x.__setitem__(idxs, other)
+    # Handle Genesis Tensor indices - extract underlying data
+    if hasattr(idxs, 'data') and hasattr(idxs.data, 'data'):
+        # Genesis Tensor -> NDArray -> torch.Tensor
+        actual_idxs = idxs.data.data
+    elif hasattr(idxs, 'data'):
+        # NDArray -> torch.Tensor  
+        actual_idxs = idxs.data
+    else:
+        # Direct indexing (int, slice, etc.)
+        actual_idxs = idxs
+    
+    x.__setitem__(actual_idxs, other)
+    return x
 
 def fill(tensor, value):
     """Fill tensor with constant value"""
@@ -135,3 +147,173 @@ def cat(arrays, dim=0):
         torch.Tensor: Concatenated tensor
     """
     return torch.cat(arrays, dim=dim)
+
+def randn(shape, dtype="float32"):
+    """
+    Create tensor with random normal distribution.
+    
+    Args:
+        shape: Tensor shape
+        dtype: Data type
+        
+    Returns:
+        torch.Tensor: Random normal tensor
+    """
+    torch_dtype = torch.float32
+    if dtype == "float16":
+        torch_dtype = torch.float16
+    elif dtype == "bfloat16":
+        torch_dtype = torch.bfloat16
+    
+    return torch.randn(shape, dtype=torch_dtype, device=torch.device("cpu"))
+
+def rand(shape, dtype="float32"):
+    """
+    Create tensor with random uniform distribution.
+    
+    Args:
+        shape: Tensor shape
+        dtype: Data type
+        
+    Returns:
+        torch.Tensor: Random uniform tensor
+    """
+    torch_dtype = torch.float32
+    if dtype == "float16":
+        torch_dtype = torch.float16
+    elif dtype == "bfloat16":
+        torch_dtype = torch.bfloat16
+    
+    return torch.rand(shape, dtype=torch_dtype, device=torch.device("cpu"))
+
+def triu(x, k=0):
+    """
+    Upper triangle of tensor.
+    """
+    return torch.triu(x, diagonal=k)
+
+def split(x, cnt, dim=None):
+    """
+    Split tensor along dimension.
+    """
+    return torch.split(x, cnt, dim=dim)
+
+def to_dtype(x, dtype):
+    """
+    Convert tensor to specified dtype.
+    """
+    torch_dtype = torch.float32
+    if dtype == "float16":
+        torch_dtype = torch.float16
+    elif dtype == "bfloat16":
+        torch_dtype = torch.bfloat16
+    elif dtype == "int32":
+        torch_dtype = torch.int32
+    elif dtype == "int64":
+        torch_dtype = torch.int64
+    
+    return x.to(torch_dtype)
+
+def iadd(x, y):
+    """
+    In-place addition.
+    """
+    if isinstance(y, torch.Tensor):
+        x.add_(y)
+    else:
+        x.add_(y)
+    return x
+
+def prod(x):
+    """
+    Product of all elements in x.
+    """
+    return reduce(operator.mul, x, 1)
+
+def one_hot(n_classes, indices, dtype="float32"):
+    """
+    Create one-hot encoding using PyTorch.
+    
+    Args:
+        n_classes: Number of classes
+        indices: Indices tensor (flat)
+        dtype: Data type
+        
+    Returns:
+        torch.Tensor: One-hot encoded tensor
+    """
+    torch_dtype = torch.float32
+    if dtype == "float16":
+        torch_dtype = torch.float16
+    elif dtype == "bfloat16":
+        torch_dtype = torch.bfloat16
+    elif dtype == "int32":
+        torch_dtype = torch.int32
+    elif dtype == "int64":
+        torch_dtype = torch.int64
+    
+    # Convert indices to long for one_hot
+    if not isinstance(indices, torch.Tensor):
+        indices = torch.tensor(indices)
+    indices_long = indices.long()
+    
+    # Create one-hot encoding
+    one_hot_result = torch.nn.functional.one_hot(indices_long, num_classes=n_classes)
+    return one_hot_result.to(torch_dtype)
+
+def arange(start, end, step, dtype="float32"):
+    """
+    Create tensor with values from start to end with step.
+    
+    Args:
+        start: Starting value
+        end: Ending value (exclusive)
+        step: Step size
+        dtype: Data type
+        
+    Returns:
+        torch.Tensor: Range tensor
+    """
+    torch_dtype = torch.float32
+    if dtype == "float16":
+        torch_dtype = torch.float16
+    elif dtype == "bfloat16":
+        torch_dtype = torch.bfloat16
+    elif dtype == "int32":
+        torch_dtype = torch.int32
+    elif dtype == "int64":
+        torch_dtype = torch.int64
+    
+    return torch.arange(start, end, step, dtype=torch_dtype, device=torch.device("cpu"))
+
+def broadcast_shapes(shape1, shape2):
+    """
+    Compute the broadcasted shape of two tensors (NumPy broadcasting rules).
+    """
+    import numpy as np
+    # Use numpy's broadcast_shapes if available (Python 3.10+)
+    try:
+        return np.broadcast_shapes(shape1, shape2)
+    except AttributeError:
+        # Fallback implementation
+        shape1_rev = list(reversed(shape1))
+        shape2_rev = list(reversed(shape2))
+        
+        max_ndim = max(len(shape1_rev), len(shape2_rev))
+        while len(shape1_rev) < max_ndim:
+            shape1_rev.append(1)
+        while len(shape2_rev) < max_ndim:
+            shape2_rev.append(1)
+        
+        result_shape_rev = []
+        for s1, s2 in zip(shape1_rev, shape2_rev):
+            if s1 == 1:
+                result_shape_rev.append(s2)
+            elif s2 == 1:
+                result_shape_rev.append(s1)
+            elif s1 == s2:
+                result_shape_rev.append(s1)
+            else:
+                raise ValueError(f"Cannot broadcast shapes {tuple(reversed(shape1_rev))} and {tuple(reversed(shape2_rev))}")
+        
+        return tuple(reversed(result_shape_rev))

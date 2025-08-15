@@ -22,10 +22,8 @@ def arange(*args, dtype=None, device=genesis.device("cuda")):
         start, end, step = args
     else:
         raise ValueError("arange requires 1 to 3 positional arguments")
-    length = 0 if (end - start) / step < 0 else int((end - start) / step)
-    result = genesis.empty(length, dtype=dtype, device=device)
-    current_value = start
-    for i in range(length):
-        result[i] = current_value
-        current_value += step
-    return result
+    
+    # Delegate to device-specific implementation
+    dtype_str = "float32" if dtype is None else dtype.name if hasattr(dtype, 'name') else str(dtype)
+    result_data = device.arange(start, end, step, dtype_str)
+    return genesis.Tensor(result_data, device=device, dtype=dtype, requires_grad=False)

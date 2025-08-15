@@ -431,16 +431,9 @@ Efficient memory allocation patterns:
 
 ## GPU Backend (CUDA/Triton)
 
-### CUDATensor
+### GPU Operations
 
-Pure CUDA tensor implementation for GPU operations:
-
-```python
-from genesis.ndarray.cuda_tensor import CUDATensor
-
-# Low-level CUDA tensor operations
-tensor = CUDATensor(shape, dtype)
-```
+Pure CUDA/Triton implementation for GPU operations optimized for performance.
 
 ### Triton Kernels
 
@@ -560,4 +553,4 @@ except RuntimeError as e:
 - [Tensor Operations](../autograd.md) - High-level tensor interface
 - [Neural Network Modules](../nn/modules.md) - Building on ndarray
 - [Performance Guide](../../performance/) - Optimization techniques
-- [CUDA Backend](cuda_tensor.md) - Low-level CUDA implementation
+- [CUDA Storage](../../../core-components/cuda-storage.md) - Low-level CUDA implementation

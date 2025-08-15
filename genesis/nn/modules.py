@@ -113,6 +113,28 @@ class Module:
             num_parameters += cur
         return num_parameters
 
+    def named_parameters(self, prefix: str = "") -> Iterator[Tuple[str, Tensor]]:
+        """
+        Return an iterator over module parameters with their names.
+        
+        Args:
+            prefix: prefix to prepend to all parameter names
+            
+        Yields:
+            (string, Parameter): Tuple containing name and parameter
+        """
+        for name, param in self.__dict__.items():
+            if isinstance(param, Parameter):
+                yield prefix + name, param
+            elif isinstance(param, Module):
+                for sub_name, sub_param in param.named_parameters(prefix + name + "."):
+                    yield sub_name, sub_param
+            elif isinstance(param, (list, tuple)):
+                for idx, v in enumerate(param):
+                    if isinstance(v, Module):
+                        for sub_name, sub_param in v.named_parameters(prefix + name + "." + str(idx) + "."):
+                            yield sub_name, sub_param
+
     def vars(self) -> List[Tensor]:
         """
         Return the list of variables in the module.
@@ -205,6 +227,17 @@ class Module:
             self.parameters()[idx].set_device(device_name)
         for idx in range(len(self.vars())):
             self.vars()[idx].set_device(device_name)
+        
+        # Also move buffers registered with register_buffer
+        for name, value in self.__dict__.items():
+            if isinstance(value, Tensor) and not isinstance(value, Parameter):
+                # This is likely a buffer - move it to CUDA
+                # Use detach to break the computation graph like PyTorch does
+                if hasattr(value, 'detach'):
+                    self.__dict__[name] = value.detach().to(device_name)
+                else:
+                    self.__dict__[name] = value.to(device_name)
+        
         for idx in range(len(self._children())):
             self._children()[idx].cuda(device_name)
         return self
@@ -279,7 +312,16 @@ class ModuleList(Module):
         """
         Iterate over the modules in the module list.
         """
-        return iter(self._modules) 
+        return iter(self._modules)
+    
+    def named_parameters(self, prefix: str = "") -> Iterator[Tuple[str, Tensor]]:
+        """
+        Return an iterator over module parameters with their names.
+        For ModuleList, use numeric indices directly without '_modules' prefix.
+        """
+        for idx, module in enumerate(self._modules):
+            for name, param in module.named_parameters(prefix + str(idx) + "."):
+                yield name, param 
 
 
 class Linear(Module):
@@ -537,9 +579,9 @@ class Embedding(Module):
         """
         Forward pass of the embedding layer.
         """
-        x_one_hot = init.one_hot(self.num_embeddings, x.data.flat, device=x.device)
-        res = x_one_hot @ self.weight
-        return res.reshape((*x.shape, self.embedding_dim))
+        # Use direct indexing instead of one_hot + matmul
+        # This is MUCH faster for large vocabularies
+        return self.weight[x]
 
     
 class RotaryEmbedding(Module):

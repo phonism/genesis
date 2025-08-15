@@ -24,35 +24,35 @@ This document provides a comprehensive guide to the performance characteristics,
 
 | Category | Average Efficiency | Status | vs PyTorch |
 |------|---------|------|------------|
-| 小张量 (64K-262K) | 18.9% | ❌ 严重 | 0.19x |
-| 中等张量 (4.2M) | 29.6% | 🔴 较差 | 0.27-0.32x |
-| 大张量 (16.8M) | 4.7% | ❌ 严重 | 0.03-0.06x |
-| 超大张量 (67M) | 5.4% | ❌ 严重 | 0.05-0.06x |
-| 批处理 | 31.2% | 🔴 较差 | 0.29-0.33x |
+| Small Tensors (64K-262K) | 18.9% | ❌ Critical | 0.19x |
+| Medium Tensors (4.2M) | 29.6% | 🔴 Poor | 0.27-0.32x |
+| Large Tensors (16.8M) | 4.7% | ❌ Critical | 0.03-0.06x |
+| XLarge Tensors (67M) | 5.4% | ❌ Critical | 0.05-0.06x |
+| Batch Processing | 31.2% | 🔴 Poor | 0.29-0.33x |
 
-### 详细性能数据
+### Detailed Performance Data
 
-| 形状 | 大小 | PyTorch | Genesis | 速度比 | 效率 | 状态 |
+| Shape | Size | PyTorch | Genesis | Speed Ratio | Efficiency | Status |
 |------|------|---------|---------|-------|------|------|
-| 256×256 | 65.5K | 0.019ms | 0.104ms | 0.19x | 18.7% | ❌ 严重 |
-| 2048×2048 | 4.2M | 0.053ms | 0.166ms | 0.32x | 32.0% | 🔴 较差 |
-| 4096×4096 | 16.8M | 0.147ms | 2.334ms | 0.06x | 6.3% | ❌ 严重 |
-| 8192×8192 | 67M | 0.478ms | 8.208ms | 0.06x | 5.8% | ❌ 严重 |
+| 256×256 | 65.5K | 0.019ms | 0.104ms | 0.19x | 18.7% | ❌ Critical |
+| 2048×2048 | 4.2M | 0.053ms | 0.166ms | 0.32x | 32.0% | 🔴 Poor |
+| 4096×4096 | 16.8M | 0.147ms | 2.334ms | 0.06x | 6.3% | ❌ Critical |
+| 8192×8192 | 67M | 0.478ms | 8.208ms | 0.06x | 5.8% | ❌ Critical |
 
-## 架构实现
+## Architecture Implementation
 
-### 当前ADD操作实现
+### Current ADD Operation Implementation
 
-Genesis采用双后端架构:
-- **CPU后端**: PyTorch张量操作
-- **GPU后端**: 自定义CUDA + Triton内核
+Genesis uses a dual backend architecture:
+- **CPU Backend**: PyTorch tensor operations
+- **GPU Backend**: Custom CUDA + Triton kernels
 
-#### GPU内核实现
+#### GPU Kernel Implementation
 
 ```python
 @triton.jit
 def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    """优化的加法内核，同形状张量，更好的内存访问"""
+    """Optimized addition kernel for same-shape tensors with better memory access"""
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -64,126 +64,126 @@ def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     tl.store(output_ptr + offsets, output, mask=mask)
 ```
 
-#### 自适应块大小配置
+#### Adaptive Block Size Configuration
 
-当前优化配置:
+Current optimization configuration:
 
 ```python
 BLOCK_SIZE_CONFIGS = {
-    (0, 262144): 256,         # 小张量: 更小块提升缓存利用率
-    (262144, 4194304): 512,   # 中等张量: 平衡占用率与缓存
-    (4194304, float('inf')): 1024,  # 大张量: 更大块提升带宽
+    (0, 262144): 256,         # Small tensors: smaller blocks improve cache utilization
+    (262144, 4194304): 512,   # Medium tensors: balance occupancy and cache
+    (4194304, float('inf')): 1024,  # Large tensors: larger blocks improve bandwidth
 }
 ```
 
-## 性能瓶颈分析
+## Performance Bottleneck Analysis
 
-### 1. 主要瓶颈: Triton内核性能
+### 1. Primary Bottleneck: Triton Kernel Performance
 
-- **内核开销**: 比PyTorch慢23.6倍
-- **根本原因**: Triton内核效率远低于PyTorch优化的CUDA内核
-- **影响**: 大张量(>16M元素)最为严重
+- **Kernel Overhead**: 23.6x slower than PyTorch
+- **Root Cause**: Triton kernel efficiency far below PyTorch's optimized CUDA kernels
+- **Impact**: Most severe for large tensors (>16M elements)
 
-### 2. 内存带宽利用率
+### 2. Memory Bandwidth Utilization
 
-- **PyTorch**: 71.4% 带宽效率
-- **Genesis**: 18.0% 平均效率  
-- **理论最大值**: 1555 GB/s (A800 HBM2e)
+- **PyTorch**: 71.4% bandwidth efficiency
+- **Genesis**: 18.0% average efficiency  
+- **Theoretical Maximum**: 1555 GB/s (A800 HBM2e)
 
-**问题**:
-- 内存访问模式未充分优化
-- 大内核可能存在寄存器溢出
-- 内存合并访问不够优化
+**Issues**:
+- Memory access patterns not sufficiently optimized
+- Large kernels may have register spillage
+- Memory coalesced access not well optimized
 
-### 3. GPU占用率问题
+### 3. GPU Occupancy Issues
 
-- 块大小配置未达到最优占用率
-- 超大张量GPU利用率显著下降
-- 资源限制阻止充分利用SM
+- Block size configuration not achieving optimal occupancy
+- XLarge tensors show significant GPU utilization drop
+- Resource limitations prevent full SM utilization
 
-## 优化路线图
+## Optimization Roadmap
 
-### 阶段1: 立即改进 (已完成)
+### Phase 1: Immediate Improvements (Completed)
 
-**✅ 已完成:**
-- 简化自适应块大小配置
-- 专业基准测试基础设施
-- 性能分析工具
+**✅ Completed:**
+- Simplified adaptive block size configuration
+- Professional benchmarking infrastructure
+- Performance analysis tools
 
-**📊 结果:**
-- 平均效率从5.7%提升到18.0%
-- 中等/批处理张量达到29-33%效率
+**📊 Results:**
+- Average efficiency improved from 5.7% to 18.0%
+- Medium/batch tensors achieving 29-33% efficiency
 
-### 阶段2: 内核优化 (进行中)
+### Phase 2: Kernel Optimization (In Progress)
 
-**🎯 目标领域:**
-- 内存访问模式优化(向量化、缓存友好平铺)
-- 块大小自动调优
-- 内核融合减少内存带宽压力
+**🎯 Target Areas:**
+- Memory access pattern optimization (vectorization, cache-friendly tiling)
+- Automatic block size tuning
+- Kernel fusion to reduce memory bandwidth pressure
 
-### 阶段3: 高级优化 (未来)
+### Phase 3: Advanced Optimization (Future)
 
-- 自定义CUDA内核手工优化
-- 内存布局优化
-- 多GPU支持
+- Custom CUDA kernel hand optimization
+- Memory layout optimization
+- Multi-GPU support
 
-## 使用建议
+## Usage Recommendations
 
-### Genesis vs PyTorch选择
+### Genesis vs PyTorch Choice
 
-**推荐使用Genesis:**
-- 教育学习和框架理解
-- 中等批处理操作(最佳性能31%效率)
-- 需要自定义内核开发的研究
+**Recommend Using Genesis:**
+- Educational learning and framework understanding
+- Medium batch processing operations (best performance 31% efficiency)
+- Research requiring custom kernel development
 
-**推荐使用PyTorch:**
-- 生产环境最大性能需求
-- 大张量操作(>16M元素)
-- 对5-25倍性能差异敏感的应用
+**Recommend Using PyTorch:**
+- Production environments with maximum performance requirements
+- Large tensor operations (>16M elements)
+- Applications sensitive to 5-25x performance differences
 
-### 性能技巧
+### Performance Tips
 
-1. **张量大小意识**
-   - 最佳性能范围: 1M-4M元素
-   - 避免超大张量(>67M)
-   - 考虑大操作的张量分割
+1. **Tensor Size Awareness**
+   - Optimal performance range: 1M-4M elements
+   - Avoid xlarge tensors (>67M)
+   - Consider tensor splitting for large operations
 
-2. **内存管理**
+2. **Memory Management**
    ```python
-   # 使用就地操作
+   # Use in-place operations
    result = genesis.add(a, b, out=existing_tensor)
    ```
 
-## 性能监控
+## Performance Monitoring
 
-### 内置基准测试
+### Built-in Benchmarking
 
 ```bash
-# 快速性能检查
+# Quick performance check
 python benchmark/bench_ops.py --op add --fast
 
-# 全面分析
+# Comprehensive analysis
 python benchmark/bench_ops.py --op add --size large
 ```
 
-### 关键指标
+### Key Metrics
 
-- **内存带宽效率**: 目标>50%
-- **GPU利用率**: 用`nvidia-smi`监控
-- **内核启动开销**: 用Nsight Compute分析
+- **Memory Bandwidth Efficiency**: Target >50%
+- **GPU Utilization**: Monitor with `nvidia-smi`
+- **Kernel Launch Overhead**: Analyze with Nsight Compute
 
-## 性能目标
+## Performance Targets
 
-| 张量类别 | 最小效率 | 目标效率 |
-|---------|---------|---------|
-| 小张量 | 15% | 25% |
-| 中等张量 | 25% | 40% |
-| 大张量 | 10% | 30% |
-| 超大张量 | 10% | 25% |
-| 批处理 | 25% | 45% |
+| Tensor Category | Minimum Efficiency | Target Efficiency |
+|---------|---------|----------|
+| Small Tensors | 15% | 25% |
+| Medium Tensors | 25% | 40% |
+| Large Tensors | 10% | 30% |
+| XLarge Tensors | 10% | 25% |
+| Batch Processing | 25% | 45% |
 
 ---
 
-**最后更新**: 2025年8月  
-**框架版本**: Genesis 0.3.0-dev  
-**基准环境**: A800-SXM4-80GB
+**Last Updated**: August 2025  
+**Framework Version**: Genesis 0.3.0-dev  
+**Benchmark Environment**: A800-SXM4-80GB

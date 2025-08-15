@@ -18,40 +18,40 @@ This guide will teach you how to optimize Genesis model training performance, in
 ```python
 import genesis.utils.profile as profiler
 
-# WIP: 性能分析代码示例
+# WIP: Performance analysis code example
 with profiler.profile() as prof:
-    # 训练代码
+    # Training code
     pass
 
 prof.print_stats()
 ```
 
-## ⚡ 优化策略
+## ⚡ Optimization Strategies
 
-### 1. 内存优化
+### 1. Memory Optimization
 
-- 梯度累积
-- 检查点技术
-- 混合精度训练
+- Gradient accumulation
+- Checkpoint techniques
+- Mixed precision training
 
-### 2. 计算优化
+### 2. Compute Optimization
 
-- 算子融合
-- Triton kernel优化
-- CUDA流重叠
+- Operator fusion
+- Triton kernel optimization
+- CUDA stream overlap
 
-### 3. I/O优化
+### 3. I/O Optimization
 
-- 数据预取
-- 多进程数据加载
-- 内存映射
+- Data prefetching
+- Multi-process data loading
+- Memory mapping
 
-## 📈 基准测试
+## 📈 Benchmarking
 
-- 与PyTorch性能对比
-- 不同配置的性能测试
-- 瓶颈识别方法
+- Performance comparison with PyTorch
+- Performance testing with different configurations
+- Bottleneck identification methods
 
 ---
 
-📘 **文档状态**: 正在编写中，预计在v0.2.0版本完成。
+📘 **Documentation Status**: Under development, expected to be completed in v0.2.0.

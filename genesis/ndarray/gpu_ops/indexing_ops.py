@@ -28,6 +28,37 @@ def fill_kernel(
 
 
 @triton.jit
+def expand_row_indices_kernel(
+    row_indices_ptr, linear_indices_ptr,
+    num_rows, row_size,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    Expand row indices to linear indices for all elements in selected rows.
+    Each row index becomes row_size consecutive linear indices.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Calculate which output element we're computing
+    output_idx = offsets
+    mask = output_idx < (num_rows * row_size)
+    
+    # Calculate which row and which column within row
+    row_idx = output_idx // row_size
+    col_idx = output_idx % row_size
+    
+    # Load the actual row index from input tensor
+    row_indices = tl.load(row_indices_ptr + row_idx, mask=mask, other=0)
+    
+    # Calculate linear index: actual_row * row_size + col_offset
+    linear_idx = row_indices * row_size + col_idx
+    
+    tl.store(linear_indices_ptr + output_idx, linear_idx, mask=mask)
+
+
+@triton.jit
 def compact_kernel(
     input_ptr, mask_ptr, output_ptr, output_indices_ptr,
     n_elements: tl.constexpr,

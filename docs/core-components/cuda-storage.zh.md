@@ -1,18 +1,18 @@
-# CUDA张量系统
+# CUDA存储系统
 
-Genesis的CUDA张量（CUDATensor）是框架的核心组件之一，提供了纯CUDA实现的张量内存管理和操作，完全独立于PyTorch，直接使用CUDA Python API。
+Genesis的CUDA存储（CUDAStorage）是框架的核心组件，提供纯CUDA实现的GPU内存管理和操作，完全独立于PyTorch，直接使用CUDA Python API。
 
 ## 🎯 设计目标
 
 ### 独立性
-- **纯CUDA实现**: 不依赖PyTorch的GPU后端
-- **直接内存管理**: 使用CUDA Python API直接管理GPU内存
-- **高性能**: 针对GPU优化的内存访问模式
+- **纯CUDA实现**：不依赖PyTorch的GPU后端
+- **直接内存管理**：使用CUDA Python API直接管理GPU内存
+- **高性能**：针对GPU优化的内存访问模式
 
 ### 兼容性  
-- **PyTorch风格API**: 保持与PyTorch张量的接口兼容性
-- **自动微分支持**: 与Genesis的自动微分系统无缝集成
-- **类型安全**: 完整的类型注解和运行时检查
+- **PyTorch风格API**：保持与PyTorch张量的接口兼容性
+- **自动微分支持**：与Genesis自动微分系统无缝集成
+- **类型安全**：完整的类型注解和运行时检查
 
 ## 🏗️ 架构设计
 
@@ -602,5 +602,5 @@ def check_tensor(tensor, name):
 
 **准备深入了解更多吗？**
 
-[下一步：张量操作优化](tensor-operations.md){ .md-button .md-button--primary }
-[返回核心组件](index.md){ .md-button }
+[下一步：张量操作优化](tensor-operations.zh.md){ .md-button .md-button--primary }
+[返回核心组件](index.zh.md){ .md-button }

@@ -37,11 +37,11 @@ print(f"Genesis version: {genesis.__version__}")
 print(f"CUDA available: {genesis.cuda.is_available()}")
 ```
 
-## 📊 项目：手写数字识别
+## 📊 Project: Handwritten Digit Recognition
 
-我们将构建一个手写数字识别系统，使用经典的MNIST数据集。
+We will build a handwritten digit recognition system using the classic MNIST dataset.
 
-### 1. 数据准备
+### 1. Data Preparation
 
 ```python
 import genesis
@@ -51,23 +51,23 @@ from torchvision import datasets, transforms
 import matplotlib.pyplot as plt
 import numpy as np
 
-# 数据预处理
+# Data preprocessing
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.1307,), (0.3081,))
 ])
 
-# 加载MNIST数据集
+# Load MNIST dataset
 train_dataset = datasets.MNIST('data', train=True, download=True, transform=transform)
 test_dataset = datasets.MNIST('data', train=False, transform=transform)
 
-# 创建数据加载器
+# Create data loaders
 batch_size = 64
 train_loader = genesis.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = genesis.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-print(f"训练集大小: {len(train_dataset)}")
-print(f"测试集大小: {len(test_dataset)}")
+print(f"Training set size: {len(train_dataset)}")
+print(f"Test set size: {len(test_dataset)}")
 ```
 
 ### 2. 模型定义

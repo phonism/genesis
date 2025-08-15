@@ -28,57 +28,57 @@ Welcome to contribute code to the Genesis deep learning framework! This guide wi
 
 ```bash
 # Fork the project to your GitHub account
-# Clone你的fork
+# Clone your fork
 git clone https://github.com/YOUR_USERNAME/genesis.git
 cd genesis
 
-# 添加上游仓库
+# Add upstream repository
 git remote add upstream https://github.com/phonism/genesis.git
 
-# 创建开发分支
+# Create development branch
 git checkout -b feature/your-feature-name
 ```
 
-### 2. 开发环境搭建
+### 2. Development Environment Setup
 
-详见[开发环境配置](development.md)文档。
+See the [Development Environment Configuration](development.md) documentation for details.
 
-### 3. 代码开发
+### 3. Code Development
 
-- 遵循代码规范
-- 添加单元测试
-- 更新相关文档
-- 提交清晰的commit消息
+- Follow coding standards
+- Add unit tests
+- Update relevant documentation
+- Write clear commit messages
 
-### 4. 测试验证
+### 4. Testing and Verification
 
 ```bash
-# 运行测试套件
+# Run test suite
 python -m pytest tests/ -v
 
-# 运行代码格式检查
+# Run code format checks
 black genesis/ tests/
 flake8 genesis/ tests/
 
-# 运行类型检查
+# Run type checking
 mypy genesis/
 ```
 
-### 5. 提交PR
+### 5. Submit Pull Request
 
-- 确保所有测试通过
-- 填写详细的PR描述
-- 链接相关的Issue
-- 等待代码审查
+- Ensure all tests pass
+- Write detailed PR description
+- Link related issues
+- Wait for code review
 
-## 📝 代码规范
+## 📝 Code Standards
 
-### Python风格指南
+### Python Style Guide
 
-我们遵循[PEP 8](https://pep8.org/)规范：
+We follow [PEP 8](https://pep8.org/) standards:
 
 ```python
-# 好的示例
+# Good example
 def compute_attention_weights(query, key, scale_factor):
     """Compute scaled dot-product attention weights.
     
@@ -95,9 +95,9 @@ def compute_attention_weights(query, key, scale_factor):
     return genesis.softmax(scaled_scores, dim=-1)
 ```
 
-### 文档字符串
+### Documentation Strings
 
-使用Google风格的docstring：
+Use Google-style docstrings:
 
 ```python
 def example_function(param1: int, param2: str = "default") -> bool:
@@ -125,7 +125,7 @@ def example_function(param1: int, param2: str = "default") -> bool:
     return param1 > 0
 ```
 
-### 测试编写
+### Writing Tests
 
 ```python
 import pytest
@@ -150,26 +150,26 @@ class TestAttention:
     @pytest.mark.parametrize("num_heads", [1, 2, 4, 8])
     def test_different_head_counts(self, num_heads):
         """Test attention with different head counts."""
-        # 测试实现
+        # Test implementation
         pass
 ```
 
-## 🚀 开发最佳实践
+## 🚀 Development Best Practices
 
-### 1. 分支管理
+### 1. Branch Management
 
 ```bash
-# 主要分支
-main          # 稳定版本
-develop       # 开发版本
+# Main branches
+main          # Stable version
+develop       # Development version
 
-# 功能分支
-feature/xxx   # 新功能开发
-bugfix/xxx    # bug修复
-hotfix/xxx    # 紧急修复
+# Feature branches
+feature/xxx   # New feature development
+bugfix/xxx    # Bug fixes
+hotfix/xxx    # Hotfixes
 ```
 
-### 2. Commit消息格式
+### 2. Commit Message Format
 
 ```
 type(scope): brief description
@@ -179,98 +179,98 @@ Detailed description (optional)
 Fixes #123
 ```
 
-类型说明：
-- `feat`: 新功能
-- `fix`: bug修复
-- `docs`: 文档更新
-- `style`: 代码格式调整
-- `refactor`: 重构
-- `perf`: 性能优化
-- `test`: 测试相关
-- `chore`: 构建工具等
+Type descriptions:
+- `feat`: New features
+- `fix`: Bug fixes
+- `docs`: Documentation updates
+- `style`: Code formatting adjustments
+- `refactor`: Refactoring
+- `perf`: Performance optimization
+- `test`: Test-related
+- `chore`: Build tools, etc.
 
-### 3. 性能考虑
+### 3. Performance Considerations
 
-- 避免不必要的内存拷贝
-- 使用in-place操作when可能
-- 考虑CUDA kernel的内存访问模式
-- 添加性能基准测试
+- Avoid unnecessary memory copies
+- Use in-place operations when possible
+- Consider CUDA kernel memory access patterns
+- Add performance benchmarks
 
-## 🐛 Bug报告
+## 🐛 Bug Reports
 
-提交bug时请包含：
+When submitting bugs, please include:
 
-1. **环境信息**
-   - Genesis版本
-   - Python版本
-   - CUDA版本
-   - 操作系统
+1. **Environment Information**
+   - Genesis version
+   - Python version
+   - CUDA version
+   - Operating system
 
-2. **复现步骤**
-   - 最小可复现代码
-   - 预期行为
-   - 实际行为
-   - 错误信息
+2. **Reproduction Steps**
+   - Minimal reproducible code
+   - Expected behavior
+   - Actual behavior
+   - Error messages
 
-3. **相关日志**
-   - 完整的错误堆栈
-   - 相关配置信息
+3. **Related Logs**
+   - Complete error stack trace
+   - Relevant configuration information
 
-示例：
+Example:
 ```python
-# 最小复现案例
+# Minimal reproduction case
 import genesis
 
 model = genesis.nn.Linear(10, 5)
 x = genesis.randn(3, 10)
-y = model(x)  # 这里出现错误
+y = model(x)  # Error occurs here
 
-# 错误信息：
+# Error message:
 # RuntimeError: CUDA kernel launch failed
 ```
 
-## 🎯 贡献重点领域
+## 🎯 Key Contribution Areas
 
-当前我们特别欢迎以下领域的贡献：
+We particularly welcome contributions in the following areas:
 
-### 高优先级
-- [ ] 性能优化和基准测试
-- [ ] CUDA算子实现
-- [ ] 文档和教程完善
-- [ ] 测试覆盖率提升
+### High Priority
+- [ ] Performance optimization and benchmarking
+- [ ] CUDA operator implementation
+- [ ] Documentation and tutorial improvements
+- [ ] Test coverage enhancement
 
-### 中优先级
-- [ ] 新的神经网络层
-- [ ] 数据加载器优化
-- [ ] 分布式训练支持
-- [ ] 混合精度训练
+### Medium Priority
+- [ ] New neural network layers
+- [ ] Data loader optimization
+- [ ] Distributed training support
+- [ ] Mixed precision training
 
-### 低优先级
-- [ ] 可视化工具
-- [ ] 模型部署支持
-- [ ] 第三方框架集成
+### Low Priority
+- [ ] Visualization tools
+- [ ] Model deployment support
+- [ ] Third-party framework integration
 
-## 📞 联系我们
+## 📞 Contact Us
 
-- **GitHub Issues**: 报告问题和功能请求
-- **GitHub Discussions**: 技术讨论和问答
+- **GitHub Issues**: Bug reports and feature requests
+- **GitHub Discussions**: Technical discussions and Q&A
 - **Email**: genesis-dev@example.com
 
-## 🏆 贡献者认可
+## 🏆 Contributor Recognition
 
-我们重视每一位贡献者的努力：
+We value every contributor's effort:
 
-- 贡献者将列在项目README中
-- 重大贡献者将获得维护者权限
-- 定期发布贡献者通讯
+- Contributors will be listed in the project README
+- Major contributors will receive maintainer privileges
+- Regular contributor newsletters
 
-## 📄 许可证
+## 📄 License
 
-通过贡献代码，你同意你的贡献将在[MIT许可证](https://opensource.org/licenses/MIT)下发布。
+By contributing code, you agree that your contributions will be licensed under the [MIT License](https://opensource.org/licenses/MIT).
 
 ---
 
-!!! info "开始贡献"
-    准备好开始贡献了吗？先从[开发环境配置](development.md)开始吧！
+!!! info "Start Contributing"
+    Ready to start contributing? Begin with [Development Environment Configuration](development.md)!
 
-感谢你为Genesis项目的贡献！🎉
+Thank you for your contribution to the Genesis project! 🎉
