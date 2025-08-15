@@ -21,10 +21,10 @@
     };
     
     // Detect current language based on URL path
-    let currentLang = 'en';
+    let currentLang = 'zh'; // Default to Chinese
     const path = window.location.pathname;
-    if (path.startsWith('/genesis/zh/')) {
-        currentLang = 'zh';
+    if (path.startsWith('/genesis/en/')) {
+        currentLang = 'en';
     }
     
     // Create language switcher
@@ -76,23 +76,23 @@
         const baseUrl = window.location.origin;
         let newPath;
         
-        if (currentLang === 'en' && targetLang === 'zh') {
-            // English to Chinese: /genesis/xxx/yyy/ -> /genesis/zh/xxx/yyy/
+        if (currentLang === 'zh' && targetLang === 'en') {
+            // Chinese to English: /genesis/xxx/yyy/ -> /genesis/en/xxx/yyy/
             if (currentPath === '/genesis/' || currentPath === '/genesis/index.html') {
-                newPath = '/genesis/zh/';
-            } else if (currentPath.startsWith('/genesis/') && !currentPath.startsWith('/genesis/zh/')) {
-                // Simple mapping: /genesis/path/ -> /genesis/zh/path/
-                newPath = currentPath.replace('/genesis/', '/genesis/zh/');
+                newPath = '/genesis/en/';
+            } else if (currentPath.startsWith('/genesis/') && !currentPath.startsWith('/genesis/en/')) {
+                // Simple mapping: /genesis/path/ -> /genesis/en/path/
+                newPath = currentPath.replace('/genesis/', '/genesis/en/');
             } else {
-                newPath = '/genesis/zh/';
+                newPath = '/genesis/en/';
             }
-        } else if (currentLang === 'zh' && targetLang === 'en') {
-            // Chinese to English: /genesis/zh/xxx/yyy/ -> /genesis/xxx/yyy/
-            if (currentPath === '/genesis/zh/' || currentPath === '/genesis/zh/index.html') {
+        } else if (currentLang === 'en' && targetLang === 'zh') {
+            // English to Chinese: /genesis/en/xxx/yyy/ -> /genesis/xxx/yyy/
+            if (currentPath === '/genesis/en/' || currentPath === '/genesis/en/index.html') {
                 newPath = '/genesis/';
-            } else if (currentPath.startsWith('/genesis/zh/')) {
-                // Simple mapping: /genesis/zh/path/ -> /genesis/path/
-                newPath = currentPath.replace('/genesis/zh/', '/genesis/');
+            } else if (currentPath.startsWith('/genesis/en/')) {
+                // Simple mapping: /genesis/en/path/ -> /genesis/path/
+                newPath = currentPath.replace('/genesis/en/', '/genesis/');
             } else {
                 newPath = '/genesis/';
             }
@@ -188,7 +188,7 @@
         
         // Re-detect current language
         const path = window.location.pathname;
-        currentLang = path.startsWith('/genesis/zh/') ? 'zh' : 'en';
+        currentLang = path.startsWith('/genesis/en/') ? 'en' : 'zh';
         
         // Create new switcher
         createLanguageSwitcher();
