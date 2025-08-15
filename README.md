@@ -23,6 +23,13 @@
 
 Genesis is a lightweight yet powerful deep learning framework that combines **educational clarity** with **production-level performance**. Built from scratch in Python, it features a unique dual-backend architecture: PyTorch for CPU operations and a completely independent CUDA/Triton implementation for GPU acceleration.
 
+**🔥 Latest Features**:
+- ✅ **Qwen Model Support**: Full implementation with training and inference
+- ✅ **Mixed Precision Training**: FP16/BF16 support with Automatic Mixed Precision (AMP)
+- ✅ **Advanced Training Features**: Gradient clipping, learning rate schedulers
+- ✅ **LLM Applications**: Complete training pipeline for 0.5B+ models
+- ✅ **Enhanced Performance**: Optimized CUDA memory management and Triton kernels
+
 ### Why Genesis?
 
 - 🎯 **Educational Excellence**: Clear, well-documented code that shows how deep learning frameworks work internally
@@ -40,7 +47,9 @@ Genesis is a lightweight yet powerful deep learning framework that combines **ed
 - ✅ **Modern Optimizers**: Adam, AdamW, SGD with learning rate scheduling and gradient clipping
 - ✅ **Mixed Precision Training**: Automatic Mixed Precision (AMP) with FP16/BF16 support
 - ✅ **Model Management**: Checkpoint saving/loading, state dict management
-- ✅ **LLM Support**: Built-in Qwen model implementation with training and inference
+- ✅ **LLM Support**: Built-in Qwen model implementation with SFT training and chat inference
+- ✅ **Training Pipeline**: Complete LLM training with datasets, schedulers, and checkpointing
+- ✅ **Chat Applications**: Ready-to-use chat interfaces for trained models
 
 ### Technical Innovations
 - 🏗️ **Dual Backend Architecture**: CPU (PyTorch) + GPU (Pure CUDA/Triton)
@@ -80,6 +89,9 @@ pip install -r requirements.txt
 
 # Install Genesis in development mode
 pip install -e .
+
+# For GPU acceleration (recommended)
+export CUDA_VISIBLE_DEVICES=0  # Use first GPU
 ```
 
 ### Basic Usage
@@ -270,12 +282,29 @@ Detailed performance comparisons are available in [benchmark/](benchmark/):
 
 ## 🌟 Examples
 
-The [samples/](samples/) directory contains various examples:
+The [apps/](apps/) and [samples/](samples/) directories contain various examples:
 
-- `sample.py` - Basic neural network
-- `mnist_cnn.py` - CNN for MNIST
-- `transformer.py` - Transformer model
-- `train_llm.py` - LLM training example
+**LLM Applications** (`apps/llm/`):
+- `train_sft_qwen.py` - Qwen supervised fine-tuning
+- `chat_qwen.py` - Interactive chat with trained models
+- `torch_qwen.py` - PyTorch comparison benchmarks
+
+**General Examples** (`samples/`):
+- `sample.py` - Basic neural network training
+- `mnist_cnn.py` - CNN for MNIST classification
+- `transformer.py` - Transformer model implementation
+
+**Quick Start Commands**:
+```bash
+# Train a Qwen model
+cd apps/llm && python train_sft_qwen.py
+
+# Chat with trained model
+cd apps/llm && python chat_qwen.py
+
+# Run benchmarks
+python benchmark/simple_qwen_bench.py
+```
 
 ## 📜 License
 

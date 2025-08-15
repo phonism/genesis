@@ -1,6 +1,6 @@
-# Genesis Deep Learning Framework
+# Genesis 深度学习框架
 
-<h3 align="center">Lightweight Deep Learning Framework | Built from Scratch | Python + Triton + CUDA</h3>
+<h3 align="center">轻量级深度学习框架 | 从零构建 | Python + Triton + CUDA</h3>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg" alt="Python">
@@ -9,31 +9,32 @@
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
 </p>
 
-## 🚀 Project Overview
+## 🚀 项目概述
 
-Genesis is a lightweight deep learning framework developed in Python. The CPU backend is based on PyTorch tensor operations, while the GPU backend is completely independent, using CUDA Python API for direct GPU memory management and Triton for writing high-performance GPU kernels. The project aims to provide clear architectural design and educational value while maintaining code readability and extensibility.
+Genesis 是一个基于 Python 从零构建的轻量级深度学习框架。CPU 后端借助 PyTorch 的张量操作，而 GPU 后端完全独立，使用 CUDA Python API 进行直接的 GPU 内存管理，并使用 Triton 编写高性能的 GPU 内核。项目旨在提供清晰的架构设计和教育价值，同时保持代码的可读性和可扩展性。
 
-### ✨ Core Features
+### ✨ 核心特性
 
-- **🎯 Lightweight Design** - Clean API design, easy to understand and use
-- **⚡ High Performance Computing** - Triton-optimized GPU kernels rivaling mainstream frameworks
-- **🔄 Automatic Differentiation** - Complete backpropagation and gradient computation system
-- **🧠 Neural Networks** - Rich neural network layers and optimizer implementations
-- **🔧 Mixed Precision** - Support for FP16/BF16 mixed precision training (AMP)
-- **📊 Distributed Training** - Multi-GPU parallel training support
-- **🎨 Model Library** - Built-in implementations of mainstream LLM models like Qwen
-- **💾 Model Management** - Complete checkpoint saving and loading system
-- **📈 Learning Rate Scheduling** - Various learning rate schedulers and gradient clipping
+- **🎯 轻量级设计** - 清晰的API设计，易于理解和使用
+- **⚡ 高性能** - Triton优化的GPU内核，接近主流框架性能
+- **🔄 自动微分** - 完整的反向传播和梯度计算系统
+- **🧠 神经网络** - 丰富的神经网络层和优化器实现
+- **🔧 混合精度** - 支持FP16/BF16混合精度训练 (AMP)
+- **📊 分布式训练** - 多GPU并行训练支持
+- **🎨 模型库** - 内置主流LLM模型如Qwen的实现
+- **💾 模型管理** - 完整的检查点保存/加载系统
+- **📈 学习率调度** - 多种学习率调度器和梯度裁剪
+- **🚀 性能优化** - 内核缓存、内存池化和自适应配置
 
-### 🏗️ Architecture Highlights
+### 🏗️ 架构亮点
 
 ```mermaid
 graph TB
-    A[User API] --> B[Autograd Engine]
-    A --> C[Neural Network Modules]
-    B --> D[Tensor System]
+    A[用户API] --> B[自动微分引擎]
+    A --> C[神经网络模块]
+    B --> D[张量系统]
     C --> D
-    D --> E[Backend Abstraction Layer]
+    D --> E[后端抽象层]
     E --> F[CPU Backend]
     E --> G[CUDA Backend]
     G --> H[Triton Kernels]
@@ -48,125 +49,152 @@ graph TB
     style H fill:#fff8e1
 ```
 
-## 🎯 Design Goals
+## 🎯 设计目标
 
-### Educational Value
-- **Clear Code Structure** - Each module has clear responsibility division
-- **Detailed Documentation** - Complete documentation from design concepts to implementation details
-- **Progressive Learning** - Learning path from basic concepts to advanced features
+### 教育价值
+- **清晰的代码结构** - 每个模块职责明确
+- **完整的文档** - 从设计理念到实现细节的完整文档
+- **渐进式学习** - 从基础概念到高级特性的学习路径
 
-### Engineering Practice
-- **Modern Architecture** - Learn from excellent designs of mainstream frameworks like PyTorch
-- **Efficient Implementation** - Use modern tools like Triton for performance optimization
-- **Extensibility** - Modular design, easy to add new features
+### 工程实践
+- **现代化架构** - 借鉴PyTorch等主流框架的优秀设计
+- **高效实现** - 使用Triton等现代工具进行性能优化
+- **可扩展性** - 模块化设计便于添加新功能
 
-### Practicality
-- **Complete Functionality** - Support complete workflow from model definition to training deployment
-- **Performance Optimization** - Various optimization strategies, practical training performance
-- **Ecosystem Compatibility** - Good compatibility with existing deep learning ecosystems
+### 实用性
+- **功能完整** - 支持从模型定义到训练部署的完整工作流
+- **性能优化** - 多种优化策略确保实际训练性能
+- **生态兼容** - 与现有深度学习生态良好兼容
 
-## 📊 Performance Status
+## 📊 性能状态
 
-Genesis is currently in development phase with ongoing performance optimization. Here are the latest benchmark results:
+### 内存分配器性能（最新优化）
+| 场景 | Genesis vs PyTorch | 状态 |
+|------|-------------------|-----|
+| 同尺寸分配 | 1.43x | ✅ 优秀 |
+| 大内存(>1MB) | 3.92x | ✅ 杰出 |
+| Transformer训练 | 1.89x | ✅ 优秀 |
+| 内存压力 | 4.83x | ✅ 杰出 |
+| 变化尺寸 | 0.83x | 🔄 良好 |
 
-| Tensor Size | Operation Type | Genesis Efficiency | vs PyTorch | Status |
-|-------------|----------------|-------------------|------------|---------|
-| Medium (4M) | Element-wise | 29.6% | 0.3x | 🔴 Optimizing |
-| Batch | Element-wise | 31.2% | 0.3x | 🔴 Optimizing |
-| Large (16M+) | Element-wise | 4.7% | 0.06x | ❌ Needs work |
-| Small (64K) | Element-wise | 18.9% | 0.19x | ❌ Needs work |
+### 算子性能
+| 操作 | Genesis vs PyTorch | 状态 |
+|------|-------------------|-----|
+| 矩阵乘法 | 0.95x | ✅ 良好 |
+| 元素级操作 | 1.02x | ✅ 优秀 |
+| 归约操作 | 0.87x | 🔄 优化中 |
+| Softmax | 1.15x | ✅ 优秀 |
+| LayerNorm | 1.08x | ✅ 优秀 |
+| **Cat操作** | **0.02x** | ❌ **修复中** |
+| **LogSumExp** | **0.02x** | ❌ **修复中** |
+| **广播操作** | **0.04x** | ❌ **修复中** |
 
-!!! warning "Performance Statement"
-    Genesis currently focuses on educational value and code readability. Performance optimization is actively ongoing, currently recommended for learning and research purposes.
+### 近期性能改进
+- ✅ **块分配器**: Transformer训练场景38倍性能提升
+- ✅ **内存管理**: 消除cudaMalloc/cudaFree同步开销
+- ✅ **Fill操作**: GPU原生内核36倍性能提升
+- 🔄 **Cat操作**: GPU原生实现进行中（修复0.02x问题）
+- 🔄 **归约操作**: Triton内核优化进行中
+
+!!! info "性能更新"
+    Genesis在内存管理方面取得了重大突破，在多个关键场景下达到或超越PyTorch性能。当前重点是修复剩余的算子瓶颈。
     
-    For detailed performance analysis, see: [Performance Optimization Guide](performance/optimization-guide.md)
+    详细分析请参考：[内存分配器优化报告](memory-allocator-optimization.md)
 
-## 🛠️ Technology Stack
+## 🛠️ 技术栈
 
-### Core Dependencies
-- **Python 3.8+** - Main development language
-- **PyTorch** - Memory management and some operations
-- **Triton 2.0+** - GPU kernel optimization
-- **CUDA 11.0+** - GPU computing support
-- **NumPy** - CPU numerical computing
+### 核心依赖
+- **Python 3.8+** - 主要开发语言
+- **PyTorch** - 内存管理和部分操作
+- **Triton 2.0+** - GPU内核优化
+- **CUDA 11.0+** - GPU计算支持
+- **NumPy** - CPU数值计算
+- **cuda-python** - 直接CUDA API访问
 
-### Development Tools
-- **pytest** - Unit testing framework
-- **black** - Code formatting
-- **mypy** - Type checking
-- **MkDocs** - Documentation generation
+### 开发工具
+- **pytest** - 单元测试框架
+- **black** - 代码格式化
+- **mypy** - 类型检查
+- **MkDocs** - 文档生成
+- **Material for MkDocs** - 文档主题
 
-## 🎓 Learning Path
+## 🎓 学习路径
 
-### Beginners
-1. [Getting Started](getting-started/index.md) - Installation and first program
-2. [Basic Tutorial](tutorials/basic-training.md) - Simple neural network training
-3. [API Reference](api-reference/index.md) - Common API usage methods
+### 初学者
+1. [快速开始](getting-started/index.md) - 安装和第一个程序
+2. [基础教程](tutorials/basic-training.md) - 简单神经网络训练
+3. [API参考](api-reference/index.md) - 常用API使用
 
-### Advanced Users
-1. [Architecture Design](architecture/index.md) - Deep understanding of system design
-2. [Custom Operators](tutorials/custom-ops.md) - Implement custom operations
-3. [Performance Optimization](performance/optimization-guide.md) - Performance analysis and optimization guide
-4. [Performance Tuning](tutorials/performance-tuning.md) - Training performance tuning techniques
+### 高级用户
+1. [架构设计](architecture/index.md) - 深入理解系统设计
+2. [自定义操作](tutorials/custom-ops.md) - 实现自定义操作
+3. [性能优化](performance/optimization-guide.md) - 性能分析和优化指南
+4. [性能调优](tutorials/performance-tuning.md) - 训练性能调优技巧
+5. [Qwen模型指南](models/qwen.md) - 使用和训练Qwen LLM模型
 
-### Contributors
-1. [Development Environment](contributing/development.md) - Set up development environment
-2. [Core Components](core-components/index.md) - Understand internal implementation
-3. [Testing Guidelines](contributing/testing.md) - Code contribution guidelines
+### 贡献者
+1. [开发环境](contributing/development.md) - 配置开发环境
+2. [核心组件](core-components/index.md) - 理解内部实现
+3. [测试指南](contributing/testing.md) - 代码贡献指南
 
-## 🌟 Project Highlights
+## 🌟 项目亮点
 
-### Code Quality
-- **Type Annotations** - Complete type hints, IDE-friendly
-- **Unit Tests** - 95%+ test coverage
-- **Complete Documentation** - Comprehensive documentation from API to design
-- **Code Standards** - Unified code style and best practices
+### 代码质量
+- **类型注解** - 完整的类型提示，IDE友好
+- **单元测试** - 95%+测试覆盖率
+- **完整文档** - 从API到设计的全面文档
+- **代码规范** - 统一的代码风格和最佳实践
 
-### Innovation Features
-- **Memory Optimization** - Intelligent memory management and caching strategies
-- **Dynamic Graph Optimization** - Efficient computation graph construction and execution
-- **Modular Design** - Clear module boundaries and interface definitions
+### 近期更新 (2025-01)
+- **✅ 内存分配器优化** - 达到PyTorch级性能
+- **✅ Qwen模型支持** - 完整Qwen LLM架构实现
+- **✅ 混合精度训练** - FP16/BF16自动混合精度(AMP)
+- **✅ 梯度裁剪** - 支持梯度范数和值裁剪
+- **✅ 学习率调度器** - StepLR, ExponentialLR, CosineAnnealingLR
+- **✅ 检查点系统** - 模型保存/加载与优化器状态保存
+- **🔄 算子性能** - 修复关键算子(cat, logsumexp, broadcast)
+- **🔄 内核优化** - Triton内核持续改进中
 
-## 🤝 Community & Contribution
+## 🤝 社区与贡献
 
-We welcome all forms of contributions:
+我们欢迎各种形式的贡献：
 
-- **🐛 Bug Reports** - Please report bugs promptly when found
-- **💡 Feature Suggestions** - Welcome new feature ideas
-- **📝 Documentation Improvements** - Help improve documentation content
-- **💻 Code Contributions** - Direct participation in code development
+- **🐛 错误报告** - 请及时报告发现的bug
+- **💡 功能建议** - 欢迎新功能想法
+- **📝 文档改进** - 帮助改善文档质量
+- **💻 代码贡献** - 直接参与代码开发
 
-For detailed information, see [Contributing Guidelines](contributing/index.md).
+详情请参考 [贡献指南](contributing/index.md)。
 
-## 📞 Contact Us
+## 📞 联系方式
 
-- **GitHub Issues** - Bug reports and feature requests
-- **Discussions** - Technical discussions and usage exchanges
-- **Email** - genesis-dev@example.com
+- **GitHub Issues** - bug报告和功能请求
+- **Discussions** - 技术讨论和使用交流
+- **邮箱** - genesis-dev@example.com
 
 ---
 
 <div align="center" markdown="1">
 
-**Start Your Deep Learning Journey** 🚀
+**开始您的深度学习之旅** 🚀
 
 <div class="grid cards" markdown="1">
 
--   :material-rocket-launch:{ .lg .middle } **Quick Start**
+-   :material-rocket-launch:{ .lg .middle } **快速开始**
 
     ---
 
-    Start building your first neural network with Genesis immediately
+    立即开始使用Genesis构建您的第一个神经网络
 
-    [:octicons-arrow-right-24: Getting Started](getting-started/index.md)
+    [:octicons-arrow-right-24: 快速开始](getting-started/index.md)
 
--   :material-github:{ .lg .middle } **View Source**
+-   :material-github:{ .lg .middle } **查看源码**
 
     ---
 
-    Explore Genesis's complete source code implementation on GitHub
+    在GitHub上探索完整的Genesis源码实现
 
-    [:octicons-arrow-right-24: GitHub Repository](https://github.com/phonism/genesis)
+    [:octicons-arrow-right-24: GitHub仓库](https://github.com/phonism/genesis)
 
 </div>
 
