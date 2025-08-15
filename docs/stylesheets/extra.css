@@ -52,3 +52,24 @@
   border-radius: 0.2rem;
   margin: 1rem 0;
 }
+
+/* 完全隐藏语言切换器 */
+.md-header__language-switcher,
+.md-header__option[data-md-component="language"],
+.md-header__option[data-md-component="switch"],
+.md-select,
+.md-select__inner,
+.md-select__list {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* 隐藏所有包含语言切换相关的元素 */
+[data-lang],
+.lang-option,
+.lang-separator,
+.lang-icon,
+.lang-text {
+  display: none !important;
+}
+
