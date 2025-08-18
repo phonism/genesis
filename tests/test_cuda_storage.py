@@ -1,5 +1,8 @@
-"""
-Test basic CUDAStorage functionality
+"""Test suite for CUDAStorage functionality.
+
+This module contains comprehensive tests for CUDA tensor storage operations,
+including memory management, tensor creation, shape manipulation, and numpy interoperability.
+Tests verify both basic operations and advanced memory management features.
 """
 
 import sys
@@ -14,7 +17,14 @@ from genesis.ndarray.cuda_storage import (
 
 
 def test_basic_creation():
-    """Test basic tensor creation"""
+    """Test basic tensor creation operations.
+    
+    Tests:
+        - Empty tensor creation with specified shape
+        - Zeros tensor creation and value verification
+        - Ones tensor creation and value verification
+        - Proper shape and dtype handling
+    """
     print("Testing basic tensor creation...")
     
     # Test empty
@@ -37,7 +47,14 @@ def test_basic_creation():
 
 
 def test_numpy_conversion():
-    """Test numpy conversion"""
+    """Test bidirectional conversion between numpy arrays and CUDA tensors.
+    
+    Tests:
+        - Converting numpy array to CUDA tensor
+        - Converting CUDA tensor back to numpy array
+        - Value preservation during conversions
+        - Dtype handling in conversions
+    """
     print("Testing numpy conversion...")
     
     # Create numpy array
@@ -56,7 +73,15 @@ def test_numpy_conversion():
 
 
 def test_reshape():
-    """Test reshape operation"""
+    """Test tensor reshape operations with various configurations.
+    
+    Tests:
+        - Reshape to different valid shapes
+        - Multi-dimensional reshaping (2D, 3D)
+        - Reshape with -1 for automatic dimension inference
+        - Data preservation after reshape
+        - Shape compatibility verification
+    """
     print("Testing reshape...")
     
     # Create a tensor
@@ -84,7 +109,14 @@ def test_reshape():
 
 
 def test_view():
-    """Test view operation"""
+    """Test tensor view operations for memory-efficient shape changes.
+    
+    Tests:
+        - Creating views with different shapes
+        - View shares underlying memory (conceptually)
+        - Shape changes without data copy
+        - Contiguous memory requirements
+    """
     print("Testing view...")
     
     # Create contiguous tensor
@@ -105,7 +137,15 @@ def test_view():
 
 
 def test_transpose():
-    """Test transpose operation"""
+    """Test transpose and permute operations for axis reordering.
+    
+    Tests:
+        - 2D matrix transpose using .T property
+        - Multi-dimensional permute operation
+        - Shape correctness after transpose/permute
+        - Non-contiguous memory handling
+        - Stride updates after transpose
+    """
     print("Testing transpose...")
     
     # Create 2D tensor
@@ -136,7 +176,14 @@ def test_transpose():
 
 
 def test_expand():
-    """Test expand operation"""
+    """Test tensor expansion for broadcasting operations.
+    
+    Tests:
+        - Expanding tensor along broadcast-compatible dimensions
+        - Data replication verification
+        - Shape correctness after expansion
+        - Memory-efficient expansion (view-based)
+    """
     print("Testing expand...")
     
     # Create a broadcastable tensor
@@ -159,7 +206,14 @@ def test_expand():
 
 
 def test_squeeze_unsqueeze():
-    """Test squeeze and unsqueeze"""
+    """Test dimension manipulation with squeeze and unsqueeze operations.
+    
+    Tests:
+        - Unsqueeze to add dimensions at different positions
+        - Squeeze to remove singleton dimensions
+        - Shape verification after operations
+        - Handling of multiple singleton dimensions
+    """
     print("Testing squeeze/unsqueeze...")
     
     # Create tensor
@@ -185,7 +239,14 @@ def test_squeeze_unsqueeze():
 
 
 def test_stride_info():
-    """Test stride information"""
+    """Test stride information and contiguity checking.
+    
+    Tests:
+        - Stride calculation for contiguous tensors
+        - Non-contiguous tensor detection (after transpose)
+        - Making non-contiguous tensors contiguous
+        - Stride updates after various operations
+    """
     print("Testing stride information...")
     
     # Create contiguous tensor
@@ -207,7 +268,14 @@ def test_stride_info():
 
 
 def test_memory_management():
-    """Test memory management"""
+    """Test CUDA memory allocation and deallocation.
+    
+    Tests:
+        - Multiple tensor allocation
+        - Memory release on tensor deletion
+        - No memory leaks with repeated allocations
+        - Garbage collection behavior
+    """
     print("Testing memory management...")
     
     # Create and delete multiple tensors
@@ -223,7 +291,16 @@ def test_memory_management():
 
 
 def test_cuda_memory_manager():
-    """Test CUDA memory manager initialization and basic operations"""
+    """Test CUDA memory manager initialization and core functionality.
+    
+    Tests:
+        - Memory manager singleton initialization
+        - Small and large memory allocations
+        - Memory deallocation with same stream
+        - Memory statistics tracking
+        - Stream-aware memory operations
+        - Error handling for invalid operations
+    """
     print("Testing CUDA memory manager...")
     
     try:
@@ -263,7 +340,12 @@ def test_cuda_memory_manager():
 
 
 def run_all_tests():
-    """Run all tests"""
+    """Run complete test suite for CUDAStorage functionality.
+    
+    Executes all test functions in order, starting with memory manager
+    initialization, followed by tensor operations and memory management.
+    Provides detailed output for each test and summary of results.
+    """
     print("=" * 50)
     print("Running CUDATensor Tests")
     print("=" * 50 + "\n")

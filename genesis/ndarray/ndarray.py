@@ -1,3 +1,9 @@
+"""N-dimensional array implementation with device abstraction.
+
+This module provides the core NDArray class and Device abstraction that supports
+both CPU (NumPy) and GPU (CUDA) backends for tensor operations.
+"""
+
 import operator
 import os
 import math
@@ -8,21 +14,29 @@ from typing import Optional, Any
 import torch
 
 def prod(x):
-    """
-    Return the product of all elements in a list.
-    """
+    """Return the product of all elements in a list."""
     return reduce(operator.mul, x, 1)
 
 class Device:
+    """Device abstraction for CPU and GPU computation backends.
+    
+    Provides a unified interface for different computational devices,
+    supporting both NumPy (CPU) and CUDA (GPU) operations.
     """
-    Device class.
-    """
+    
     def __init__(
         self, 
         name: str, 
         mod: Any, 
         device_id: Optional[int] = None
     ) -> None:
+        """Initialize device with backend module.
+        
+        Args:
+            name: Device name ('cpu' or 'cuda')
+            mod: Backend module (numpy or cuda module)
+            device_id: Optional device ID for multi-GPU systems
+        """
         self.name = name
         self.mod = mod
         self.device_id = device_id
@@ -41,9 +55,7 @@ class Device:
         return getattr(self.mod, name)
 
     def enabled(self) -> bool:
-        """
-        Return True if the device is enabled.
-        """
+        """Return True if the device is enabled."""
         return self.mod is not None
 
     def randn(self, *shape, dtype: Optional[str] = genesis.float32) -> "NDArray":

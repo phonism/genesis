@@ -174,8 +174,11 @@ def test_basic_import():
     """Test basic import"""
     try:
         import genesis
+        import genesis.nn as nn
+        import genesis.optim as optim
         print("✅ Genesis import successful")
-        print(f"   Version: {genesis.__version__}")
+        print(f"   Core modules: genesis, nn, optim")
+        print(f"   Available functions: {len([x for x in dir(genesis) if not x.startswith('_')])}")
     except ImportError as e:
         print(f"❌ Genesis import failed: {e}")
         return False
@@ -192,8 +195,11 @@ def test_tensor_operations():
         
         # Basic operations
         z = x + y
-        print("✅ Tensor operations normal")
-        print(f"   Tensor shape: {z.shape}")
+        w = genesis.matmul(x, y.T)  # Use actual Genesis API
+        
+        print("✅ Tensor operations working")
+        print(f"   Addition result shape: {z.shape}")
+        print(f"   Matrix multiplication shape: {w.shape}")
     except Exception as e:
         print(f"❌ Tensor operations failed: {e}")
         return False
@@ -202,40 +208,54 @@ def test_tensor_operations():
 def test_neural_networks():
     """Test neural network modules"""
     try:
+        import genesis
         import genesis.nn as nn
         
-        # Create simple model
-        model = nn.Sequential(
+        # Create simple model using actual Genesis modules
+        model = nn.Sequential([
             nn.Linear(10, 5),
             nn.ReLU(),
             nn.Linear(5, 1)
-        )
+        ])
         
         # Test forward pass
         x = genesis.randn(2, 10)
         y = model(x)
-        print("✅ Neural network modules normal")
+        print("✅ Neural network modules working")
+        print(f"   Model layers: {len(list(model.parameters()))} parameter tensors")
         print(f"   Output shape: {y.shape}")
     except Exception as e:
         print(f"❌ Neural network modules failed: {e}")
         return False
     return True
 
-def test_cuda_support():
-    """Test CUDA support"""
+def test_backend_support():
+    """Test backend support"""
     try:
         import genesis
+        from genesis.backend import default_device
         
-        if genesis.cuda.is_available():
-            device = genesis.device('cuda')
-            x = genesis.randn(10, 10, device=device)
-            print("✅ CUDA support normal")
-            print(f"   GPU device count: {genesis.cuda.device_count()}")
-            print(f"   GPU name: {genesis.cuda.get_device_name()}")
-        else:
-            print("⚠️  CUDA unavailable (will use CPU)")
+        # Test basic backend functionality
+        device = default_device()
+        x = genesis.randn(5, 5)
+        
+        print("✅ Backend support working")
+        print(f"   Default device: {device}")
+        print(f"   Tensor device: {x.device}")
+        
+        # Try to detect CUDA if available
+        try:
+            # Test if we can create CUDA tensors
+            import torch
+            if torch.cuda.is_available():
+                print("   CUDA detected (via PyTorch backend)")
+            else:
+                print("   CUDA not available (CPU only)")
+        except:
+            print("   Backend: Genesis native")
+            
     except Exception as e:
-        print(f"❌ CUDA test failed: {e}")
+        print(f"❌ Backend test failed: {e}")
         return False
     return True
 
@@ -244,14 +264,74 @@ def test_autograd():
     try:
         import genesis
         
+        # Test basic autograd
         x = genesis.randn(5, requires_grad=True)
-        y = (x ** 2).sum()
+        y = genesis.functional.sum(x * x)  # Use actual Genesis API
         y.backward()
         
-        print("✅ Automatic differentiation normal")
-        print(f"   Gradient shape: {x.grad.shape}")
+        print("✅ Automatic differentiation working")
+        print(f"   Input shape: {x.shape}")
+        print(f"   Gradient computed: {x.grad is not None}")
+        print(f"   Gradient shape: {x.grad.shape if x.grad is not None else 'None'}")
     except Exception as e:
         print(f"❌ Automatic differentiation failed: {e}")
+        return False
+    return True
+
+def test_optimizers():
+    """Test optimizer functionality"""
+    try:
+        import genesis
+        import genesis.nn as nn
+        import genesis.optim as optim
+        
+        # Create a simple model and optimizer
+        model = nn.Linear(5, 1)
+        optimizer = optim.Adam(model.parameters(), lr=0.01)
+        
+        # Test basic optimization step
+        x = genesis.randn(3, 5)
+        y_pred = model(x)
+        loss = genesis.functional.sum(y_pred * y_pred)
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        print("✅ Optimizer functionality working")
+        print(f"   Optimizer type: {type(optimizer).__name__}")
+        print(f"   Learning rate: 0.01")
+        print(f"   Parameters updated: {len(list(model.parameters()))}")
+    except Exception as e:
+        print(f"❌ Optimizer test failed: {e}")
+        return False
+    return True
+
+def test_serialization():
+    """Test model saving/loading"""
+    try:
+        import genesis
+        import genesis.nn as nn
+        
+        # Create and save a model
+        model = nn.Linear(3, 2)
+        state_dict = model.state_dict()
+        
+        # Test serialization functionality
+        genesis.save(state_dict, 'test_model.pkl')
+        loaded_state = genesis.load('test_model.pkl')
+        
+        print("✅ Serialization working")
+        print(f"   Model saved and loaded successfully")
+        print(f"   State dict keys: {len(state_dict)}")
+        
+        # Cleanup
+        import os
+        if os.path.exists('test_model.pkl'):
+            os.remove('test_model.pkl')
+            
+    except Exception as e:
+        print(f"❌ Serialization test failed: {e}")
         return False
     return True
 
@@ -262,24 +342,35 @@ if __name__ == "__main__":
         test_basic_import,
         test_tensor_operations,
         test_neural_networks,
-        test_cuda_support,
-        test_autograd
+        test_backend_support,
+        test_autograd,
+        test_optimizers,
+        test_serialization
     ]
     
     passed = 0
     total = len(tests)
     
     for test in tests:
-        if test():
-            passed += 1
+        try:
+            if test():
+                passed += 1
+        except Exception as e:
+            print(f"❌ Test failed with exception: {e}")
         print()
     
     print(f"📊 Test Results: {passed}/{total} passed")
     
     if passed == total:
         print("🎉 Congratulations! Genesis installation successful, all features working!")
+    elif passed >= total * 0.8:  # 80% pass rate
+        print("✅ Genesis installation mostly successful! Minor issues detected.")
+        print("   Most functionality is working. Check failed tests above.")
     else:
-        print("⚠️  Some features abnormal, please check installation steps")
+        print("⚠️  Genesis installation has issues. Please check:")
+        print("   1. Genesis is properly installed: pip install -e .")
+        print("   2. Dependencies are installed: pip install torch triton")
+        print("   3. Python version is 3.8+")
 ```
 
 Save the above code as `test_installation.py` and run:

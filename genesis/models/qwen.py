@@ -1,3 +1,10 @@
+"""Qwen model implementation in Genesis framework.
+
+This module implements the Qwen (Tongyi Qianwen) language model architecture,
+a transformer-based model with rotary position embeddings, multi-head attention,
+and feed-forward networks. Supports various model sizes from 0.5B to 72B parameters.
+"""
+
 import sys
 import os
 sys.path.append("../../")
@@ -16,7 +23,14 @@ import random
 
 def set_seed(seed: int) -> None:
     """
-    Set random seed for all random number generators.
+    Set random seed for reproducibility.
+    
+    Args:
+        seed: Integer seed value for random number generators
+    
+    Note:
+        Genesis doesn't have global manual_seed yet, so only
+        sets seeds for Python random and numpy.
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -26,7 +40,18 @@ set_seed(42)
 
 def find_multiple(n: int, k: int) -> int:
     """
-    Find the smallest multiple of k that is greater than or equal to n.
+    Find the smallest multiple of k that is >= n.
+    
+    Args:
+        n: Target number
+        k: Multiple to align to
+    
+    Returns:
+        Smallest multiple of k that is >= n
+    
+    Example:
+        find_multiple(10, 8) returns 16
+        find_multiple(16, 8) returns 16
     """
     if n % k == 0:
         return n
@@ -35,7 +60,22 @@ def find_multiple(n: int, k: int) -> int:
 @dataclass
 class ModelArgs:
     """
-    Model arguments.
+    Configuration arguments for Qwen model.
+    
+    Attributes:
+        block_size: Maximum sequence length for input
+        vocab_size: Size of the vocabulary
+        n_layer: Number of transformer layers
+        num_attention_heads: Number of attention heads
+        hidden_size: Hidden dimension size
+        intermediate_size: Size of the feed-forward network intermediate layer
+        n_local_heads: Number of local attention heads (deprecated)
+        num_key_value_heads: Number of key-value heads for GQA
+        head_dim: Dimension of each attention head
+        rope_base: Base frequency for rotary position embeddings
+        max_position_embeddings: Maximum position embeddings length
+        norm_eps: Epsilon for layer normalization
+        rope_scaling: Optional rope scaling configuration
     """
     block_size: int = 2048
     vocab_size: int = 151936
@@ -53,7 +93,10 @@ class ModelArgs:
 
     def __post_init__(self):
         """
-        Initialize model arguments.
+        Post-initialization to compute derived parameters.
+        
+        Sets default values for n_local_heads and intermediate_size if not specified.
+        Computes head_dim from hidden_size and num_attention_heads.
         """
         if self.n_local_heads == -1:
             self.n_local_heads = self.num_attention_heads
@@ -66,7 +109,17 @@ class ModelArgs:
     @classmethod
     def from_name(cls, name: str) -> "ModelArgs":
         """
-        Load model arguments from a name.
+        Create ModelArgs from a predefined configuration name.
+        
+        Args:
+            name: Model configuration name (e.g., "Qwen-0.5B", "Qwen-7B")
+        
+        Returns:
+            ModelArgs instance with the specified configuration
+        
+        Note:
+            Supports fuzzy matching - will find the best match based on
+            substring matching with preference for longer matches.
         """
         if name in transformer_configs:
             return cls(**transformer_configs[name])
@@ -83,7 +136,17 @@ class ModelArgs:
 
 class QwenModel(nn.Module):
     """
-    Qwen model.
+    Core Qwen transformer model.
+    
+    Implements the main transformer architecture with embedding layer,
+    transformer blocks, normalization, and language modeling head.
+    
+    Attributes:
+        config: Model configuration
+        embed_tokens: Token embedding layer
+        layers: List of transformer blocks
+        norm: Final RMS normalization layer
+        lm_head: Language modeling head for next token prediction
     """
     def __init__(self, config: ModelArgs) -> None:
         super().__init__()
@@ -101,7 +164,15 @@ class QwenModel(nn.Module):
 
     def setup_caches(self, max_batch_size: int, max_seq_length: int):
         """
-        Setup caches for the model.
+        Initialize KV caches for efficient inference.
+        
+        Args:
+            max_batch_size: Maximum batch size to support
+            max_seq_length: Maximum sequence length to support
+        
+        Note:
+            Only reinitializes if requested sizes exceed current cache sizes.
+            Sequence length is aligned to multiple of 8 for efficiency.
         """
         if self.max_seq_length >= max_seq_length and self.max_batch_size >= max_batch_size:
             return
@@ -112,7 +183,14 @@ class QwenModel(nn.Module):
 
     def forward(self, idx: Tensor, position_ids: Optional[Tensor] = None) -> Tensor:
         """
-        Forward pass of the model.
+        Forward pass through the Qwen model.
+        
+        Args:
+            idx: Input token indices of shape (batch_size, sequence_length)
+            position_ids: Optional position indices for each token
+        
+        Returns:
+            Logits tensor of shape (batch_size, sequence_length, vocab_size)
         """
         batch_size, sequence_length = idx.size()
         
@@ -134,14 +212,24 @@ class QwenModel(nn.Module):
     @classmethod
     def from_name(cls, name: str):
         """
-        Load model from name.
+        Create QwenModel from a predefined configuration name.
+        
+        Args:
+            name: Model configuration name
+        
+        Returns:
+            QwenModel instance with the specified configuration
         """
         return cls(ModelArgs.from_name(name))
 
 
 class QwenForCausalLM(nn.Module):
     """
-    Qwen for causal language modeling.
+    Qwen model for causal language modeling tasks.
+    
+    Wrapper around QwenModel that provides a simple interface
+    for language modeling with support for weight sharing between
+    embedding and output layers.
     """
     def __init__(self, config: ModelArgs):
         super().__init__()
@@ -149,14 +237,29 @@ class QwenForCausalLM(nn.Module):
 
     def forward(self, idx: Tensor, **kwargs) -> Tensor:
         """
-        Forward pass of the model.
+        Forward pass for causal language modeling.
+        
+        Args:
+            idx: Input token indices
+            **kwargs: Additional arguments passed to the model
+        
+        Returns:
+            Logits tensor for next token prediction
         """
         logits = self.model(idx, **kwargs)
         return logits
 
     def load_state_dict(self, state_dict: dict, strict: bool = True) -> None:
         """
-        Load state dict with weight sharing between embed_tokens and lm_head
+        Load model weights with support for weight tying.
+        
+        Args:
+            state_dict: Dictionary containing model weights
+            strict: Whether to strictly enforce that all keys match
+        
+        Note:
+            Automatically shares weights between embed_tokens and lm_head
+            if lm_head weights are not present in the state dict.
         """
         if "model.lm_head.weight" not in state_dict and "model.embed_tokens.weight" in state_dict:
             state_dict["model.lm_head.weight"] = state_dict["model.embed_tokens.weight"]
@@ -165,7 +268,16 @@ class QwenForCausalLM(nn.Module):
 
 class RotaryEmbedding(genesis.nn.Module):
     """
-    Rotary embedding.
+    Rotary Position Embedding (RoPE) implementation.
+    
+    Implements the rotary position embedding mechanism that encodes
+    absolute position information with rotation matrices, allowing
+    the model to generalize to longer sequences.
+    
+    Attributes:
+        inv_freq: Inverse frequencies for computing rotary embeddings
+        cos_cached: Precomputed cosine values
+        sin_cached: Precomputed sine values
     """
     def __init__(
         self, dim: int,
@@ -185,7 +297,14 @@ class RotaryEmbedding(genesis.nn.Module):
     
     def forward(self, x: Tensor, seq_len: Optional[int] = None) -> Tuple[Tensor, Tensor]:
         """
-        Forward pass of the rotary embedding layer.
+        Get rotary embeddings for the given sequence length.
+        
+        Args:
+            x: Input tensor (used for shape reference)
+            seq_len: Sequence length to generate embeddings for
+        
+        Returns:
+            Tuple of (cos, sin) tensors for rotary embeddings
         """
         return (
             self.cos_cached[:seq_len],
@@ -194,7 +313,13 @@ class RotaryEmbedding(genesis.nn.Module):
 
 class TransformerBlock(nn.Module):
     """
-    Transformer block.
+    Single transformer block with attention and feed-forward layers.
+    
+    Implements a standard transformer block with:
+    - Multi-head self-attention with RoPE
+    - Feed-forward network with SiLU activation
+    - RMS normalization before each sub-layer
+    - Residual connections
     """
     def __init__(self, config: ModelArgs) -> None:
         super().__init__()
@@ -211,7 +336,16 @@ class TransformerBlock(nn.Module):
         mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
-        Forward pass of the transformer block.
+        Forward pass through the transformer block.
+        
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, hidden_size)
+            input_pos: Input position indices for KV cache
+            position_ids: Position indices for rotary embeddings
+            mask: Optional attention mask
+        
+        Returns:
+            Output tensor of same shape as input
         """
         h = x + self.self_attn(self.input_layernorm(x), position_ids, mask, input_pos)
         out = h + self.mlp(self.post_attention_layernorm(h))
@@ -220,7 +354,19 @@ class TransformerBlock(nn.Module):
 
 class Attention(nn.Module):
     """
-    Attention module.
+    Multi-head attention module with grouped-query attention (GQA).
+    
+    Implements scaled dot-product attention with:
+    - Rotary position embeddings
+    - Grouped-query attention for efficiency
+    - Optional KV caching for inference
+    
+    Attributes:
+        q_proj, k_proj, v_proj: Query, key, value projection layers
+        o_proj: Output projection layer
+        rotary_emb: Rotary position embedding module
+        num_attention_heads: Number of attention heads
+        num_key_value_heads: Number of key-value heads (for GQA)
     """
     def __init__(self, config: ModelArgs):
         super().__init__()
@@ -251,7 +397,20 @@ class Attention(nn.Module):
         input_pos: Optional[Tensor] = None,
     ) -> Tensor:
         """
-        Forward pass of the attention module.
+        Compute multi-head attention with rotary embeddings.
+        
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, hidden_size)
+            position_ids: Position indices for rotary embeddings
+            mask: Optional attention mask
+            input_pos: Optional input positions for KV cache
+        
+        Returns:
+            Attention output of shape (batch_size, seq_len, hidden_size)
+        
+        Note:
+            Uses grouped-query attention where key-value heads are shared
+            across multiple query heads for efficiency.
         """
         bsz, seqlen, _ = x.shape
 
@@ -285,7 +444,11 @@ class Attention(nn.Module):
 
 class FeedForward(nn.Module):
     """
-    Feed forward module.
+    Feed-forward network module.
+    
+    Implements the position-wise feed-forward network with:
+    - Gated linear unit (GLU) variant with SiLU activation
+    - Two parallel projections (gate and up) followed by down projection
     """
     def __init__(self, config: ModelArgs) -> None:
         super().__init__()
@@ -296,13 +459,32 @@ class FeedForward(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """
-        Forward pass of the feed forward module.
+        Apply feed-forward transformation.
+        
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, hidden_size)
+        
+        Returns:
+            Output tensor of same shape as input
+        
+        Note:
+            Uses SwiGLU activation: silu(gate_proj(x)) * up_proj(x)
         """
         return self.down_proj(self.silu(self.gate_proj(x)) * self.up_proj(x))
 
 def rotate_half(x):
     """
-    Rotate the last half of the tensor.
+    Rotate half of the hidden dimensions for RoPE.
+    
+    Args:
+        x: Input tensor with shape (..., hidden_dim)
+    
+    Returns:
+        Tensor with the last half of dimensions negated and swapped
+        with the first half
+    
+    Example:
+        [a, b, c, d] -> [-c, -d, a, b]
     """
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
@@ -310,7 +492,21 @@ def rotate_half(x):
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """
-    Apply rotary position embedding - Genesis version.
+    Apply rotary position embeddings to query and key tensors.
+    
+    Args:
+        q: Query tensor of shape (batch, heads, seq_len, head_dim)
+        k: Key tensor of shape (batch, heads, seq_len, head_dim)
+        cos: Cosine values for rotary embedding
+        sin: Sine values for rotary embedding
+        position_ids: Position indices for each token
+        unsqueeze_dim: Dimension to unsqueeze cos/sin tensors
+    
+    Returns:
+        Tuple of (q_embed, k_embed) with rotary embeddings applied
+    
+    Note:
+        Applies rotation: q * cos + rotate_half(q) * sin
     """
     cos = cos[position_ids.long()].unsqueeze(unsqueeze_dim)
     sin = sin[position_ids.long()].unsqueeze(unsqueeze_dim)

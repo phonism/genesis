@@ -1,3 +1,9 @@
+"""Test suite for Genesis neural network modules.
+
+This module contains comprehensive tests for neural network layers and operations,
+comparing Genesis implementations against PyTorch reference implementations.
+"""
+
 import sys
 sys.path.append('./')
 import itertools
@@ -24,6 +30,16 @@ SOFTMAX_SHAPES = [
 @pytest.mark.parametrize("shape", SOFTMAX_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_softmax(shape, device):
+    """Test Softmax layer forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape for testing
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass matches PyTorch implementation
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -45,6 +61,16 @@ NN_BASE_SHAPES = [
 @pytest.mark.parametrize("shape", NN_BASE_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_batchnorm1d(shape, device):
+    """Test BatchNorm1d layer forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape (batch_size, features)
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass normalization matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -63,6 +89,17 @@ def test_batchnorm1d(shape, device):
 @pytest.mark.parametrize("shape", NN_BASE_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_linear(shape, device):
+    """Test Linear (fully-connected) layer forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape (batch_size, in_features)
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass linear transformation matches PyTorch
+        - Weight sharing between Genesis and PyTorch models
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -84,6 +121,16 @@ def test_linear(shape, device):
 @pytest.mark.parametrize("shape", SOFTMAX_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_layernorm(shape, device):
+    """Test LayerNorm layer forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape for testing
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass layer normalization matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -102,6 +149,17 @@ def test_layernorm(shape, device):
 @pytest.mark.parametrize("shape", SOFTMAX_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_fusedlayernorm(shape, device):
+    """Test FusedLayerNorm (optimized CUDA kernel) forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape for testing
+        device: Device to run test on (CUDA only)
+    
+    Tests:
+        - Forward pass fused normalization matches PyTorch LayerNorm
+        - Backward gradients match PyTorch implementation
+        - Skips test on CPU devices
+    """
     if device == genesis.cpu():
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _A = np.random.randn(*shape).astype(np.float32)
@@ -122,6 +180,16 @@ def test_fusedlayernorm(shape, device):
 @pytest.mark.parametrize("shape", NN_BASE_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_relu(shape, device):
+    """Test ReLU activation function forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape for testing
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass ReLU activation matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -142,6 +210,17 @@ ATTENTION_SHAPES = [
 @pytest.mark.parametrize("shape", ATTENTION_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_onehead_attention(shape, device):
+    """Test single-head attention mechanism forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape (batch_size, seq_len, dim)
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass attention output matches PyTorch MultiheadAttention with 1 head
+        - Causal masking is properly applied
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -177,6 +256,18 @@ ATTENTION_SHAPES = [
 @pytest.mark.parametrize("shape", ATTENTION_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_multihead_attention(shape, device):
+    """Test multi-head attention mechanism forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape (batch_size, seq_len, dim)
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass multi-head attention output matches PyTorch
+        - Weight matrices are properly shared between implementations
+        - Causal masking is correctly applied
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -210,6 +301,18 @@ ATTENTION_SHAPES = [
 @pytest.mark.parametrize("shape", ATTENTION_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_fused_multihead_attention(shape, device):
+    """Test fused multi-head attention (optimized CUDA kernel) forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape (batch_size, seq_len, dim)
+        device: Device to run test on (CUDA only)
+    
+    Tests:
+        - Forward pass fused attention matches PyTorch MultiheadAttention
+        - Uses relaxed tolerance due to numerical precision differences
+        - Backward gradients match PyTorch implementation
+        - Skips test on CPU devices
+    """
     if device == genesis.cpu():
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _A = np.random.randn(*shape).astype(np.float32)
@@ -245,6 +348,17 @@ QKV_SHAPES = [
 @pytest.mark.parametrize("shape", QKV_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_scaled_dot_product_attention(shape, device):
+    """Test scaled dot-product attention function.
+    
+    Args:
+        shape: Shape for Q, K, V tensors (batch, heads, seq_len, head_dim)
+        device: Device to run test on (CUDA only)
+    
+    Tests:
+        - Forward pass scaled attention computation matches PyTorch
+        - Causal masking is automatically applied
+        - Skips test on CPU devices
+    """
     if device == genesis.cpu():
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _Q = np.random.randn(*shape).astype(np.float32)
@@ -271,6 +385,16 @@ def test_scaled_dot_product_attention(shape, device):
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_embedding(device):
+    """Test Embedding layer forward and backward pass.
+    
+    Args:
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass embedding lookup matches PyTorch
+        - Integer indexing works correctly
+        - Backward gradient accumulation in embedding weights matches PyTorch
+    """
     num_embeddings = 1000
     embedding_dim = 32
 
@@ -298,7 +422,21 @@ def test_embedding(device):
     np.testing.assert_allclose(embed.weight.detach().numpy(), torch_embed.weight.detach().numpy(), atol=1e-5, rtol=1e-5)
 
 class RotaryEmbedding(torch.nn.Module):
+    """PyTorch reference implementation of Rotary Position Embedding (RoPE).
+    
+    This class is used as a reference to test the Genesis implementation.
+    RoPE applies rotation-based position encodings to attention queries and keys.
+    """
+    
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+        """Initialize RoPE with precomputed sin/cos values.
+        
+        Args:
+            dim: Dimension of the embeddings
+            max_position_embeddings: Maximum sequence length to support
+            base: Base value for computing rotation frequencies
+            device: Device to place the embeddings on
+        """
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float().to(device) / dim))
         self.register_buffer("inv_freq", inv_freq)
@@ -313,6 +451,15 @@ class RotaryEmbedding(torch.nn.Module):
         self.register_buffer("sin_cached", emb.sin()[None, None, :, :], persistent=False)
 
     def forward(self, x, seq_len=None):
+        """Apply rotary embeddings to input tensor.
+        
+        Args:
+            x: Input tensor of shape [batch_size, num_attention_heads, seq_len, head_size]
+            seq_len: Optional sequence length to use (defaults to cached length)
+        
+        Returns:
+            Tuple of (cos_values, sin_values) for applying rotary embeddings
+        """
         # x: [bs, num_attention_heads, seq_len, head_size]
         # This `if` block is unlikely to be run after we build sin/cos in `__init__`. Keep the logic here just in case.
         return (
@@ -323,6 +470,16 @@ class RotaryEmbedding(torch.nn.Module):
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_rotary_embedding(device):
+    """Test Rotary Position Embedding (RoPE) implementation.
+    
+    Args:
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Cached sin/cos values match between Genesis and PyTorch implementations
+        - Forward pass produces identical rotation values
+        - Proper shape handling for different input dimensions
+    """
     torch_rotary_embed = RotaryEmbedding(64, 32)
     rotary_embed = genesis.nn.RotaryEmbedding(64, 32)
 
@@ -350,6 +507,16 @@ def test_rotary_embedding(device):
 @pytest.mark.parametrize("shape", SOFTMAX_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_silu(shape, device):
+    """Test SiLU (Swish) activation function forward and backward pass.
+    
+    Args:
+        shape: Input tensor shape for testing
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass SiLU activation matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
