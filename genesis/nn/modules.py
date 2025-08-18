@@ -1,5 +1,7 @@
-"""
-The module
+"""Neural network module base classes and parameter management.
+
+This module provides the foundational Module class and Parameter class that serve
+as building blocks for all neural network layers in Genesis.
 """
 
 from typing import (
@@ -12,15 +14,15 @@ from genesis import init
 import numpy as np
 
 class Parameter(Tensor):
-    """
-    A special kind of tensor that represents parameters.
+    """A tensor subclass that represents trainable parameters.
+    
+    Parameters are automatically tracked for gradient computation and
+    optimization during training.
     """
 
 
 def _unpack_params(value: object) -> List[Tensor]:
-    """
-    Unpack parameters from a value.
-    """
+    """Recursively extract parameters from nested structures."""
     if isinstance(value, Parameter):
         return [value]
     elif isinstance(value, Module):
@@ -40,9 +42,7 @@ def _unpack_params(value: object) -> List[Tensor]:
 
 
 def _unpack_vars(value: object) -> List[Tensor]:
-    """
-    Unpack variables from a value.
-    """
+    """Recursively extract all tensors from nested structures."""
     if isinstance(value, Tensor):
         return [value]
     elif isinstance(value, Module):
@@ -62,9 +62,7 @@ def _unpack_vars(value: object) -> List[Tensor]:
 
 
 def _child_modules(value: object) -> List["Module"]:
-    """
-    Unpack child modules from a value.
-    """
+    """Recursively extract child modules from nested structures."""
     if isinstance(value, Module):
         modules = [value]
         modules.extend(_child_modules(value.__dict__))
@@ -83,22 +81,27 @@ def _child_modules(value: object) -> List["Module"]:
 
 
 class Module:
+    """Base class for all neural network modules.
+    
+    Provides parameter management, training mode control, and device placement
+    functionality for building complex neural network architectures.
     """
-    Base class for all neural network modules.
-    """
+    
     def __init__(self):
         self.training = True
 
     def register_buffer(self, name: str, buffer: Tensor, persistent: bool = True):
-        """
-        Register a buffer to the module.
+        """Register a buffer (non-parameter tensor) to the module.
+        
+        Args:
+            name: Name of the buffer
+            buffer: Tensor to register as buffer
+            persistent: Whether buffer persists during serialization
         """
         self.__dict__[name] = buffer
 
     def parameters(self) -> List[Tensor]:
-        """
-        Return the list of parameters in the module.
-        """
+        """Return iterator over module parameters."""
         return _unpack_params(self.__dict__)
     
     def num_parameters(self) -> int:
@@ -273,6 +276,14 @@ class Sequential(Module):
 
 
 class ModuleList(Module):
+    """A list container for neural network modules.
+    
+    Holds modules in a list and allows for easy iteration and access.
+    Parameters of child modules are automatically registered.
+    
+    Args:
+        modules: Optional list of modules to initialize with
+    """
     def __init__(self, modules: Optional[List[Module]] = None) -> None:
         super().__init__()
         self._modules = []

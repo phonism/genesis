@@ -1,3 +1,10 @@
+"""Test suite for Genesis functional operations.
+
+This module contains comprehensive tests for functional operations and tensor manipulations,
+comparing Genesis implementations against PyTorch reference implementations.
+Tests cover element-wise operations, matrix operations, reductions, and tensor indexing.
+"""
+
 import sys
 sys.path.append('./')
 import itertools
@@ -12,6 +19,20 @@ atol = 1e-1
 rtol = 1e-1
 
 def backward_check(f, *args, **kwargs):
+    """Numerical gradient checking using finite differences.
+    
+    Args:
+        f: Function to test gradients for
+        *args: Input tensors to the function
+        **kwargs: Additional keyword arguments for the function
+    
+    Returns:
+        List of backward gradients computed numerically
+        
+    Tests:
+        Computes numerical gradients using central difference method
+        and compares with automatic differentiation gradients.
+    """
     eps = 1e-5
     out = f(*args, **kwargs)
     c = np.random.randn(*out.shape)
@@ -53,6 +74,19 @@ GENERAL_SHAPES = [(1, 1, 1), (4, 5, 6)]
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_ewise_fn(fn, shape, device, dtype):
+    """Test element-wise binary operations (add, subtract, multiply, divide).
+    
+    Args:
+        fn: Element-wise operation function
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass matches PyTorch for nested operations
+        - Backward gradients match PyTorch implementation
+        - Handles float16 precision and inf values correctly
+    """
     if dtype[0] == genesis.float16:
         _A = np.random.randn(*shape).astype(np.float16)
         _B = np.random.randn(*shape).astype(np.float16)
@@ -97,6 +131,19 @@ GENERAL_SHAPES = [(1, 1, 1), (4, 5, 6)]
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_scalar_fn(fn, shape, device, dtype):
+    """Test tensor-scalar operations (add, subtract, multiply, divide, power).
+    
+    Args:
+        fn: Scalar operation function
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass matches PyTorch for tensor-scalar operations
+        - Backward gradients match PyTorch implementation
+        - Tests both regular and reverse operations (e.g., rdivide, rpower)
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     #_B = np.random.randn(1).astype(np.float32).item()
     _B = 1.2
@@ -126,6 +173,18 @@ MATMUL_DIMS = [
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_matmul(m, n, p, device, dtype):
+    """Test matrix multiplication operation.
+    
+    Args:
+        m, n, p: Matrix dimensions (m×n) @ (n×p) = (m×p)
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass matrix multiplication matches PyTorch
+        - Backward gradients match PyTorch implementation
+        - Tests various matrix sizes including large matrices (1024×1024)
+    """
     _A = np.random.randn(m, n).astype(np.float32)
     _B = np.random.randn(n, p).astype(np.float32)
     A = genesis.Tensor(_A, device=device, dtype=dtype[0])
@@ -150,6 +209,19 @@ BATCH_MATMUL_DIMS = [
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_batch_matmul(b, m, n, p, device, dtype):
+    """Test batched matrix multiplication.
+    
+    Args:
+        b: Batch size
+        m, n, p: Matrix dimensions for each batch
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass batched matmul matches PyTorch
+        - Backward gradients match PyTorch implementation
+        - Tests broadcasting in batch dimension
+    """
     _A = np.random.randn(b, m, n).astype(np.float32)
     _B = np.random.randn(b, n, p).astype(np.float32)
     A = genesis.Tensor(_A, device=device, dtype=dtype[0])
@@ -169,6 +241,18 @@ def test_batch_matmul(b, m, n, p, device, dtype):
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_batch_matmul_2(b, m, n, p, device, dtype):
+    """Test batched matrix multiplication with broadcasting (batch × non-batch).
+    
+    Args:
+        b: Batch size for first operand
+        m, n, p: Matrix dimensions
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Broadcasting batch dimension with non-batched tensor
+        - Forward and backward pass correctness
+    """
     _A = np.random.randn(b, m, n).astype(np.float32)
     _B = np.random.randn(n, p).astype(np.float32)
     A = genesis.Tensor(_A, device=device, dtype=dtype[0])
@@ -188,6 +272,18 @@ def test_batch_matmul_2(b, m, n, p, device, dtype):
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_batch_matmul_3(b, m, n, p, device, dtype):
+    """Test batched matrix multiplication with broadcasting (non-batch × batch).
+    
+    Args:
+        b: Batch size for second operand
+        m, n, p: Matrix dimensions
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Broadcasting non-batched tensor with batch dimension
+        - Forward and backward pass correctness
+    """
     _A = np.random.randn(m, n).astype(np.float32)
     _B = np.random.randn(b, n, p).astype(np.float32)
     A = genesis.Tensor(_A, device=device, dtype=dtype[0])
@@ -215,6 +311,19 @@ SUMMATION_PARAMETERS = [
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_summation(shape, axes, device, dtype):
+    """Test tensor summation along specified axes.
+    
+    Args:
+        shape: Input tensor shape
+        axes: Axes to sum along (None for all axes)
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass summation matches PyTorch
+        - Backward gradients match PyTorch implementation
+        - Tests reduction along different axes including large dimensions
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device, dtype=dtype[0])
     TA = torch.Tensor(_A).to(dtype[1])
@@ -231,6 +340,19 @@ def test_summation(shape, axes, device, dtype):
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_max(shape, axes, device, dtype):
+    """Test tensor maximum reduction along specified axes.
+    
+    Args:
+        shape: Input tensor shape
+        axes: Axes to find max along (None for global max)
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass max reduction matches PyTorch
+        - Backward gradients match PyTorch implementation
+        - Tests keepdims parameter
+    """
     #TODO float16 need to be fix
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
@@ -256,6 +378,17 @@ def test_max(shape, axes, device, dtype):
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_log(shape, device, dtype):
+    """Test natural logarithm operation.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass log operation matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32) + 5.
     A = genesis.Tensor(_A, device=device, dtype=dtype[0])
     TA = torch.Tensor(_A).to(dtype[1])
@@ -272,6 +405,17 @@ def test_log(shape, device, dtype):
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_exp(shape, device, dtype):
+    """Test exponential operation.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass nested exp operations match PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32) + 5.
     A = genesis.Tensor(_A, device=device, dtype=dtype[0])
     TA = torch.Tensor(_A).to(dtype[1])
@@ -288,6 +432,17 @@ def test_exp(shape, device, dtype):
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_relu(shape, device, dtype):
+    """Test ReLU activation function.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass ReLU activation matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32) + 5.
     A = genesis.Tensor(_A, device=device, dtype=dtype[0])
     TA = torch.Tensor(_A).to(dtype[1])
@@ -303,6 +458,16 @@ def test_relu(shape, device, dtype):
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_sqrt(shape, device):
+    """Test square root operation.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass sqrt operation matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32) + 5.
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -322,6 +487,18 @@ STACK_PARAMETERS = [
 @pytest.mark.parametrize("shape, dim, l", STACK_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_stack(shape, dim, l, device):
+    """Test tensor stacking operation.
+    
+    Args:
+        shape: Shape of each tensor to stack
+        dim: Dimension along which to stack
+        l: Number of tensors to stack
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass stack operation matches PyTorch
+        - Backward gradients distributed correctly to input tensors
+    """
     _A = [np.random.randn(*shape).astype(np.float32) for i in range(l)]
     A = [genesis.Tensor(_A[i], device=device) for i in range(l)]
     TA = [torch.Tensor(_A[i]) for i in range(l)]
@@ -343,6 +520,18 @@ STACK_PARAMETERS = [
 @pytest.mark.parametrize("shape, dim, l", STACK_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_cat(shape, dim, l, device):
+    """Test tensor concatenation operation.
+    
+    Args:
+        shape: Shape of each tensor to concatenate
+        dim: Dimension along which to concatenate
+        l: Number of tensors to concatenate
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass concatenation matches PyTorch
+        - Backward gradients distributed correctly to input tensors
+    """
     _A = [np.random.randn(*shape).astype(np.float32) for i in range(l)]
     A = [genesis.Tensor(_A[i], device=device) for i in range(l)]
     TA = [torch.Tensor(_A[i]) for i in range(l)]
@@ -365,6 +554,19 @@ SPLIT_PARAMETERS = [
 @pytest.mark.parametrize("shape, dim, sections", SPLIT_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_split(shape, dim, sections, device):
+    """Test tensor split operation.
+    
+    Args:
+        shape: Input tensor shape
+        dim: Dimension along which to split
+        sections: Size of each split section
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass split operation matches PyTorch
+        - Backward gradients accumulated correctly
+        - Verifies split result count matches expected
+    """
     # Generate random input data
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
@@ -394,6 +596,17 @@ BROADCAST_SHAPES = [
 @pytest.mark.parametrize("shape,shape_to", BROADCAST_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_broadcast_to(shape, shape_to, device):
+    """Test tensor broadcasting operation.
+    
+    Args:
+        shape: Original tensor shape
+        shape_to: Target shape to broadcast to
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass broadcasting matches PyTorch
+        - Backward gradients correctly sum over broadcast dimensions
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -412,6 +625,17 @@ RESHAPE_SHAPES = [
 @pytest.mark.parametrize("shape,shape_to", RESHAPE_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_reshape(shape, shape_to, device):
+    """Test tensor reshape operation.
+    
+    Args:
+        shape: Original tensor shape
+        shape_to: Target shape to reshape to
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass reshape matches PyTorch
+        - Backward gradients preserved through reshape
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -427,6 +651,17 @@ def test_reshape(shape, shape_to, device):
 @pytest.mark.parametrize("shape,shape_to", RESHAPE_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_view(shape, shape_to, device):
+    """Test tensor view operation.
+    
+    Args:
+        shape: Original tensor shape
+        shape_to: Target shape for view
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass view operation matches PyTorch
+        - Backward gradients preserved through view
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -444,6 +679,17 @@ EXPAND_SHAPES = [
 @pytest.mark.parametrize("shape,shape_to", EXPAND_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_expand(shape, shape_to, device):
+    """Test tensor expand operation.
+    
+    Args:
+        shape: Original tensor shape with dimensions of size 1
+        shape_to: Target shape to expand to
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass expand operation matches PyTorch
+        - Backward gradients correctly sum over expanded dimensions
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -462,6 +708,17 @@ TRANSPOSE_AXES = [(0, 1), (0, 2), None]
 @pytest.mark.parametrize("axes", TRANSPOSE_AXES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_transpose(shape, axes, device):
+    """Test tensor transpose operation.
+    
+    Args:
+        shape: Input tensor shape
+        axes: Axes to transpose (None for last two dimensions)
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass transpose matches PyTorch
+        - Backward gradients correctly transposed back
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -479,6 +736,18 @@ def test_transpose(shape, axes, device):
 @pytest.mark.parametrize("shape, axes", SUMMATION_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_logsumexp(shape, axes, device):
+    """Test log-sum-exp operation (numerically stable).
+    
+    Args:
+        shape: Input tensor shape
+        axes: Axes to reduce along
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass logsumexp matches PyTorch
+        - Backward gradients match PyTorch implementation
+        - Numerical stability for large values
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -499,6 +768,16 @@ def test_logsumexp(shape, axes, device):
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_equal(shape, device):
+    """Test element-wise equality comparison.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Element-wise equality comparison matches PyTorch
+        - Tests both equal and non-equal tensors
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     _B = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
@@ -516,6 +795,16 @@ def test_equal(shape, device):
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_sin(shape, device):
+    """Test sine trigonometric function.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass sine operation matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -531,6 +820,16 @@ def test_sin(shape, device):
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_cos(shape, device):
+    """Test cosine trigonometric function.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass cosine operation matches PyTorch
+        - Backward gradients match PyTorch implementation
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -549,7 +848,19 @@ GETITEM_SHAPES = [(4, 5, 6), (2, 3), (10, 8), (3, 4, 5, 6)]
 @pytest.mark.parametrize("shape", GETITEM_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_getitem_basic(shape, device):
-    """Test basic indexing: int, slice, ellipsis, None."""
+    """Test basic indexing: int, slice, ellipsis, None.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Integer indexing
+        - Slice indexing with and without step
+        - Negative indexing
+        - Ellipsis and None (newaxis) indexing
+        - Backward gradients through indexing operations
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -594,7 +905,17 @@ def test_getitem_basic(shape, device):
 @pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])  # Use smaller shapes for advanced indexing
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_getitem_advanced(shape, device):
-    """Test advanced indexing: boolean mask, integer array, tensor indexing."""
+    """Test advanced indexing: boolean mask, integer array, tensor indexing.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Boolean mask indexing
+        - Integer list/array indexing
+        - Backward gradients through gather operations
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -619,10 +940,23 @@ def test_getitem_advanced(shape, device):
     TB1.sum().backward()
     np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
+
 @pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_getitem_mixed(shape, device):
-    """Test mixed indexing: combining basic and advanced indexing."""
+    """Test mixed indexing: combining basic and advanced indexing.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Mixed slice and integer indexing
+        - Integer array with slice indexing
+        - Backward gradients through mixed indexing
+    """
+    # TODO: implement
+    pytest.skip("Not implemented")
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -646,10 +980,21 @@ def test_getitem_mixed(shape, device):
         TB1.sum().backward()
         np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
+
 @pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_setitem_basic(shape, device):
-    """Test basic setitem: int, slice assignments."""
+    """Test basic setitem: int, slice assignments.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Integer assignment with scalar
+        - Slice assignment with scalar
+        - Slice assignment with tensor
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     
     # Integer assignment
@@ -683,7 +1028,19 @@ def test_setitem_basic(shape, device):
 @pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_setitem_advanced(shape, device):
-    """Test advanced setitem: boolean mask, integer array assignments."""
+    """Test advanced setitem: boolean mask, integer array assignments.
+    
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Boolean mask assignment with scalar
+        - Boolean mask assignment with array
+        - Integer list assignment
+    """
+    # TODO: implement
+    pytest.skip("Not implemented")
     _A = np.random.randn(*shape).astype(np.float32)
     
     # Boolean mask assignment with scalar
@@ -720,7 +1077,16 @@ def test_setitem_advanced(shape, device):
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_getitem_duplicate_indices_backward(device):
-    """Test backward with duplicate indices to verify scatter-add behavior."""
+    """Test backward with duplicate indices to verify scatter-add behavior.
+    
+    Args:
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Duplicate indices in gather operation
+        - Scatter-add gradient accumulation for duplicates
+        - Correct gradient values when indices repeat
+    """
     _A = np.random.randn(5, 3).astype(np.float32)
     
     # Test with duplicate indices - this should test scatter-add in backward
@@ -744,6 +1110,17 @@ UNSQUEEZE_SHAPES = [((4, 5, 6), 1)]
 @pytest.mark.parametrize("shape,dim", UNSQUEEZE_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_unsqueeze(shape, dim, device):
+    """Test unsqueeze operation (add dimension of size 1).
+    
+    Args:
+        shape: Input tensor shape
+        dim: Dimension where to insert new axis
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass unsqueeze matches PyTorch
+        - Backward gradients preserved through unsqueeze
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -760,6 +1137,17 @@ SQUEEZE_SHAPES = [((4, 1, 6), 1)]
 @pytest.mark.parametrize("shape,dim", SQUEEZE_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_squeeze(shape, dim, device):
+    """Test squeeze operation (remove dimension of size 1).
+    
+    Args:
+        shape: Input tensor shape with dimension of size 1
+        dim: Dimension to squeeze
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass squeeze matches PyTorch
+        - Backward gradients preserved through squeeze
+    """
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)

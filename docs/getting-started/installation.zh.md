@@ -174,8 +174,11 @@ def test_basic_import():
     """测试基础导入"""
     try:
         import genesis
+        import genesis.nn as nn
+        import genesis.optim as optim
         print("✅ Genesis导入成功")
-        print(f"   版本: {genesis.__version__}")
+        print(f"   核心模块: genesis, nn, optim")
+        print(f"   可用函数: {len([x for x in dir(genesis) if not x.startswith('_')])}")
     except ImportError as e:
         print(f"❌ Genesis导入失败: {e}")
         return False
@@ -192,8 +195,11 @@ def test_tensor_operations():
         
         # 基础运算
         z = x + y
+        w = genesis.matmul(x, y.T)  # 使用实际的Genesis API
+        
         print("✅ 张量运算正常")
-        print(f"   张量形状: {z.shape}")
+        print(f"   加法结果形状: {z.shape}")
+        print(f"   矩阵乘法形状: {w.shape}")
     except Exception as e:
         print(f"❌ 张量运算失败: {e}")
         return False
@@ -202,40 +208,54 @@ def test_tensor_operations():
 def test_neural_networks():
     """测试神经网络模块"""
     try:
+        import genesis
         import genesis.nn as nn
         
-        # 创建简单模型
-        model = nn.Sequential(
+        # 使用实际的Genesis模块创建简单模型
+        model = nn.Sequential([
             nn.Linear(10, 5),
             nn.ReLU(),
             nn.Linear(5, 1)
-        )
+        ])
         
         # 测试前向传播
         x = genesis.randn(2, 10)
         y = model(x)
         print("✅ 神经网络模块正常")
+        print(f"   模型层数: {len(list(model.parameters()))} 个参数张量")
         print(f"   输出形状: {y.shape}")
     except Exception as e:
         print(f"❌ 神经网络模块失败: {e}")
         return False
     return True
 
-def test_cuda_support():
-    """测试CUDA支持"""
+def test_backend_support():
+    """测试后端支持"""
     try:
         import genesis
+        from genesis.backend import default_device
         
-        if genesis.cuda.is_available():
-            device = genesis.device('cuda')
-            x = genesis.randn(10, 10, device=device)
-            print("✅ CUDA支持正常")
-            print(f"   GPU设备数量: {genesis.cuda.device_count()}")
-            print(f"   GPU名称: {genesis.cuda.get_device_name()}")
-        else:
-            print("⚠️  CUDA不可用 (将使用CPU)")
+        # 测试基础后端功能
+        device = default_device()
+        x = genesis.randn(5, 5)
+        
+        print("✅ 后端支持正常")
+        print(f"   默认设备: {device}")
+        print(f"   张量设备: {x.device}")
+        
+        # 尝试检测CUDA是否可用
+        try:
+            # 测试是否可以创建CUDA张量
+            import torch
+            if torch.cuda.is_available():
+                print("   检测到CUDA（通过PyTorch后端）")
+            else:
+                print("   CUDA不可用（仅CPU）")
+        except:
+            print("   后端: Genesis原生")
+            
     except Exception as e:
-        print(f"❌ CUDA测试失败: {e}")
+        print(f"❌ 后端测试失败: {e}")
         return False
     return True
 
@@ -244,14 +264,74 @@ def test_autograd():
     try:
         import genesis
         
+        # 测试基础自动微分
         x = genesis.randn(5, requires_grad=True)
-        y = (x ** 2).sum()
+        y = genesis.functional.sum(x * x)  # 使用实际的Genesis API
         y.backward()
         
         print("✅ 自动微分正常")
-        print(f"   梯度形状: {x.grad.shape}")
+        print(f"   输入形状: {x.shape}")
+        print(f"   梯度已计算: {x.grad is not None}")
+        print(f"   梯度形状: {x.grad.shape if x.grad is not None else 'None'}")
     except Exception as e:
         print(f"❌ 自动微分失败: {e}")
+        return False
+    return True
+
+def test_optimizers():
+    """测试优化器功能"""
+    try:
+        import genesis
+        import genesis.nn as nn
+        import genesis.optim as optim
+        
+        # 创建简单模型和优化器
+        model = nn.Linear(5, 1)
+        optimizer = optim.Adam(model.parameters(), lr=0.01)
+        
+        # 测试基础优化步骤
+        x = genesis.randn(3, 5)
+        y_pred = model(x)
+        loss = genesis.functional.sum(y_pred * y_pred)
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        print("✅ 优化器功能正常")
+        print(f"   优化器类型: {type(optimizer).__name__}")
+        print(f"   学习率: 0.01")
+        print(f"   参数已更新: {len(list(model.parameters()))}")
+    except Exception as e:
+        print(f"❌ 优化器测试失败: {e}")
+        return False
+    return True
+
+def test_serialization():
+    """测试模型保存/加载"""
+    try:
+        import genesis
+        import genesis.nn as nn
+        
+        # 创建并保存模型
+        model = nn.Linear(3, 2)
+        state_dict = model.state_dict()
+        
+        # 测试序列化功能
+        genesis.save(state_dict, 'test_model.pkl')
+        loaded_state = genesis.load('test_model.pkl')
+        
+        print("✅ 序列化功能正常")
+        print(f"   模型保存和加载成功")
+        print(f"   状态字典键数量: {len(state_dict)}")
+        
+        # 清理
+        import os
+        if os.path.exists('test_model.pkl'):
+            os.remove('test_model.pkl')
+            
+    except Exception as e:
+        print(f"❌ 序列化测试失败: {e}")
         return False
     return True
 
@@ -262,24 +342,35 @@ if __name__ == "__main__":
         test_basic_import,
         test_tensor_operations,
         test_neural_networks,
-        test_cuda_support,
-        test_autograd
+        test_backend_support,
+        test_autograd,
+        test_optimizers,
+        test_serialization
     ]
     
     passed = 0
     total = len(tests)
     
     for test in tests:
-        if test():
-            passed += 1
+        try:
+            if test():
+                passed += 1
+        except Exception as e:
+            print(f"❌ 测试异常失败: {e}")
         print()
     
     print(f"📊 测试结果: {passed}/{total} 通过")
     
     if passed == total:
         print("🎉 恭喜！Genesis安装成功，所有功能正常！")
+    elif passed >= total * 0.8:  # 80%通过率
+        print("✅ Genesis安装基本成功！检测到少量问题。")
+        print("   大部分功能正常运行。请检查上面的失败测试。")
     else:
-        print("⚠️  部分功能异常，请检查安装步骤")
+        print("⚠️  Genesis安装存在问题。请检查：")
+        print("   1. Genesis正确安装: pip install -e .")
+        print("   2. 依赖已安装: pip install torch triton")
+        print("   3. Python版本为3.8+")
 ```
 
 将上述代码保存为 `test_installation.py` 并运行：

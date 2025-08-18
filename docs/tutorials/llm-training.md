@@ -1,596 +1,509 @@
 # Large Language Model Training Guide
 
-This comprehensive guide covers training large language models (LLMs) using Genesis, from basic setup to advanced optimization techniques. We'll use the Qwen model as our primary example.
+This comprehensive guide covers training large language models (LLMs) using Genesis's Qwen implementation, from basic setup to advanced optimization techniques.
 
 ## Overview
 
-Genesis provides a complete framework for training transformer-based language models with features like:
-- Qwen model architecture implementation
-- Mixed precision training (FP16/BF16)  
-- Gradient clipping and learning rate scheduling
-- Distributed training support
-- Efficient checkpoint management
+Genesis provides LLM training capabilities through two approaches:
+1. **Pure Genesis Implementation**: Native Qwen model in `genesis.models.qwen`
+2. **Hybrid Approach**: Integration with PyTorch/Transformers for production training
+
+This guide covers both approaches, starting with the pure Genesis implementation and then showing the production-ready hybrid approach used in `apps/llm/`.
 
 ## Prerequisites
 
-- GPU with at least 16GB VRAM (A100/A800 recommended)
+- GPU with at least 16GB VRAM (A100/A800 recommended for large models)
 - CUDA 11.8+ and appropriate drivers
 - Python 3.8+ with Genesis installed
+- For hybrid approach: PyTorch and Transformers library
 
-## Quick Start
+```bash
+pip install torch transformers datasets accelerate
+```
 
-### 1. Basic Qwen Model Setup
+## Approach 1: Pure Genesis Implementation
+
+### 1. Model Configuration and Setup
 
 ```python
 import genesis
 import genesis.nn as nn
-from genesis.models.qwen import QwenConfig, QwenModel
+from genesis.models.qwen import ModelArgs, Transformer
+import numpy as np
 
-# Configure model
-config = QwenConfig(
-    vocab_size=32000,
-    hidden_size=2048,
-    num_attention_heads=16,
-    num_hidden_layers=24,
-    intermediate_size=5632,
-    max_position_embeddings=2048,
-    dtype=genesis.float16  # Use mixed precision
+# Configure Qwen model for educational purposes
+config = ModelArgs(
+    block_size=2048,          # Context length
+    vocab_size=32000,         # Vocabulary size
+    n_layer=12,               # Number of transformer layers
+    num_attention_heads=12,   # Number of attention heads
+    hidden_size=768,          # Hidden dimension
+    intermediate_size=3072,   # Feed-forward dimension
+    num_key_value_heads=12,   # Key-value heads (for GQA)
+    head_dim=64,              # Attention head dimension
+    rope_base=10000,          # RoPE base frequency
+    max_position_embeddings=2048
 )
 
-# Create model
-model = QwenModel(config)
-print(f"Model parameters: {model.num_parameters() / 1e6:.1f}M")
+print(f"Model configuration:")
+print(f"  Layers: {config.n_layer}")
+print(f"  Hidden size: {config.hidden_size}")
+print(f"  Attention heads: {config.num_attention_heads}")
+print(f"  Vocabulary size: {config.vocab_size}")
 ```
 
-### 2. Data Preparation
+### 2. Model Instantiation
 
 ```python
-import genesis
-from torch.utils.data import DataLoader
+# Create Qwen model using Genesis
+model = Transformer(config)
 
-class TextDataset:
-    def __init__(self, texts, tokenizer, max_length=512):
-        self.texts = texts
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-    
-    def __len__(self):
-        return len(self.texts)
-    
-    def __getitem__(self, idx):
-        text = self.texts[idx]
-        # Tokenize and pad/truncate
-        tokens = self.tokenizer.encode(text, max_length=self.max_length)
-        
-        # Convert to Genesis tensor
-        input_ids = genesis.tensor(tokens[:-1], dtype=genesis.int64)
-        labels = genesis.tensor(tokens[1:], dtype=genesis.int64)
-        
-        return {
-            'input_ids': input_ids,
-            'labels': labels
-        }
+# Calculate model parameters
+total_params = sum(p.data.size for p in model.parameters())
+print(f"Total parameters: {total_params / 1e6:.1f}M")
 
-# Load your dataset
-dataset = TextDataset(train_texts, tokenizer)
-dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+# Initialize weights
+def init_weights(module):
+    """Initialize model weights"""
+    if isinstance(module, nn.Linear):
+        # Initialize weights with small random values
+        module.weight.data = genesis.randn(*module.weight.shape) * 0.02
+        if module.bias is not None:
+            module.bias.data = genesis.zeros(*module.bias.shape)
+
+# Apply weight initialization
+model.apply(init_weights)
+print("Model weights initialized")
 ```
 
-### 3. Training Setup
+### 3. Simple Data Preparation
+
+```python
+# Simple synthetic data for demonstration
+class SimpleTextDataset:
+    """Simple dataset for language modeling"""
+    
+    def __init__(self, vocab_size=32000, seq_length=512, num_samples=1000):
+        self.vocab_size = vocab_size
+        self.seq_length = seq_length
+        self.num_samples = num_samples
+        
+        # Generate random token sequences
+        self.data = genesis.tensor(
+            np.random.randint(0, vocab_size, (num_samples, seq_length))
+        )
+        
+    def __len__(self):
+        return self.num_samples
+    
+    def get_batch(self, batch_size=4, start_idx=0):
+        """Get a batch of sequences"""
+        end_idx = min(start_idx + batch_size, self.num_samples)
+        batch_data = self.data[start_idx:end_idx]
+        
+        # For language modeling: input = tokens[:-1], target = tokens[1:]
+        input_ids = batch_data[:, :-1]
+        labels = batch_data[:, 1:]
+        
+        return input_ids, labels
+
+# Create dataset
+dataset = SimpleTextDataset(vocab_size=config.vocab_size, seq_length=512, num_samples=100)
+print(f"Dataset created with {len(dataset)} samples")
+```
+
+### 4. Training Setup
 
 ```python
 import genesis.optim as optim
-import genesis.nn as nn
 
-# Move model to GPU
-device = genesis.cuda()
-model = model.to(device)
+# Set up optimizer and loss
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
+criterion = nn.SoftmaxLoss()
 
-# Setup optimizer with weight decay
-optimizer = optim.AdamW(
-    model.parameters(),
-    lr=5e-4,
-    weight_decay=0.1,
-    beta1=0.9,
-    beta2=0.95,
-    eps=1e-8
-)
-
-# Learning rate scheduler with warmup
-total_steps = len(dataloader) * num_epochs
-warmup_steps = total_steps // 10
-
-scheduler = optim.get_cosine_schedule_with_warmup(
-    optimizer,
-    num_warmup_steps=warmup_steps,
-    num_training_steps=total_steps
-)
-
-# Loss function
-criterion = nn.CrossEntropyLoss()
+print(f"Optimizer: {type(optimizer).__name__}")
+print(f"Learning rate: 1e-4")
+print(f"Loss function: {type(criterion).__name__}")
 ```
 
-## Training Loop Implementation
-
-### Basic Training Loop
+### 5. Training Loop
 
 ```python
-def train_epoch(model, dataloader, optimizer, scheduler, criterion, device):
-    model.train()
-    total_loss = 0.0
-    num_batches = 0
-    
-    for batch_idx, batch in enumerate(dataloader):
-        # Move batch to device
-        input_ids = batch['input_ids'].to(device)
-        labels = batch['labels'].to(device)
-        
-        # Forward pass
-        outputs = model(input_ids)
-        logits = outputs.logits
-        
-        # Compute loss
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        loss = criterion(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1)
-        )
-        
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        
-        # Gradient clipping
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
-        # Optimizer step
-        optimizer.step()
-        scheduler.step()
-        
-        # Accumulate loss
-        total_loss += loss.item()
-        num_batches += 1
-        
-        # Logging
-        if batch_idx % 100 == 0:
-            current_lr = scheduler.get_last_lr()
-            print(f'Batch {batch_idx}: loss={loss.item():.4f}, lr={current_lr:.2e}')
-    
-    return total_loss / num_batches
-
-# Training loop
-for epoch in range(num_epochs):
-    avg_loss = train_epoch(model, dataloader, optimizer, scheduler, criterion, device)
-    print(f'Epoch {epoch}: average loss = {avg_loss:.4f}')
-    
-    # Save checkpoint
-    if epoch % 10 == 0:
-        genesis.save_checkpoint(
-            model.state_dict(),
-            optimizer.state_dict(),
-            f'qwen_checkpoint_epoch_{epoch}.pth'
-        )
-```
-
-### Advanced Training with Mixed Precision
-
-```python
-import genesis
-
-def train_epoch_mixed_precision(model, dataloader, optimizer, scheduler, criterion, device):
-    model.train()
-    total_loss = 0.0
-    
-    # Enable mixed precision
-    genesis.enable_autocast = True
-    
-    for batch_idx, batch in enumerate(dataloader):
-        input_ids = batch['input_ids'].to(device)
-        labels = batch['labels'].to(device)
-        
-        # Forward pass with autocast
-        with genesis.autocast():
-            outputs = model(input_ids)
-            logits = outputs.logits
-            
-            # Compute loss
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            loss = criterion(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_labels.view(-1)
-            )
-        
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        
-        # Gradient clipping
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
-        # Optimizer step
-        optimizer.step()
-        scheduler.step()
-        
-        total_loss += loss.item()
-        
-        if batch_idx % 100 == 0:
-            print(f'Batch {batch_idx}: loss={loss.item():.4f}')
-    
-    return total_loss / len(dataloader)
-```
-
-## Advanced Training Techniques
-
-### 1. Gradient Accumulation
-
-```python
-def train_with_gradient_accumulation(model, dataloader, optimizer, scheduler, 
-                                   criterion, device, accumulation_steps=4):
-    model.train()
-    total_loss = 0.0
-    optimizer.zero_grad()
-    
-    for batch_idx, batch in enumerate(dataloader):
-        input_ids = batch['input_ids'].to(device)
-        labels = batch['labels'].to(device)
-        
-        # Forward pass
-        outputs = model(input_ids)
-        logits = outputs.logits
-        
-        # Compute loss and scale by accumulation steps
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        loss = criterion(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1)
-        ) / accumulation_steps
-        
-        # Backward pass
-        loss.backward()
-        
-        # Update every accumulation_steps
-        if (batch_idx + 1) % accumulation_steps == 0:
-            # Gradient clipping
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
-            # Optimizer step
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
-        
-        total_loss += loss.item() * accumulation_steps
-        
-        if batch_idx % (100 * accumulation_steps) == 0:
-            print(f'Batch {batch_idx}: loss={loss.item() * accumulation_steps:.4f}')
-    
-    return total_loss / len(dataloader)
-```
-
-### 2. Dynamic Loss Scaling
-
-```python
-class DynamicLossScaler:
-    def __init__(self, init_scale=2**16, scale_factor=2.0, scale_window=1000):
-        self.scale = init_scale
-        self.scale_factor = scale_factor
-        self.scale_window = scale_window
-        self._growth_tracker = 0
-    
-    def scale_loss(self, loss):
-        return loss * self.scale
-    
-    def unscale_gradients(self, optimizer):
-        for param_group in optimizer.param_groups:
-            for param in param_group['params']:
-                if param.grad is not None:
-                    param.grad.data /= self.scale
-    
-    def step(self, optimizer, has_overflow=False):
-        if has_overflow:
-            self.scale = max(self.scale / self.scale_factor, 1.0)
-            self._growth_tracker = 0
-        else:
-            self._growth_tracker += 1
-            if self._growth_tracker >= self.scale_window:
-                self.scale *= self.scale_factor
-                self._growth_tracker = 0
-        
-        return not has_overflow
-
-# Usage in training loop
-scaler = DynamicLossScaler()
-
-for batch in dataloader:
+def train_step(model, input_ids, labels, criterion, optimizer):
+    """Single training step"""
     # Forward pass
-    loss = compute_loss(model, batch)
-    scaled_loss = scaler.scale_loss(loss)
+    logits = model(input_ids)
+    
+    # Reshape for loss calculation
+    # logits: [batch_size, seq_len, vocab_size]
+    # labels: [batch_size, seq_len]
+    batch_size, seq_len, vocab_size = logits.shape
+    logits_flat = logits.view(batch_size * seq_len, vocab_size)
+    labels_flat = labels.view(batch_size * seq_len)
+    
+    # Calculate loss
+    loss = criterion(logits_flat, labels_flat)
     
     # Backward pass
     optimizer.zero_grad()
-    scaled_loss.backward()
+    loss.backward()
     
-    # Check for overflow
-    has_overflow = check_gradient_overflow(model.parameters())
+    # Gradient clipping
+    total_norm = 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.data.norm(2)
+            total_norm += param_norm.data ** 2
+    total_norm = total_norm ** 0.5
     
-    # Unscale and step
-    scaler.unscale_gradients(optimizer)
-    should_step = scaler.step(optimizer, has_overflow)
+    # Clip gradients
+    clip_coef = min(1.0, 1.0 / max(total_norm, 1e-6))
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.data = p.grad.data * clip_coef
     
-    if should_step:
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-        scheduler.step()
-```
-
-### 3. Checkpointing and Resume Training
-
-```python
-class TrainingManager:
-    def __init__(self, model, optimizer, scheduler, save_dir='checkpoints'):
-        self.model = model
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        self.save_dir = save_dir
-        self.current_epoch = 0
-        self.best_loss = float('inf')
+    # Update weights
+    optimizer.step()
     
-    def save_checkpoint(self, epoch, loss, metrics=None):
-        checkpoint = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
-            'loss': loss,
-            'best_loss': self.best_loss,
-            'metrics': metrics or {}
-        }
-        
-        # Save regular checkpoint
-        checkpoint_path = f'{self.save_dir}/checkpoint_epoch_{epoch}.pth'
-        genesis.save(checkpoint, checkpoint_path)
-        
-        # Save best model
-        if loss < self.best_loss:
-            self.best_loss = loss
-            best_path = f'{self.save_dir}/best_model.pth'
-            genesis.save(checkpoint, best_path)
-            print(f"New best model saved with loss: {loss:.4f}")
-        
-        # Save latest
-        latest_path = f'{self.save_dir}/latest_checkpoint.pth'
-        genesis.save(checkpoint, latest_path)
-    
-    def load_checkpoint(self, checkpoint_path):
-        checkpoint = genesis.load(checkpoint_path)
-        
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        
-        self.current_epoch = checkpoint['epoch']
-        self.best_loss = checkpoint['best_loss']
-        
-        print(f"Resumed from epoch {self.current_epoch}, best loss: {self.best_loss:.4f}")
-        return checkpoint
+    return loss.data.item() if hasattr(loss.data, 'item') else float(loss.data)
 
-# Usage
-training_manager = TrainingManager(model, optimizer, scheduler)
+# Training configuration
+num_epochs = 5
+batch_size = 2  # Small batch size for demo
+log_interval = 10
 
-# Resume from checkpoint if exists
-try:
-    training_manager.load_checkpoint('checkpoints/latest_checkpoint.pth')
-except FileNotFoundError:
-    print("Starting training from scratch")
+print("Starting Genesis Qwen training...")
+print(f"Epochs: {num_epochs}, Batch size: {batch_size}")
+print("-" * 50)
 
-# Training loop with checkpointing
-for epoch in range(training_manager.current_epoch, num_epochs):
-    avg_loss = train_epoch(model, dataloader, optimizer, scheduler, criterion, device)
-    
-    # Save checkpoint
-    training_manager.save_checkpoint(epoch, avg_loss)
-    
-    print(f'Epoch {epoch}: average loss = {avg_loss:.4f}')
-```
-
-## Model Evaluation and Inference
-
-### 1. Model Evaluation
-
-```python
-def evaluate_model(model, eval_dataloader, criterion, device):
-    model.eval()
+# Training loop
+for epoch in range(num_epochs):
+    model.train()
     total_loss = 0.0
-    total_tokens = 0
+    num_batches = len(dataset) // batch_size
     
-    with genesis.no_grad():
-        for batch in eval_dataloader:
-            input_ids = batch['input_ids'].to(device)
-            labels = batch['labels'].to(device)
-            
-            # Forward pass
-            outputs = model(input_ids)
-            logits = outputs.logits
-            
-            # Compute loss
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            loss = criterion(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_labels.view(-1)
-            )
-            
-            total_loss += loss.item() * shift_labels.numel()
-            total_tokens += shift_labels.numel()
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        input_ids, labels = dataset.get_batch(batch_size, start_idx)
+        
+        # Training step
+        loss = train_step(model, input_ids, labels, criterion, optimizer)
+        total_loss += loss
+        
+        if batch_idx % log_interval == 0:
+            print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}/{num_batches}, Loss: {loss:.4f}")
     
-    avg_loss = total_loss / total_tokens
-    perplexity = genesis.exp(avg_loss)
-    
-    return {
-        'loss': avg_loss,
-        'perplexity': perplexity.item()
-    }
+    avg_loss = total_loss / num_batches
+    print(f"Epoch {epoch+1} completed. Average loss: {avg_loss:.4f}")
+    print("-" * 30)
 
-# Evaluate model
-eval_metrics = evaluate_model(model, eval_dataloader, criterion, device)
-print(f"Eval Loss: {eval_metrics['loss']:.4f}, Perplexity: {eval_metrics['perplexity']:.2f}")
+print("Pure Genesis training completed!")
 ```
 
-### 2. Text Generation
+## Approach 2: Production Hybrid Training
+
+For production use, Genesis integrates with PyTorch and Transformers library. This is the approach used in `apps/llm/train_sft_qwen.py`.
+
+### 1. Setup and Dependencies
 
 ```python
-def generate_text(model, tokenizer, prompt, max_length=100, temperature=0.8, top_p=0.9):
-    model.eval()
-    device = next(model.parameters()).device
-    
-    # Tokenize prompt
-    input_ids = tokenizer.encode(prompt)
-    input_tensor = genesis.tensor([input_ids], dtype=genesis.int64).to(device)
-    
-    generated_ids = input_ids.copy()
-    
-    with genesis.no_grad():
-        for _ in range(max_length):
-            # Forward pass
-            outputs = model(input_tensor)
-            logits = outputs.logits[0, -1, :]  # Last token logits
-            
-            # Apply temperature
-            logits = logits / temperature
-            
-            # Apply top-p filtering
-            sorted_logits, sorted_indices = genesis.sort(logits, descending=True)
-            cumulative_probs = genesis.cumsum(genesis.softmax(sorted_logits, dim=-1), dim=-1)
-            
-            # Remove tokens with cumulative probability above the threshold
-            sorted_indices_to_remove = cumulative_probs > top_p
-            sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
-            sorted_indices_to_remove[0] = False
-            
-            indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
-            logits[indices_to_remove] = float('-inf')
-            
-            # Sample from the filtered distribution
-            probs = genesis.softmax(logits, dim=-1)
-            next_token = genesis.multinomial(probs, 1).item()
-            
-            # Add to generated sequence
-            generated_ids.append(next_token)
-            
-            # Update input tensor
-            input_tensor = genesis.tensor([generated_ids], dtype=genesis.int64).to(device)
-            
-            # Check for end token
-            if next_token == tokenizer.eos_token_id:
-                break
-    
-    # Decode generated text
-    generated_text = tokenizer.decode(generated_ids)
-    return generated_text
+import torch
+import torch.nn as nn
+from transformers import (
+    AutoConfig, AutoModelForCausalLM, AutoTokenizer,
+    Trainer, TrainingArguments
+)
+from torch.utils.data import Dataset, DataLoader
+import json
+import pandas as pd
+import os
 
-# Generate text
-prompt = "The future of artificial intelligence is"
-generated = generate_text(model, tokenizer, prompt, max_length=50)
-print(f"Generated: {generated}")
+# Load tokenizer
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B")
+tokenizer.pad_token = tokenizer.eos_token
+
+print(f"Tokenizer loaded: {tokenizer.name_or_path}")
+print(f"Vocabulary size: {len(tokenizer)}")
 ```
 
-## Production Deployment
-
-### 1. Model Optimization for Inference
+### 2. Data Preparation for SFT
 
 ```python
-def optimize_for_inference(model, save_path):
-    """Optimize model for production inference."""
-    model.eval()
+class ConversationDataset(Dataset):
+    """Dataset for supervised fine-tuning with conversation format"""
     
-    # Create inference-optimized state
-    inference_state = {
-        'model_state_dict': model.state_dict(),
-        'model_config': model.config.__dict__,
-        'inference_optimized': True,
-        'genesis_version': genesis.__version__
-    }
-    
-    genesis.save(inference_state, save_path)
-    print(f"Inference-optimized model saved to {save_path}")
-
-def load_for_inference(model_path, device=None):
-    """Load model optimized for inference."""
-    checkpoint = genesis.load(model_path)
-    config = QwenConfig(**checkpoint['model_config'])
-    
-    # Create model
-    model = QwenModel(config)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-    
-    if device:
-        model = model.to(device)
-    
-    return model
-
-# Optimize and save
-optimize_for_inference(model, 'qwen_inference.pth')
-
-# Load for inference
-inference_model = load_for_inference('qwen_inference.pth', device=genesis.cuda())
-```
-
-### 2. Inference Server Setup
-
-```python
-class LLMInferenceServer:
-    def __init__(self, model_path, tokenizer, device=None):
+    def __init__(self, data_path, tokenizer, max_length=2048):
         self.tokenizer = tokenizer
-        self.device = device or genesis.cuda()
-        self.model = load_for_inference(model_path, self.device)
+        self.max_length = max_length
+        self.conversations = self.load_conversations(data_path)
+        
+    def load_conversations(self, data_path):
+        """Load conversation data from JSON lines"""
+        conversations = []
+        
+        # Example conversation format
+        sample_conversations = [
+            {
+                "messages": [
+                    {"role": "user", "content": "What is machine learning?"},
+                    {"role": "assistant", "content": "Machine learning is a subset of artificial intelligence..."}
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "Explain neural networks"},
+                    {"role": "assistant", "content": "Neural networks are computing systems inspired by biological neural networks..."}
+                ]
+            }
+        ]
+        
+        return sample_conversations
     
-    def generate(self, prompt, max_length=100, temperature=0.8, top_p=0.9):
-        """Generate text from prompt."""
-        return generate_text(
-            self.model, self.tokenizer, prompt,
-            max_length=max_length, temperature=temperature, top_p=top_p
+    def format_conversation(self, messages):
+        """Format conversation into training text"""
+        text = ""
+        for i, message in enumerate(messages):
+            role = message["role"]
+            content = message["content"].strip()
+            
+            if i != len(messages) - 1:
+                text += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+            else:
+                # Last message (assistant response)
+                text += f"<|im_start|>{role}\n{content}<|im_end|>"
+        
+        return text
+    
+    def __len__(self):
+        return len(self.conversations)
+    
+    def __getitem__(self, idx):
+        conversation = self.conversations[idx]
+        text = self.format_conversation(conversation["messages"])
+        
+        # Tokenize
+        encoding = self.tokenizer(
+            text,
+            truncation=True,
+            max_length=self.max_length,
+            padding="max_length",
+            return_tensors="pt"
         )
-    
-    def batch_generate(self, prompts, max_length=100, temperature=0.8, top_p=0.9):
-        """Generate text for multiple prompts."""
-        results = []
-        for prompt in prompts:
-            result = self.generate(prompt, max_length, temperature, top_p)
-            results.append(result)
-        return results
+        
+        input_ids = encoding["input_ids"].squeeze()
+        attention_mask = encoding["attention_mask"].squeeze()
+        
+        # For language modeling, labels are the same as input_ids
+        labels = input_ids.clone()
+        
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels
+        }
 
-# Create inference server
-server = LLMInferenceServer('qwen_inference.pth', tokenizer)
-
-# Generate responses
-responses = server.batch_generate([
-    "What is the meaning of life?",
-    "Explain quantum computing in simple terms.",
-    "Write a short story about AI."
-])
+# Create dataset
+dataset = ConversationDataset("./data", tokenizer)
+print(f"Dataset created with {len(dataset)} conversations")
 ```
 
-## Performance Optimization Tips
+### 3. Model Setup with Transformers
 
-### 1. Memory Optimization
-- Use gradient checkpointing for large models
-- Enable mixed precision training (FP16/BF16)
-- Use gradient accumulation for large effective batch sizes
-- Regularly clear GPU cache
+```python
+# Load pre-trained Qwen model
+model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-0.5B",
+    torch_dtype=torch.float16,
+    device_map="auto",
+    trust_remote_code=True
+)
 
-### 2. Training Speed
-- Use appropriate batch sizes for your GPU
-- Enable compiled mode if available
-- Use efficient data loading with multiple workers
-- Profile training to identify bottlenecks
+print(f"Model loaded: {model.config.model_type}")
+print(f"Parameters: {model.num_parameters() / 1e6:.1f}M")
+```
 
-### 3. Model Quality
-- Use proper learning rate scheduling
-- Apply gradient clipping to stabilize training
-- Monitor training metrics closely
-- Use validation sets to prevent overfitting
+### 4. Training Configuration
 
-This guide provides a comprehensive foundation for training LLMs with Genesis. Adapt the techniques based on your specific model size, dataset, and computational resources.
+```python
+# Training arguments
+training_args = TrainingArguments(
+    output_dir="./qwen_sft_output",
+    num_train_epochs=3,
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=4,
+    gradient_accumulation_steps=4,
+    warmup_steps=100,
+    max_steps=1000,
+    learning_rate=5e-5,
+    fp16=True,  # Mixed precision training
+    logging_steps=10,
+    save_steps=100,
+    eval_steps=100,
+    evaluation_strategy="steps",
+    save_total_limit=3,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    greater_is_better=False,
+    report_to=None,  # Disable wandb logging
+    gradient_checkpointing=True,
+    dataloader_drop_last=True,
+    remove_unused_columns=False,
+)
+
+print("Training configuration:")
+print(f"  Epochs: {training_args.num_train_epochs}")
+print(f"  Batch size: {training_args.per_device_train_batch_size}")
+print(f"  Learning rate: {training_args.learning_rate}")
+print(f"  Mixed precision: {training_args.fp16}")
+```
+
+### 5. Trainer Setup and Training
+
+```python
+# Create trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    eval_dataset=dataset,  # Using same dataset for demo
+    tokenizer=tokenizer,
+)
+
+print("Trainer created successfully")
+
+# Start training
+print("Starting supervised fine-tuning...")
+trainer.train()
+
+# Save the final model
+trainer.save_model("./qwen_sft_final")
+tokenizer.save_pretrained("./qwen_sft_final")
+
+print("Training completed and model saved!")
+```
+
+### 6. Inference with Trained Model
+
+```python
+# Load trained model for inference
+from transformers import pipeline
+
+# Create text generation pipeline
+generator = pipeline(
+    "text-generation",
+    model="./qwen_sft_final",
+    tokenizer=tokenizer,
+    torch_dtype=torch.float16,
+    device_map="auto"
+)
+
+# Test the model
+test_prompt = "<|im_start|>user\nWhat is artificial intelligence?<|im_end|>\n<|im_start|>assistant\n"
+
+response = generator(
+    test_prompt,
+    max_new_tokens=100,
+    do_sample=True,
+    temperature=0.7,
+    top_p=0.9,
+    pad_token_id=tokenizer.eos_token_id
+)
+
+print("Generated response:")
+print(response[0]["generated_text"])
+```
+
+## Advanced Features
+
+### Mixed Precision Training
+
+Genesis supports mixed precision training for both approaches:
+
+```python
+# For pure Genesis (in development)
+genesis.enable_autocast = True
+
+# For hybrid approach (using PyTorch)
+from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()
+
+with autocast():
+    outputs = model(inputs)
+    loss = criterion(outputs, targets)
+
+scaler.scale(loss).backward()
+scaler.step(optimizer)
+scaler.update()
+```
+
+### Learning Rate Scheduling
+
+```python
+# Genesis optimizer with learning rate scheduling
+from genesis.optim.lr_scheduler import get_cosine_schedule_with_warmup
+
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=100,
+    num_training_steps=1000
+)
+
+# Update learning rate after each step
+scheduler.step()
+```
+
+### Model Checkpointing
+
+```python
+# Save Genesis model
+genesis.save_checkpoint({
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': optimizer.state_dict(),
+    'epoch': epoch,
+    'loss': loss,
+}, 'checkpoint.pkl')
+
+# Load Genesis model
+checkpoint = genesis.load_checkpoint('checkpoint.pkl')
+model.load_state_dict(checkpoint['model_state_dict'])
+optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+```
+
+## Performance Tips
+
+1. **Batch Size**: Start with smaller batch sizes (2-4) for Genesis implementation
+2. **Gradient Accumulation**: Use gradient accumulation for effective larger batch sizes
+3. **Mixed Precision**: Enable FP16 to reduce memory usage and increase speed
+4. **Gradient Clipping**: Prevent gradient explosion in transformer training
+5. **Learning Rate**: Use warmup and cosine decay scheduling
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Out of Memory**: Reduce batch size or sequence length
+2. **Gradient Explosion**: Enable gradient clipping
+3. **Slow Convergence**: Check learning rate and warmup schedule
+4. **NaN Loss**: Reduce learning rate or check data quality
+
+### Memory Optimization
+
+```python
+# Reduce memory usage
+- Use smaller batch sizes
+- Enable gradient checkpointing
+- Use mixed precision (FP16)
+- Reduce sequence length
+- Use gradient accumulation instead of large batches
+```
+
+## Next Steps
+
+1. **Scale up**: Try larger models and datasets
+2. **Fine-tuning**: Experiment with different fine-tuning strategies
+3. **Evaluation**: Implement proper evaluation metrics
+4. **Deployment**: Set up inference pipelines
+5. **Optimization**: Profile and optimize training performance
+
+This guide demonstrates both the educational pure Genesis approach and the production-ready hybrid approach used in real applications.

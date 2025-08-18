@@ -317,14 +317,22 @@ class CUDAMemoryManager:
         # Warmup configuration - preallocation for common sizes
         self.warmup_enabled = True
         self.warmup_sizes = [
-            # Common tensor sizes in Qwen model (based on profiling)
-            64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
+            # Phase 2 Optimization: Enhanced small tensor sizes based on deep learning patterns
+            # Very small tensors (scalars, small vectors)
+            64, 128, 192, 256, 320, 384, 448, 512,
+            # Medium tensors (embeddings, attention weights)
+            768, 1024, 1536, 2048, 3072, 4096,
+            # Large tensors (model-specific sizes)
             896 * 4,      # hidden_size * sizeof(float32)
+            896 * 32 * 4, # (batch, seq_len, hidden_size) for small batches
             896 * 128 * 4, # (batch, seq_len, hidden_size) * sizeof(float32)
             4864 * 4,     # intermediate_size * sizeof(float32)
             14 * 64 * 4,  # num_heads * head_dim * sizeof(float32)
+            # Additional common sizes found in deep learning
+            7168,  # 896 * 8 (common intermediate calculations)
+            14336, # 896 * 16
         ]
-        self.warmup_count_per_size = 8  # Pre-allocate 8 blocks per size
+        self.warmup_count_per_size = 12  # Phase 2: Increased to 12 blocks per size for better cache hit rate
         
         # Statistics  
         self.alloc_count = 0
@@ -471,14 +479,18 @@ class CUDAMemoryManager:
         return ptr
     
     def _get_batch_allocation_size(self, bucket_size: int) -> int:
-        """Determine batch allocation size based on bucket size and usage patterns"""
-        # For very small sizes (common in deep learning), allocate more
-        if bucket_size <= 1024:
-            return 4  # Allocate 4 blocks at once
+        """Phase 2 Optimization: Adaptive batch allocation based on bucket size and memory pressure"""
+        # Dynamic batch sizes based on available memory and usage patterns
+        if bucket_size <= 512:
+            return 8  # Very small tensors: batch allocate 8 at once
+        elif bucket_size <= 2048:
+            return 6  # Small tensors: batch allocate 6 at once
         elif bucket_size <= 8192:
-            return 2  # Allocate 2 blocks at once
+            return 3  # Medium tensors: batch allocate 3 at once
+        elif bucket_size <= 32768:
+            return 2  # Large tensors: batch allocate 2 at once
         else:
-            return 1  # Single allocation for large blocks
+            return 1  # Very large tensors: single allocation
     
     def _allocate_large(self, nbytes: int) -> int:
         """Allocate large memory using block allocator"""

@@ -1,3 +1,9 @@
+"""Automatic differentiation system for Genesis.
+
+Implements forward-mode and reverse-mode automatic differentiation with support
+for CUDA acceleration and mixed precision training.
+"""
+
 import genesis
 from typing import List, Optional, NamedTuple, Tuple, Union
 import numpy
@@ -7,13 +13,16 @@ from .dtypes import get_dtype, DType
 import operator
 from functools import reduce
 
-TENSOR_COUNTER = 0
+TENSOR_COUNTER = 0  # Global counter for memory management
 
 class Context:
+    """Stores intermediate values during forward pass for backward computation."""
+    
     def __init__(self):
         self.saved_tensors = []
 
     def save_for_backward(self, *tensors):
+        """Save tensors needed for backward pass."""
         self.saved_tensors.extend(tensors)
 
     @property
@@ -25,6 +34,7 @@ class Context:
         self._saved_tensors = tensors
 
 def _cast(value, dtype):
+    """Cast tensors to target dtype for mixed precision training."""
     if isinstance(value, Tensor):
         if value.is_floating_point():
             if dtype == genesis.float16:
@@ -41,6 +51,7 @@ def _cast(value, dtype):
         return value
 
 def check_dtype(value, dtype): 
+    """Check if value contains tensors of specified dtype."""
     if isinstance(value, Tensor):
         return value.dtype == dtype
     elif isinstance(value, dict):
@@ -51,21 +62,24 @@ def check_dtype(value, dtype):
         return False
 
 class Function:
+    """Base class for differentiable operations.
+    
+    Implements the dual-number automatic differentiation paradigm where
+    operations define both forward computation and backward gradient propagation.
     """
-    operator definitions
-    """
+    
     def __init__(self):
         self.inputs = []
         self.ctx = Context()
 
     @staticmethod
     def forward(ctx, *args, **kwargs):
-
-        """
-        Calculate forward pass of operator.
+        """Calculate forward pass of operator.
 
         Args:
-            input (NDArray): A list of input arrays to the function
+            ctx: Context object to save values for backward pass
+            *args: Input arrays to the function
+            **kwargs: Additional keyword arguments
 
         Returns:
             Array: Array output of the operation
@@ -74,22 +88,23 @@ class Function:
 
     @staticmethod
     def backward(ctx, *args) -> Union["Tensor", Tuple["Tensor"]]:
-        """
-        Compute partial adjoint for each input value for a given output adjoint.
+        """Compute partial adjoint for each input value for a given output adjoint.
 
         Args:
-            out_grad (Tensor): The adjoint with respect to the output value. 
-            node (Tensor): The value node of forward evaluation.
+            ctx: Context object containing saved values from forward pass
+            *args: The adjoint with respect to the output value
 
         Returns:
-            Tensor or Tuple[Tensor]: A list containing partial gradient adjoints to be propagated to each of the input node.
+            Tensor or Tuple[Tensor]: Partial gradient adjoints to be propagated to each input node
         """
         raise NotImplementedError()
 
     @classmethod
     def apply(cls, *args, **kwargs):
-        instance = cls()  # Create a new instance for each call
+        """Apply operation with automatic mixed precision and gradient tracking."""
+        instance = cls()
 
+        # Handle mixed precision casting
         if genesis.enable_autocast and genesis.upgrade is False:
             result = cls.forward(
                     instance.ctx, *_cast(args, genesis.float16), **_cast(kwargs, genesis.float16))
@@ -100,8 +115,10 @@ class Function:
                 result = cls.forward(instance.ctx, *_cast(args, genesis.float32), **_cast(kwargs, genesis.float32))
             else:
                 result = cls.forward(instance.ctx, *args, **kwargs)
+        
         instance.is_tuple_result = isinstance(result, tuple)
 
+        # Set creator for gradient tracking
         if instance.is_tuple_result:
             for idx, res in enumerate(result):
                 if isinstance(res, Tensor) and res.requires_grad:
@@ -109,6 +126,7 @@ class Function:
         elif isinstance(result, Tensor) and result.requires_grad:
             result.set_creator(instance)
 
+        # Store input tensors for backward pass
         instance.inputs = []
         for t in args:
             if isinstance(t, Tensor):
@@ -120,9 +138,12 @@ class Function:
 
 
 class Tensor:
+    """N-dimensional array with automatic differentiation support.
+    
+    Core tensor class that supports CUDA acceleration, automatic differentiation,
+    and PyTorch-compatible operations for deep learning workflows.
     """
-    basic type
-    """
+    
     grad: "Tensor"
     op: Optional[Function]
     inputs: List["Tensor"]
@@ -130,6 +151,14 @@ class Tensor:
     requires_grad: bool
 
     def __init__(self, array, *, device: Optional[Device] = None, dtype=None, requires_grad=True, **kwargs):
+        """Initialize tensor from array-like data.
+        
+        Args:
+            array: Input data (numpy array, list, scalar, or existing Tensor)
+            device: Target device for tensor (CPU or CUDA)
+            dtype: Data type for tensor elements
+            requires_grad: Whether to track gradients for this tensor
+        """
         # Convert dtype to DType object for consistency
         if dtype is not None:
             dtype = get_dtype(dtype)
@@ -149,7 +178,6 @@ class Tensor:
             if device is None:
                 device = array.device
             if dtype is None or dtype == array.dtype:
-                # Perfect match, directly reuse
                 data = array
             else:
                 # Need type conversion, reallocate
@@ -196,9 +224,12 @@ class Tensor:
 
     def detach(self):
         """
-        generate a const Tensor
+        Returns a new Tensor, detached from the current graph.
+        The result will never require gradient.
         """
-        return Tensor.make_const(self.data)
+        # Create a new tensor with the same data but no gradients
+        detached = Tensor(self.data, device=self.device, dtype=self.dtype, requires_grad=False)
+        return detached
     
     def cpu(self):
         return Tensor(self.data.cpu(), device=genesis.cpu())
@@ -255,18 +286,16 @@ class Tensor:
             import numpy as np
             return np.array(self.data).item()
 
-    def detach(self):
-        """
-        Returns a new Tensor, detached from the current graph.
-        The result will never require gradient.
-        """
-        # Create a new tensor with the same data but no gradients
-        detached = Tensor(self.data, device=self.device, dtype=self.dtype, requires_grad=False)
-        return detached
-
     def backward(self, out_grad=None):
+        """Compute gradients using reverse-mode automatic differentiation.
+        
+        Args:
+            out_grad: Optional output gradient tensor. Defaults to ones tensor.
+            
+        This method implements topological sorting and backward pass computation
+        for the computational graph rooted at this tensor.
+        """
         import time
-        # print(f"\n🔍 Starting backward for tensor shape {self.shape}")
         start_total = time.time()
         
         out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)
@@ -274,13 +303,12 @@ class Tensor:
         node_to_output_grads_list: Dict[Tensor, List[Tensor]] = {}
         node_to_output_grads_list[self] = [out_grad]
 
-        # Topo sort timing
+        # Topological sort to determine computation order
         topo_start = time.time()
         topo_order = topo_sort(self)
         topo_time = time.time() - topo_start
-        # print(f"📊 Topo sort: {topo_time*1000:.3f}ms, found {len(topo_order)} nodes")
         
-        # Process each node
+        # Reverse pass through computation graph
         node_count = 0
         total_backward_call_time = 0
         
@@ -291,9 +319,10 @@ class Tensor:
             node_count += 1
             node_start = time.time()
             
+            # Accumulate gradients for current node
             if node.grad is None:
                 node.grad = reduce(operator.add, node_to_output_grads_list[node])
-                # Ensure gradient is contiguous like PyTorch (fix for broadcasted tensors)
+                # Ensure gradient is contiguous for efficient computation
                 if hasattr(node.grad, 'data') and hasattr(node.grad.data, 'data'):
                     cuda_tensor = node.grad.data.data
                     if hasattr(cuda_tensor, 'is_contiguous') and not cuda_tensor.is_contiguous():
@@ -302,18 +331,21 @@ class Tensor:
                 node.grad += reduce(operator.add, node_to_output_grads_list[node])
             node.apply_hooks(node.grad)
             
+            # Propagate gradients to input nodes
             if node.creator is not None:
                 creator_name = type(node.creator).__name__
                 
                 for nd in node.creator.inputs:
                     if nd not in node_to_output_grads_list:
                         node_to_output_grads_list[nd] = []
+                        
+                # Handle mixed precision gradients
                 if check_dtype(node.creator.ctx.saved_tensors, genesis.float16):
                     grad = node.grad.half()
                 else:
                     grad = node.grad
                 
-                # Time the actual backward call
+                # Compute backward gradients
                 backward_start = time.time()
                 if node.creator.is_tuple_result is False:
                     backward_grad = node.creator.backward(node.creator.ctx, grad)
@@ -322,29 +354,15 @@ class Tensor:
                 backward_time = time.time() - backward_start
                 total_backward_call_time += backward_time
                 
-                # Log slow operations - DISABLED FOR PYTEST
-                # if backward_time > 0.1:  # More than 100ms
-                #     print(f"⚠️  SLOW: {creator_name} backward took {backward_time*1000:.1f}ms")
-                # elif backward_time > 0.01:  # More than 10ms
-                #     print(f"🔸 {creator_name}: {backward_time*1000:.1f}ms")
-                
+                # Distribute gradients to input tensors
                 for i, nd in enumerate(node.creator.inputs):
                     if nd.requires_grad is False:
                         continue
                     node_to_output_grads_list[nd].append(backward_grad[i].float())
             
             node_time = time.time() - node_start
-            # if node_time > 0.1:  # More than 100ms per node
-            #     creator_name = type(node.creator).__name__ if node.creator else "Input"
-            #     print(f"⚠️  SLOW NODE: {creator_name} total processing took {node_time*1000:.1f}ms")
         
         total_time = time.time() - start_total
-        # print(f"\n📈 Backward summary:")
-        # print(f"  Total: {total_time*1000:.1f}ms")
-        # print(f"  Topo: {topo_time*1000:.1f}ms")
-        # print(f"  Backward calls: {total_backward_call_time*1000:.1f}ms")
-        # print(f"  Other: {(total_time - topo_time - total_backward_call_time)*1000:.1f}ms")
-        # print(f"  Nodes: {node_count}")
 
     @property
     def shape(self):
@@ -354,13 +372,17 @@ class Tensor:
     def ndim(self):
         return len(self.shape)
 
-    @property
-    def size(self):
-        return self.data.size
-
     def size(self, dim=None):
+        """Return size of tensor.
+        
+        Args:
+            dim: Optional dimension to get size for. If None, returns shape.
+            
+        Returns:
+            int or tuple: Size of specified dimension or full shape
+        """
         if dim is not None:
-            return self.data.size(dim)
+            return self.data.shape[dim]
         return self.data.shape
 
     @property
@@ -603,8 +625,6 @@ class Tensor:
     __rmul__ = __mul__
     __rmatmul__ = __matmul__
 
-    def is_floating_point(self):
-        return self.data.is_floating_point()
 
     def data_ptr(self):
         """Return underlying data pointer, compatible with Triton
@@ -652,6 +672,17 @@ class Tensor:
         return int(np.prod(self.shape))
 
 def topo_sort(node):
+    """Perform topological sort on computation graph.
+    
+    Args:
+        node: Root tensor node to start sorting from
+        
+    Returns:
+        List[Tensor]: Topologically sorted list of tensors in computation graph
+        
+    This ensures gradients are computed in the correct dependency order
+    during backpropagation.
+    """
     visited = set()
     topo_order = []
 

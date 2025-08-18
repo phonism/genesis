@@ -512,6 +512,90 @@ class CUDAStorageBenchmarkSuite:
         self.results.extend(results)
         return results
     
+    def benchmark_strided_copy_operations(self, shapes: List[Tuple[int, ...]]) -> List[BenchResult]:
+        """Benchmark strided copy operations - our Phase 1 optimization target"""
+        print(f"\n{'='*80}")
+        print("STRIDED COPY OPERATIONS BENCHMARK (Phase 1 Optimization)")
+        print(f"{'='*80}")
+        
+        results = []
+        
+        for shape in shapes:
+            if len(shape) < 2:
+                continue  # Skip 1D tensors for strided copy tests
+                
+            print(f"\nShape: {shape} ({self._format_size(np.prod(shape))} elements)")
+            
+            # Create test data
+            cpu_data = np.random.randn(*shape).astype(np.float32)
+            
+            # Test 1: Copy to non-contiguous tensor (transpose)
+            def pytorch_strided_copy():
+                # Create contiguous tensor and transpose it
+                torch_tensor = torch.from_numpy(cpu_data.copy()).cuda()
+                if len(shape) == 2:
+                    torch_strided = torch_tensor.T  # Non-contiguous
+                else:
+                    # For higher dims, permute first two dimensions
+                    dims = list(range(len(shape)))
+                    dims[0], dims[1] = dims[1], dims[0]
+                    torch_strided = torch_tensor.permute(dims)
+                
+                # Copy new data to non-contiguous tensor
+                new_data = np.random.randn(*torch_strided.shape).astype(np.float32)
+                torch_strided.copy_(torch.from_numpy(new_data).cuda())
+                return torch_strided
+            
+            def genesis_strided_copy():
+                # Create contiguous tensor and transpose it  
+                genesis_tensor = CUDAStorage(shape, dtype="float32")
+                genesis_tensor.from_numpy(cpu_data.copy())
+                
+                if len(shape) == 2:
+                    genesis_strided = genesis_tensor.T  # Non-contiguous
+                else:
+                    # For higher dims, permute first two dimensions
+                    dims = list(range(len(shape)))
+                    dims[0], dims[1] = dims[1], dims[0]
+                    genesis_strided = genesis_tensor.permute(dims)
+                
+                # Copy new data to non-contiguous tensor - this uses our optimized kernel!
+                new_data = np.random.randn(*genesis_strided.shape).astype(np.float32)
+                genesis_strided.from_numpy(new_data)
+                return genesis_strided
+            
+            result = self._benchmark_operation(
+                "strided_copy", BenchCategory.ADVANCED, shape,
+                pytorch_strided_copy, genesis_strided_copy
+            )
+            results.append(result)
+            
+            shape_str = "×".join(map(str, shape))
+            size_str = self._format_size(np.prod(shape))
+            
+            if result.error:
+                print(f"  Strided Copy  {shape_str:<20} {size_str:<8} ERROR: {result.error[:50]}")
+            else:
+                print(f"  Strided Copy  {shape_str:<20} {size_str:<8} "
+                      f"PyTorch: {result.pytorch_time_ms:.3f}ms | "
+                      f"Genesis: {result.genesis_time_ms:.3f}ms | "
+                      f"Speedup: {result.speedup:.2f}x | {result.status}")
+                
+                # Calculate throughput
+                elements = np.prod(shape)
+                torch_throughput = elements / result.pytorch_time_ms if result.pytorch_time_ms > 0 else 0
+                genesis_throughput = elements / result.genesis_time_ms if result.genesis_time_ms > 0 else 0
+                
+                print(f"               Throughput: PyTorch {torch_throughput:.0f} elem/ms | "
+                      f"Genesis {genesis_throughput:.0f} elem/ms")
+            
+            # Clean up
+            gc.collect()
+            torch.cuda.empty_cache()
+        
+        self.results.extend(results)
+        return results
+    
     def benchmark_category(self, category: BenchCategory, max_shapes: Optional[int] = None) -> List[BenchResult]:
         """Benchmark a specific category"""
         shapes = self._get_test_shapes(category)
@@ -528,6 +612,8 @@ class CUDAStorageBenchmarkSuite:
             return self.benchmark_shape_operations(shapes)
         elif category == BenchCategory.INDEXING:
             return self.benchmark_indexing_operations(shapes)
+        elif category == BenchCategory.ADVANCED:
+            return self.benchmark_strided_copy_operations(shapes)
         else:
             print(f"Category {category.value} not implemented yet")
             return []

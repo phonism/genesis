@@ -17,13 +17,10 @@ Through this tutorial, you will learn:
 
 ```bash
 # Ensure Genesis is installed
-pip install torch triton
+pip install torch triton numpy matplotlib tqdm
 git clone https://github.com/phonism/genesis.git
 cd genesis
 pip install -e .
-
-# Install additional dependencies
-pip install matplotlib torchvision tqdm
 ```
 
 ### Verify Installation
@@ -33,428 +30,321 @@ import genesis
 import genesis.nn as nn
 import genesis.optim as optim
 
-print(f"Genesis version: {genesis.__version__}")
-print(f"CUDA available: {genesis.cuda.is_available()}")
+# Test basic functionality
+x = genesis.randn(2, 3)
+print(f"Genesis tensor created: {x.shape}")
+print(f"Genesis modules available: {dir(nn)}")
 ```
 
 ## 📊 Project: Handwritten Digit Recognition
 
-We will build a handwritten digit recognition system using the classic MNIST dataset.
+We will build a handwritten digit recognition system using a simple fully connected neural network on synthetic data to demonstrate Genesis capabilities.
 
 ### 1. Data Preparation
+
+Since Genesis doesn't have built-in data loading utilities yet, we'll create synthetic data that mimics the MNIST structure:
 
 ```python
 import genesis
 import genesis.nn as nn
 import genesis.optim as optim
-from torchvision import datasets, transforms
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 
-# Data preprocessing
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,))
-])
+class SimpleDataset:
+    """Simple dataset class for demonstration"""
+    
+    def __init__(self, num_samples=1000, input_dim=784, num_classes=10):
+        # Generate synthetic data similar to flattened MNIST
+        self.data = genesis.randn(num_samples, input_dim)
+        
+        # Create labels based on data patterns (synthetic)
+        labels = genesis.randn(num_samples, num_classes)
+        self.labels = genesis.functional.max(labels, axis=1, keepdims=False)
+        
+        self.num_samples = num_samples
+        
+    def __len__(self):
+        return self.num_samples
+    
+    def get_batch(self, batch_size=32, start_idx=0):
+        """Get a batch of data"""
+        end_idx = min(start_idx + batch_size, self.num_samples)
+        return (self.data[start_idx:end_idx], 
+                self.labels[start_idx:end_idx])
 
-# Load MNIST dataset
-train_dataset = datasets.MNIST('data', train=True, download=True, transform=transform)
-test_dataset = datasets.MNIST('data', train=False, transform=transform)
-
-# Create data loaders
-batch_size = 64
-train_loader = genesis.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-test_loader = genesis.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+# Create datasets
+train_dataset = SimpleDataset(num_samples=800, input_dim=784, num_classes=10)
+test_dataset = SimpleDataset(num_samples=200, input_dim=784, num_classes=10)
 
 print(f"Training set size: {len(train_dataset)}")
 print(f"Test set size: {len(test_dataset)}")
+print(f"Input dimension: 784 (28x28 flattened)")
+print(f"Number of classes: 10")
 ```
 
-### 2. 模型定义
+### 2. Model Definition
 
-我们将构建一个简单但有效的卷积神经网络：
+We'll build a simple but effective fully connected neural network using Genesis modules:
 
 ```python
 class MNISTNet(nn.Module):
-    """MNIST手写数字识别网络"""
+    """Simple fully connected network for digit recognition"""
     
-    def __init__(self, num_classes=10):
+    def __init__(self, input_dim=784, hidden_dim=128, num_classes=10):
         super(MNISTNet, self).__init__()
         
-        # 卷积层
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
+        # Define layers using actual Genesis modules
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, num_classes)
         
-        # 全连接层
-        self.fc1 = nn.Linear(64 * 7 * 7, 128)
-        self.fc2 = nn.Linear(128, num_classes)
-        
-        # 激活函数和Dropout
+        # Activation and regularization
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.2)
         
     def forward(self, x):
-        # 卷积块1
-        x = self.pool(self.relu(self.conv1(x)))  # 28x28 -> 14x14
+        # Flatten input if needed
+        if len(x.shape) > 2:
+            x = x.view(x.shape[0], -1)
         
-        # 卷积块2  
-        x = self.pool(self.relu(self.conv2(x)))  # 14x14 -> 7x7
-        
-        # 展平
-        x = x.view(x.size(0), -1)  # [batch_size, 64*7*7]
-        
-        # 全连接层
-        x = self.relu(self.fc1(x))
+        # First hidden layer
+        x = self.fc1(x)
+        x = self.relu(x)
         x = self.dropout(x)
+        
+        # Second hidden layer
         x = self.fc2(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+        
+        # Output layer
+        x = self.fc3(x)
         
         return x
 
-# 创建模型实例
-device = genesis.device('cuda' if genesis.cuda.is_available() else 'cpu')
-model = MNISTNet().to(device)
+# Create model instance
+model = MNISTNet(input_dim=784, hidden_dim=128, num_classes=10)
 
-print("模型结构:")
-print(model)
-print(f"\\n参数总数: {sum(p.numel() for p in model.parameters()):,}")
+print("Model structure:")
+print(f"Layer 1: {model.fc1}")
+print(f"Layer 2: {model.fc2}")
+print(f"Layer 3: {model.fc3}")
+print(f"Total parameters: {sum(p.data.size for p in model.parameters())}")
 ```
 
-### 3. 训练配置
+### 3. Loss Function and Optimizer
 
 ```python
-# 损失函数和优化器
-criterion = nn.CrossEntropyLoss()
+# Define loss function and optimizer using Genesis
+criterion = nn.SoftmaxLoss()  # Use Genesis SoftmaxLoss
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# 学习率调度器
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.8)
-
-# 训练参数
-num_epochs = 10
-print_every = 100  # 每100个batch打印一次
-
-print(f"设备: {device}")
-print(f"批量大小: {batch_size}")
-print(f"训练轮数: {num_epochs}")
-print(f"学习率: {optimizer.param_groups[0]['lr']}")
+print(f"Loss function: {criterion}")
+print(f"Optimizer: {optimizer}")
+print(f"Learning rate: 0.001")
 ```
 
-### 4. 训练循环
+### 4. Training Loop
 
 ```python
-def train_epoch(model, train_loader, criterion, optimizer, epoch):
-    """训练一个epoch"""
-    model.train()
-    running_loss = 0.0
-    correct = 0
-    total = 0
+def train_epoch(model, dataset, criterion, optimizer, batch_size=32):
+    """Train for one epoch"""
+    model.train()  # Set to training mode
     
-    for batch_idx, (data, target) in enumerate(train_loader):
-        # 数据移到设备
-        data, target = data.to(device), target.to(device)
+    total_loss = 0.0
+    num_batches = len(dataset) // batch_size
+    
+    for i in range(num_batches):
+        # Get batch data
+        start_idx = i * batch_size
+        batch_data, batch_labels = dataset.get_batch(batch_size, start_idx)
         
-        # 前向传播
+        # Forward pass
+        outputs = model(batch_data)
+        loss = criterion(outputs, batch_labels)
+        
+        # Backward pass
         optimizer.zero_grad()
-        output = model(data)
-        loss = criterion(output, target)
-        
-        # 反向传播
         loss.backward()
+        
+        # Apply gradient clipping (optional)
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
+        # Update weights
         optimizer.step()
         
-        # 统计
-        running_loss += loss.item()
-        _, predicted = genesis.max(output, dim=1)
-        total += target.size(0)
-        correct += (predicted == target).sum().item()
-        
-        # 打印进度
-        if batch_idx % print_every == 0:
-            print(f'Epoch {epoch+1}/{num_epochs}, '
-                  f'Batch {batch_idx}/{len(train_loader)}, '
-                  f'Loss: {loss.item():.4f}, '
-                  f'Acc: {100*correct/total:.2f}%')
+        total_loss += loss.data.item() if hasattr(loss.data, 'item') else float(loss.data)
     
-    epoch_loss = running_loss / len(train_loader)
-    epoch_acc = 100 * correct / total
-    
-    return epoch_loss, epoch_acc
+    return total_loss / num_batches
 
-def validate(model, test_loader, criterion):
-    """验证模型"""
-    model.eval()
-    test_loss = 0.0
+def evaluate(model, dataset, criterion, batch_size=32):
+    """Evaluate model performance"""
+    model.eval()  # Set to evaluation mode
+    
+    total_loss = 0.0
     correct = 0
     total = 0
+    num_batches = len(dataset) // batch_size
     
-    with genesis.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            
-            test_loss += criterion(output, target).item()
-            _, predicted = genesis.max(output, dim=1)
-            total += target.size(0)
-            correct += (predicted == target).sum().item()
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        batch_data, batch_labels = dataset.get_batch(batch_size, start_idx)
+        
+        # Forward pass (no gradients needed)
+        outputs = model(batch_data)
+        loss = criterion(outputs, batch_labels)
+        
+        # Calculate accuracy
+        predicted = genesis.functional.max(outputs, axis=1, keepdims=False)
+        total += batch_labels.shape[0]
+        correct += (predicted == batch_labels).sum().data
+        
+        total_loss += loss.data.item() if hasattr(loss.data, 'item') else float(loss.data)
     
-    avg_loss = test_loss / len(test_loader)
-    accuracy = 100 * correct / total
+    accuracy = correct / total
+    avg_loss = total_loss / num_batches
     
     return avg_loss, accuracy
 
-# 开始训练
-print("开始训练...")
-train_losses, train_accs = [], []
-val_losses, val_accs = [], []
+# Training configuration
+num_epochs = 10
+batch_size = 32
+
+print("Starting training...")
+print(f"Epochs: {num_epochs}")
+print(f"Batch size: {batch_size}")
+print("-" * 50)
+
+# Training loop
+train_losses = []
+test_losses = []
+test_accuracies = []
 
 for epoch in range(num_epochs):
-    # 训练
-    train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, epoch)
+    # Train for one epoch
+    train_loss = train_epoch(model, train_dataset, criterion, optimizer, batch_size)
     
-    # 验证
-    val_loss, val_acc = validate(model, test_loader, criterion)
+    # Evaluate on test set
+    test_loss, test_accuracy = evaluate(model, test_dataset, criterion, batch_size)
     
-    # 学习率调度
-    scheduler.step()
-    
-    # 记录结果
+    # Record metrics
     train_losses.append(train_loss)
-    train_accs.append(train_acc)
-    val_losses.append(val_loss)
-    val_accs.append(val_acc)
+    test_losses.append(test_loss)
+    test_accuracies.append(test_accuracy)
     
-    print(f"Epoch {epoch+1}/{num_epochs}:")
-    print(f"  训练 - Loss: {train_loss:.4f}, Acc: {train_acc:.2f}%")
-    print(f"  验证 - Loss: {val_loss:.4f}, Acc: {val_acc:.2f}%")
-    print(f"  学习率: {optimizer.param_groups[0]['lr']:.6f}")
-    print("-" * 50)
+    # Print progress
+    print(f"Epoch {epoch+1}/{num_epochs}")
+    print(f"  Train Loss: {train_loss:.4f}")
+    print(f"  Test Loss: {test_loss:.4f}")
+    print(f"  Test Accuracy: {test_accuracy:.4f}")
+    print("-" * 30)
 
-print("训练完成！")
+print("Training completed!")
 ```
 
-### 5. 结果可视化
+### 5. Model Evaluation and Visualization
 
 ```python
-# 绘制训练曲线
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+# Plot training progress
+import matplotlib.pyplot as plt
 
-# 损失曲线
-ax1.plot(train_losses, label='训练损失', color='blue')
-ax1.plot(val_losses, label='验证损失', color='red')
-ax1.set_title('损失曲线')
-ax1.set_xlabel('Epoch')
-ax1.set_ylabel('Loss')
-ax1.legend()
-ax1.grid(True)
+plt.figure(figsize=(12, 4))
 
-# 准确率曲线
-ax2.plot(train_accs, label='训练准确率', color='blue')
-ax2.plot(val_accs, label='验证准确率', color='red')
-ax2.set_title('准确率曲线')
-ax2.set_xlabel('Epoch')
-ax2.set_ylabel('Accuracy (%)')
-ax2.legend()
-ax2.grid(True)
+# Plot losses
+plt.subplot(1, 2, 1)
+plt.plot(train_losses, label='Train Loss')
+plt.plot(test_losses, label='Test Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Training and Test Loss')
+plt.legend()
+plt.grid(True)
+
+# Plot accuracy
+plt.subplot(1, 2, 2)
+plt.plot(test_accuracies, label='Test Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.title('Test Accuracy')
+plt.legend()
+plt.grid(True)
 
 plt.tight_layout()
 plt.show()
 
-print(f"最终测试准确率: {val_accs[-1]:.2f}%")
+# Final evaluation
+final_test_loss, final_test_accuracy = evaluate(model, test_dataset, criterion, batch_size)
+print(f"\nFinal Results:")
+print(f"Test Loss: {final_test_loss:.4f}")
+print(f"Test Accuracy: {final_test_accuracy:.4f}")
 ```
 
-### 6. 模型保存和加载
+### 6. Model Saving and Loading
 
 ```python
-# 保存模型
-model_path = 'mnist_model.pth'
-genesis.save_checkpoint({
-    'epoch': num_epochs,
-    'model_state_dict': model.state_dict(),
-    'optimizer_state_dict': optimizer.state_dict(),
-    'train_loss': train_losses[-1],
-    'val_loss': val_losses[-1],
-    'val_acc': val_accs[-1]
-}, model_path)
+# Save model using Genesis serialization
+model_path = "mnist_model.pkl"
+genesis.save(model.state_dict(), model_path)
+print(f"Model saved to {model_path}")
 
-print(f"模型已保存到: {model_path}")
+# Load model
+model_new = MNISTNet(input_dim=784, hidden_dim=128, num_classes=10)
+model_new.load_state_dict(genesis.load(model_path))
+print("Model loaded successfully!")
 
-# 加载模型
-def load_model(model_path, model_class, num_classes=10):
-    """加载训练好的模型"""
-    checkpoint = genesis.load_checkpoint(model_path)
-    
-    model = model_class(num_classes)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-    
-    print(f"模型加载成功，验证准确率: {checkpoint['val_acc']:.2f}%")
-    return model
-
-# 测试加载
-loaded_model = load_model(model_path, MNISTNet)
+# Verify loaded model works
+test_loss, test_accuracy = evaluate(model_new, test_dataset, criterion, batch_size)
+print(f"Loaded model accuracy: {test_accuracy:.4f}")
 ```
 
-### 7. 单张图片预测
+## 🎓 Key Concepts Learned
 
-```python
-def predict_single_image(model, image, class_names=None):
-    """对单张图片进行预测"""
-    model.eval()
-    
-    if class_names is None:
-        class_names = [str(i) for i in range(10)]
-    
-    with genesis.no_grad():
-        if image.dim() == 3:  # 添加batch维度
-            image = image.unsqueeze(0)
-        
-        image = image.to(device)
-        output = model(image)
-        probabilities = genesis.softmax(output, dim=1)
-        
-        confidence, predicted = genesis.max(probabilities, dim=1)
-        
-    return predicted.item(), confidence.item()
+### 1. Genesis Tensor Operations
+- Creating tensors with `genesis.randn()`, `genesis.tensor()`
+- Basic operations like matrix multiplication and element-wise operations
+- Automatic differentiation with `requires_grad`
 
-# 测试预测
-test_iter = iter(test_loader)
-images, labels = next(test_iter)
+### 2. Neural Network Modules
+- Defining models by inheriting from `nn.Module`
+- Using built-in layers: `nn.Linear`, `nn.ReLU`, `nn.Dropout`
+- Understanding forward pass implementation
 
-# 预测前5张图片
-fig, axes = plt.subplots(1, 5, figsize=(15, 3))
-for i in range(5):
-    image = images[i]
-    true_label = labels[i].item()
-    
-    predicted, confidence = predict_single_image(model, image)
-    
-    # 显示图片
-    axes[i].imshow(image.squeeze(), cmap='gray')
-    axes[i].set_title(f'真实: {true_label}\\n预测: {predicted}\\n置信度: {confidence:.3f}')
-    axes[i].axis('off')
+### 3. Training Process
+- Setting up loss functions and optimizers
+- Implementing training and evaluation loops
+- Using gradient clipping and regularization
 
-plt.tight_layout()
-plt.show()
-```
+### 4. Model Management
+- Saving and loading model state with Genesis serialization
+- Managing model parameters and optimization state
 
-## 📈 性能对比
+## 🚀 Next Steps
 
-让我们比较Genesis与PyTorch的性能：
+After completing this tutorial, you can:
 
-```python
-import time
+1. **Explore more complex models** - Try different architectures with more layers
+2. **Learn advanced features** - Explore mixed precision training and learning rate scheduling
+3. **Work with real data** - Integrate with actual datasets when data loading utilities are available
+4. **Performance optimization** - Learn about GPU acceleration and Triton kernel usage
 
-def benchmark_training(model, train_loader, criterion, optimizer, device, num_batches=100):
-    """训练性能基准测试"""
-    model.train()
-    start_time = time.time()
-    
-    for batch_idx, (data, target) in enumerate(train_loader):
-        if batch_idx >= num_batches:
-            break
-            
-        data, target = data.to(device), target.to(device)
-        
-        optimizer.zero_grad()
-        output = model(data)
-        loss = criterion(output, target)
-        loss.backward()
-        optimizer.step()
-    
-    elapsed_time = time.time() - start_time
-    return elapsed_time
+## 📚 Additional Resources
 
-# 运行基准测试
-print("性能基准测试 (100个batch):")
-genesis_time = benchmark_training(model, train_loader, criterion, optimizer, device)
-print(f"Genesis训练时间: {genesis_time:.2f} 秒")
-print(f"平均每个batch: {genesis_time/100*1000:.1f} ms")
-```
+- [Genesis API Reference](../api-reference/index.md) - Complete API documentation
+- [Advanced Training Features](../training/advanced-features.md) - Mixed precision, schedulers, etc.
+- [Performance Optimization](performance-tuning.md) - Tips for faster training
 
-## 🎯 关键概念总结
+## 🐛 Troubleshooting
 
-### 1. 张量操作
-```python
-# 创建张量
-x = genesis.randn(3, 4, requires_grad=True)
-y = genesis.ones(3, 4)
+### Common Issues
 
-# 基础运算
-z = x + y
-w = genesis.matmul(x, y.T)
+1. **Import errors**: Ensure Genesis is properly installed with `pip install -e .`
+2. **Shape mismatches**: Check tensor dimensions in forward pass
+3. **Memory issues**: Reduce batch size if encountering out-of-memory errors
+4. **Slow training**: Enable GPU support when available
 
-# 梯度计算
-z.sum().backward()
-print(x.grad)  # x的梯度
-```
+### Getting Help
 
-### 2. 模型定义最佳实践
-```python
-class BestPracticeNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        # 使用nn.Sequential简化定义
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 32, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2)
-        )
-        self.classifier = nn.Sequential(
-            nn.Linear(64 * 7 * 7, 128),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(128, 10)
-        )
-    
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        return self.classifier(x)
-```
-
-### 3. 训练技巧
-```python
-# 梯度裁剪
-genesis.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-# 权重初始化
-def init_weights(m):
-    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-        genesis.nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            genesis.nn.init.zeros_(m.bias)
-
-model.apply(init_weights)
-```
-
-## 🚀 下一步
-
-恭喜！你已经完成了第一个Genesis训练项目。接下来可以探索：
-
-1. **[混合精度训练](amp-training.md)** - 加速训练并节省显存
-2. **[自定义算子](custom-ops.md)** - 实现专用的神经网络操作
-3. **[性能调优](performance-tuning.md)** - 优化训练性能
-4. **[分布式训练](distributed-training.md)** - 多GPU并行训练
-
-## ❓ 常见问题
-
-**Q: 训练速度比预期慢？**
-A: 检查是否启用了CUDA，确保数据预处理不是瓶颈，考虑调整batch_size。
-
-**Q: 内存不足错误？**
-A: 减小batch_size，启用梯度检查点，或使用混合精度训练。
-
-**Q: 模型不收敛？**
-A: 检查学习率设置，确认数据预处理正确，尝试不同的初始化方法。
-
----
-
-!!! success "完成了基础教程！"
-    你现在已经掌握了Genesis的核心概念。继续探索更高级的特性吧！
-
-[下一教程：自定义算子](custom-ops.md){ .md-button .md-button--primary }
-[返回教程目录](index.md){ .md-button }
+- Check the [Genesis Documentation](../index.md)
+- Report issues on [GitHub Issues](https://github.com/phonism/genesis/issues)
+- Join discussions in the community forums

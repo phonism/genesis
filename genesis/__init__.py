@@ -1,12 +1,19 @@
-# Import dtype system - replaces old string constants
+"""Genesis Deep Learning Framework.
+
+A PyTorch-compatible deep learning framework with CUDA acceleration,
+automatic differentiation, and optimized tensor operations.
+"""
+
 from .dtypes import (
     float32, float16, float64, bfloat16,
     int32, int64, int16, int8, uint8, bool,
     get_dtype, is_floating_point, is_integer
 )
-enable_autocast = False
-upgrade = False
-use_triton = True
+
+# Global runtime configuration
+enable_autocast = False  # Automatic mixed precision training
+upgrade = False         # Framework upgrade mode  
+use_triton = True       # Enable Triton GPU kernels
 
 from . import utils
 from .init import (
@@ -23,8 +30,7 @@ from .serialization import (
         save_checkpoint, load_checkpoint
 )
 from .autograd import Tensor
-# Add lowercase tensor API for PyTorch compatibility
-tensor = Tensor
+tensor = Tensor  # PyTorch-style lowercase alias
 from . import nn
 from . import init
 from . import optim

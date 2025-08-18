@@ -5,58 +5,381 @@ Genesis functional interface provides stateless tensor operation functions that 
 ## Module Overview
 
 `genesis.nn.functional` (commonly imported as `F`) includes:
-- Activation functions (relu, sigmoid, softmax, etc.)
-- Loss functions (cross_entropy, mse_loss, etc.) 
-- Tensor operations (matmul, transpose, reshape, etc.)
-- Normalization functions (layer_norm, batch_norm, etc.)
-- Attention mechanisms (scaled_dot_product_attention, etc.)
+- **Basic arithmetic operations** (add, subtract, multiply, divide)
+- **Mathematical functions** (sin, cos, log, exp, sqrt, power)
+- **Tensor shape operations** (transpose, reshape, expand, view, flatten)
+- **Tensor indexing and slicing** (getitem, setitem, broadcast_to)
+- **Aggregation operations** (sum, max, logsumexp)
+- **Matrix operations** (matmul, stack, cat, squeeze, unsqueeze)
+- **Basic activation functions** (relu)
+- **Advanced operations** (softmax, dropout from triton_ops)
+
+## Basic Arithmetic Operations
+
+### add
+```python
+def add(a: Tensor, b: Tensor) -> Tensor:
+    """
+    Element-wise addition of two tensors.
+    
+    Args:
+        a: Tensor - First input tensor
+        b: Tensor - Second input tensor
+        
+    Returns:
+        Tensor - Element-wise sum a + b
+        
+    Example:
+        >>> x = genesis.tensor([[1.0, 2.0], [3.0, 4.0]])
+        >>> y = genesis.tensor([[2.0, 1.0], [1.0, 2.0]])
+        >>> z = F.add(x, y)
+        >>> # Result: [[3.0, 3.0], [4.0, 6.0]]
+    """
+```
+
+### sub
+```python
+def sub(a: Tensor, b: Tensor) -> Tensor:
+    """
+    Element-wise subtraction of two tensors.
+    
+    Args:
+        a: Tensor - First input tensor (minuend)
+        b: Tensor - Second input tensor (subtrahend)
+        
+    Returns:
+        Tensor - Element-wise difference a - b
+        
+    Example:
+        >>> x = genesis.tensor([5.0, 3.0, 8.0])
+        >>> y = genesis.tensor([2.0, 1.0, 3.0])
+        >>> z = F.sub(x, y)
+        >>> # Result: [3.0, 2.0, 5.0]
+    """
+```
+
+### multiply
+```python
+def multiply(a: Tensor, b: Tensor) -> Tensor:
+    """
+    Element-wise multiplication of two tensors.
+    
+    Args:
+        a: Tensor - First input tensor
+        b: Tensor - Second input tensor
+        
+    Returns:
+        Tensor - Element-wise product a * b
+        
+    Example:
+        >>> x = genesis.tensor([2.0, 3.0, 4.0])
+        >>> y = genesis.tensor([1.5, 2.0, 0.5])
+        >>> z = F.multiply(x, y)
+        >>> # Result: [3.0, 6.0, 2.0]
+    """
+```
+
+### divide
+```python
+def divide(a: Tensor, b: Tensor) -> Tensor:
+    """
+    Element-wise division of two tensors.
+    
+    Args:
+        a: Tensor - Dividend tensor
+        b: Tensor - Divisor tensor
+        
+    Returns:
+        Tensor - Element-wise quotient a / b
+        
+    Example:
+        >>> x = genesis.tensor([6.0, 8.0, 9.0])
+        >>> y = genesis.tensor([2.0, 4.0, 3.0])
+        >>> z = F.divide(x, y)
+        >>> # Result: [3.0, 2.0, 3.0]
+    """
+```
+
+## Scalar Operations
+
+### add_scalar, mul_scalar, divide_scalar, pow_scalar
+```python
+def add_scalar(a: Tensor, scalar: float) -> Tensor:
+def mul_scalar(a: Tensor, scalar: float) -> Tensor:
+def divide_scalar(a: Tensor, scalar: float, reverse: bool = False) -> Tensor:
+def pow_scalar(a: Tensor, scalar: float, reverse: bool = False) -> Tensor:
+    """
+    Element-wise operations between tensor and scalar.
+    
+    Args:
+        a: Tensor - Input tensor
+        scalar: float - Scalar value
+        reverse: bool - If True, applies scalar op tensor (for divide/pow)
+        
+    Returns:
+        Tensor - Result of tensor-scalar operation
+        
+    Example:
+        >>> x = genesis.tensor([1.0, 2.0, 3.0])
+        >>> y1 = F.add_scalar(x, 5.0)      # [6.0, 7.0, 8.0]
+        >>> y2 = F.mul_scalar(x, 2.0)      # [2.0, 4.0, 6.0]
+        >>> y3 = F.pow_scalar(x, 2.0)      # [1.0, 4.0, 9.0]
+    """
+```
+
+## Mathematical Functions
+
+### sin, cos, log, exp, sqrt
+```python
+def sin(a: Tensor) -> Tensor:
+def cos(a: Tensor) -> Tensor:
+def log(a: Tensor) -> Tensor:
+def exp(a: Tensor) -> Tensor:
+def sqrt(a: Tensor) -> Tensor:
+    """
+    Element-wise mathematical functions.
+    
+    Args:
+        a: Tensor - Input tensor
+        
+    Returns:
+        Tensor - Result of mathematical function
+        
+    Example:
+        >>> x = genesis.tensor([0.0, 1.0, 2.0])
+        >>> y1 = F.sin(x)   # [0.0, 0.841, 0.909]
+        >>> y2 = F.exp(x)   # [1.0, 2.718, 7.389]
+        >>> y3 = F.sqrt(genesis.tensor([4.0, 9.0, 16.0]))  # [2.0, 3.0, 4.0]
+    """
+```
+
+### negate
+```python
+def negate(a: Tensor) -> Tensor:
+    """
+    Element-wise negation: -a
+    
+    Args:
+        a: Tensor - Input tensor
+        
+    Returns:
+        Tensor - Negated tensor
+        
+    Example:
+        >>> x = genesis.tensor([1.0, -2.0, 3.0])
+        >>> y = F.negate(x)
+        >>> # Result: [-1.0, 2.0, -3.0]
+    """
+```
+
+## Shape Operations
+
+### transpose
+```python
+def transpose(a: Tensor, axis: tuple = None) -> Tensor:
+    """
+    Transpose tensor dimensions.
+    
+    Args:
+        a: Tensor - Input tensor
+        axis: tuple - Pair of dimensions to swap (default: last two dims)
+        
+    Returns:
+        Tensor - Transposed tensor
+        
+    Example:
+        >>> x = genesis.randn(3, 4, 5)
+        >>> y1 = F.transpose(x)           # Swap last two dims: (3, 5, 4)
+        >>> y2 = F.transpose(x, (0, 2))   # Swap dims 0,2: (5, 4, 3)
+    """
+```
+
+### reshape
+```python
+def reshape(a: Tensor, shape: tuple) -> Tensor:
+    """
+    Reshape tensor to new shape.
+    
+    Args:
+        a: Tensor - Input tensor
+        shape: tuple - New shape (must have same total elements)
+        
+    Returns:
+        Tensor - Reshaped tensor
+        
+    Example:
+        >>> x = genesis.randn(2, 6)
+        >>> y = F.reshape(x, (3, 4))
+        >>> # Changes shape from (2, 6) to (3, 4)
+    """
+```
+
+### view, expand, flatten
+```python
+def view(a: Tensor, shape: tuple) -> Tensor:
+def expand(a: Tensor, shape: tuple) -> Tensor:
+def flatten(a: Tensor, start_dim: int = 0, end_dim: int = None) -> Tensor:
+    """
+    Tensor view and shape manipulation operations.
+    
+    Args:
+        a: Tensor - Input tensor
+        shape: tuple - Target shape
+        start_dim, end_dim: int - Dimensions to flatten
+        
+    Returns:
+        Tensor - Transformed tensor
+        
+    Example:
+        >>> x = genesis.randn(2, 3, 4)
+        >>> y1 = F.view(x, (6, 4))         # View as (6, 4)
+        >>> y2 = F.expand(x, (2, 3, 4, 5)) # Expand last dim
+        >>> y3 = F.flatten(x, 1)           # Flatten from dim 1: (2, 12)
+    """
+```
+
+## Tensor Operations
+
+### matmul
+```python
+def matmul(a: Tensor, b: Tensor) -> Tensor:
+    """
+    Matrix multiplication.
+    
+    Args:
+        a: Tensor - Left matrix
+        b: Tensor - Right matrix
+        
+    Returns:
+        Tensor - Matrix product
+        
+    Example:
+        >>> x = genesis.randn(3, 4)
+        >>> y = genesis.randn(4, 5)
+        >>> z = F.matmul(x, y)  # Shape: (3, 5)
+    """
+```
+
+### stack, cat
+```python
+def stack(tensors: list, dim: int = 0) -> Tensor:
+def cat(tensors: list, dim: int = 0) -> Tensor:
+    """
+    Stack or concatenate tensors along dimension.
+    
+    Args:
+        tensors: list - List of tensors to combine
+        dim: int - Dimension along which to stack/concatenate
+        
+    Returns:
+        Tensor - Combined tensor
+        
+    Example:
+        >>> x = genesis.randn(2, 3)
+        >>> y = genesis.randn(2, 3)
+        >>> z1 = F.stack([x, y], dim=0)  # Shape: (2, 2, 3)
+        >>> z2 = F.cat([x, y], dim=0)    # Shape: (4, 3)
+    """
+```
+
+### squeeze, unsqueeze
+```python
+def squeeze(tensor: Tensor, dim: int) -> Tensor:
+def unsqueeze(tensor: Tensor, dim: int) -> Tensor:
+    """
+    Remove or add singleton dimensions.
+    
+    Args:
+        tensor: Tensor - Input tensor
+        dim: int - Dimension to squeeze/unsqueeze
+        
+    Returns:
+        Tensor - Tensor with modified dimensions
+        
+    Example:
+        >>> x = genesis.randn(1, 3, 1, 4)
+        >>> y1 = F.squeeze(x, 0)    # Shape: (3, 1, 4)
+        >>> y2 = F.unsqueeze(x, 2)  # Shape: (1, 3, 1, 1, 4)
+    """
+```
+
+## Aggregation Operations
+
+### sum
+```python
+def sum(a: Tensor, axis: int = None, keepdims: bool = False) -> Tensor:
+    """
+    Sum tensor elements along specified dimensions.
+    
+    Args:
+        a: Tensor - Input tensor
+        axis: int - Dimension to sum over (None for all)
+        keepdims: bool - Whether to keep reduced dimensions
+        
+    Returns:
+        Tensor - Summed tensor
+        
+    Example:
+        >>> x = genesis.randn(3, 4)
+        >>> y1 = F.sum(x)           # Sum all elements: scalar
+        >>> y2 = F.sum(x, axis=0)   # Sum over rows: shape (4,)
+        >>> y3 = F.sum(x, axis=1, keepdims=True)  # Shape: (3, 1)
+    """
+```
+
+### max, logsumexp
+```python
+def max(a: Tensor, axis: int = None, keepdims: bool = False) -> Tensor:
+def logsumexp(a: Tensor, axis: int = None) -> Tensor:
+    """
+    Maximum and log-sum-exp operations.
+    
+    Args:
+        a: Tensor - Input tensor
+        axis: int - Dimension to reduce over
+        keepdims: bool - Whether to keep reduced dimensions
+        
+    Returns:
+        Tensor - Result tensor
+        
+    Example:
+        >>> x = genesis.randn(3, 4)
+        >>> y1 = F.max(x, axis=1)      # Max along rows
+        >>> y2 = F.logsumexp(x, axis=0) # LogSumExp along cols
+    """
+```
 
 ## Activation Functions
 
 ### relu
 ```python
-def relu(x: Tensor, inplace: bool = False) -> Tensor:
+def relu(a: Tensor) -> Tensor:
     """
     ReLU activation function: f(x) = max(0, x)
     
     Args:
-        x: Tensor - Input tensor
-        inplace: bool - Whether to perform operation inplace
+        a: Tensor - Input tensor
         
     Returns:
-        Tensor - Activated tensor
+        Tensor - ReLU-activated tensor
         
     Example:
-        >>> x = genesis.randn(10)
+        >>> x = genesis.tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
         >>> y = F.relu(x)
-        >>> # Negative values become 0, positive unchanged
+        >>> # Result: [0.0, 0.0, 0.0, 1.0, 2.0]
     """
 ```
 
-### sigmoid
-```python
-def sigmoid(x: Tensor) -> Tensor:
-    """
-    Sigmoid activation function: f(x) = 1 / (1 + exp(-x))
-    
-    Args:
-        x: Tensor - Input tensor
-        
-    Returns:
-        Tensor - Sigmoid-activated tensor (values in [0, 1])
-        
-    Example:
-        >>> x = genesis.randn(5, 5)
-        >>> y = F.sigmoid(x)
-        >>> # All values will be between 0 and 1
-    """
-```
+## Advanced Operations (from triton_ops)
 
 ### softmax
 ```python
+# Imported from genesis.nn.triton_ops
+from genesis.nn.triton_ops import softmax
+
 def softmax(x: Tensor, dim: int = -1) -> Tensor:
     """
-    Softmax function: f(x_i) = exp(x_i) / sum(exp(x_j))
+    Softmax function using optimized Triton kernel.
     
     Args:
         x: Tensor - Input tensor
@@ -67,253 +390,99 @@ def softmax(x: Tensor, dim: int = -1) -> Tensor:
         
     Example:
         >>> x = genesis.randn(2, 3)
-        >>> y = F.softmax(x, dim=1)
+        >>> y = softmax(x, dim=1)
         >>> # Each row sums to 1
     """
 ```
 
-### gelu
+### dropout
 ```python
-def gelu(x: Tensor, approximate: str = 'none') -> Tensor:
+# Imported from genesis.nn.triton_ops
+from genesis.nn.triton_ops import dropout
+
+def dropout(x: Tensor, p: float = 0.5, training: bool = True) -> Tensor:
     """
-    Gaussian Error Linear Unit: f(x) = x * Φ(x)
+    Dropout regularization using Triton kernel.
     
     Args:
         x: Tensor - Input tensor
-        approximate: str - Approximation method ('none', 'tanh')
-        
-    Returns:
-        Tensor - GELU-activated tensor
-        
-    Example:
-        >>> x = genesis.randn(100)
-        >>> y = F.gelu(x)
-        >>> # Smooth activation, similar to ReLU but differentiable at 0
-    """
-```
-
-## Loss Functions
-
-### cross_entropy
-```python
-def cross_entropy(input: Tensor, target: Tensor, weight: Tensor = None, 
-                  reduction: str = 'mean') -> Tensor:
-    """
-    Cross entropy loss for classification tasks.
-    
-    Args:
-        input: Tensor - Logits tensor of shape (N, C) 
-        target: Tensor - Target class indices of shape (N,)
-        weight: Tensor - Manual rescaling weight for each class
-        reduction: str - Reduction method ('mean', 'sum', 'none')
-        
-    Returns:
-        Tensor - Cross entropy loss
-        
-    Example:
-        >>> logits = genesis.randn(32, 10)  # 32 samples, 10 classes
-        >>> targets = genesis.randint(0, 10, (32,))
-        >>> loss = F.cross_entropy(logits, targets)
-    """
-```
-
-### mse_loss
-```python
-def mse_loss(input: Tensor, target: Tensor, reduction: str = 'mean') -> Tensor:
-    """
-    Mean Squared Error loss.
-    
-    Args:
-        input: Tensor - Predicted values
-        target: Tensor - Target values
-        reduction: str - Reduction method ('mean', 'sum', 'none')
-        
-    Returns:
-        Tensor - MSE loss
-        
-    Example:
-        >>> pred = genesis.randn(100, 1)
-        >>> target = genesis.randn(100, 1) 
-        >>> loss = F.mse_loss(pred, target)
-    """
-```
-
-## Tensor Operations
-
-### matmul
-```python
-def matmul(input: Tensor, other: Tensor) -> Tensor:
-    """
-    Matrix multiplication of two tensors.
-    
-    Args:
-        input: Tensor - First tensor
-        other: Tensor - Second tensor
-        
-    Returns:
-        Tensor - Matrix multiplication result
-        
-    Example:
-        >>> a = genesis.randn(3, 4)
-        >>> b = genesis.randn(4, 5) 
-        >>> c = F.matmul(a, b)  # Shape: (3, 5)
-    """
-```
-
-### transpose
-```python
-def transpose(input: Tensor, dim0: int, dim1: int) -> Tensor:
-    """
-    Transpose two dimensions of a tensor.
-    
-    Args:
-        input: Tensor - Input tensor
-        dim0: int - First dimension to transpose
-        dim1: int - Second dimension to transpose
-        
-    Returns:
-        Tensor - Transposed tensor
-        
-    Example:
-        >>> x = genesis.randn(2, 3, 4)
-        >>> y = F.transpose(x, 0, 2)  # Shape: (4, 3, 2)
-    """
-```
-
-## Normalization Functions
-
-### layer_norm
-```python
-def layer_norm(input: Tensor, normalized_shape: list, weight: Tensor = None,
-               bias: Tensor = None, eps: float = 1e-5) -> Tensor:
-    """
-    Layer normalization.
-    
-    Args:
-        input: Tensor - Input tensor
-        normalized_shape: list - Shape over which to normalize
-        weight: Tensor - Learnable scale parameter
-        bias: Tensor - Learnable shift parameter
-        eps: float - Small value to avoid division by zero
-        
-    Returns:
-        Tensor - Layer-normalized tensor
-        
-    Example:
-        >>> x = genesis.randn(32, 128)
-        >>> y = F.layer_norm(x, [128])
-    """
-```
-
-### batch_norm
-```python
-def batch_norm(input: Tensor, running_mean: Tensor, running_var: Tensor,
-               weight: Tensor = None, bias: Tensor = None, training: bool = True,
-               momentum: float = 0.1, eps: float = 1e-5) -> Tensor:
-    """
-    Batch normalization.
-    
-    Args:
-        input: Tensor - Input tensor (N, C, ...)
-        running_mean: Tensor - Running mean statistics
-        running_var: Tensor - Running variance statistics
-        weight: Tensor - Learnable scale parameter
-        bias: Tensor - Learnable shift parameter
-        training: bool - Training mode flag
-        momentum: float - Momentum for updating running statistics
-        eps: float - Small value to avoid division by zero
-        
-    Returns:
-        Tensor - Batch-normalized tensor
-        
-    Example:
-        >>> x = genesis.randn(32, 64, 28, 28)
-        >>> running_mean = genesis.zeros(64)
-        >>> running_var = genesis.ones(64)
-        >>> y = F.batch_norm(x, running_mean, running_var)
-    """
-```
-
-## Attention Mechanisms
-
-### scaled_dot_product_attention
-```python
-def scaled_dot_product_attention(query: Tensor, key: Tensor, value: Tensor,
-                                 attn_mask: Tensor = None, dropout_p: float = 0.0,
-                                 is_causal: bool = False) -> Tensor:
-    """
-    Scaled dot-product attention mechanism.
-    
-    Args:
-        query: Tensor - Query tensor (..., L, E)
-        key: Tensor - Key tensor (..., S, E)
-        value: Tensor - Value tensor (..., S, Ev)
-        attn_mask: Tensor - Attention mask
-        dropout_p: float - Dropout probability
-        is_causal: bool - Whether to apply causal mask
-        
-    Returns:
-        Tensor - Attention output (..., L, Ev)
-        
-    Example:
-        >>> seq_len, d_model = 10, 64
-        >>> q = genesis.randn(1, seq_len, d_model)
-        >>> k = genesis.randn(1, seq_len, d_model)
-        >>> v = genesis.randn(1, seq_len, d_model)
-        >>> out = F.scaled_dot_product_attention(q, k, v)
-    """
-```
-
-## Utility Functions
-
-### dropout
-```python
-def dropout(input: Tensor, p: float = 0.5, training: bool = True,
-            inplace: bool = False) -> Tensor:
-    """
-    Applies dropout regularization.
-    
-    Args:
-        input: Tensor - Input tensor
         p: float - Dropout probability
-        training: bool - Training mode flag
-        inplace: bool - Whether to perform operation inplace
+        training: bool - Whether in training mode
         
     Returns:
-        Tensor - Tensor with dropout applied (if training)
+        Tensor - Tensor with dropout applied
         
     Example:
         >>> x = genesis.randn(100, 50)
-        >>> y = F.dropout(x, p=0.2, training=True)
+        >>> y = dropout(x, p=0.2, training=True)
+        >>> # 20% of elements set to 0, others scaled by 1/(1-p)
     """
 ```
 
-### linear
+## Indexing and Broadcasting
+
+### getitem, setitem, broadcast_to
 ```python
-def linear(input: Tensor, weight: Tensor, bias: Tensor = None) -> Tensor:
+def getitem(a: Tensor, index) -> Tensor:
+def setitem(a: Tensor, index, value) -> Tensor:
+def broadcast_to(a: Tensor, shape: tuple) -> Tensor:
     """
-    Linear transformation: y = xW^T + b
+    Tensor indexing and broadcasting operations.
     
     Args:
-        input: Tensor - Input tensor (..., in_features)
-        weight: Tensor - Weight tensor (out_features, in_features)
-        bias: Tensor - Bias tensor (out_features,)
+        a: Tensor - Input tensor
+        index: Various - Index (int, slice, list, Tensor)
+        value: Tensor/scalar - Value to set
+        shape: tuple - Target broadcast shape
         
     Returns:
-        Tensor - Linear transformation result (..., out_features)
+        Tensor - Indexed/broadcast tensor
         
     Example:
-        >>> x = genesis.randn(32, 784)
-        >>> w = genesis.randn(10, 784)
-        >>> b = genesis.randn(10)
-        >>> y = F.linear(x, w, b)  # Shape: (32, 10)
+        >>> x = genesis.randn(3, 4)
+        >>> y1 = F.getitem(x, [0, 2])      # Select rows 0 and 2
+        >>> y2 = F.broadcast_to(x, (2, 3, 4))  # Broadcast to (2, 3, 4)
     """
 ```
 
-## Implementation Notes
+## Performance Notes
 
-- All functions support automatic differentiation through Genesis autograd system
-- GPU acceleration is automatically applied when tensors are on CUDA devices  
-- Memory-efficient implementations using Triton kernels for better performance
-- Broadcasting rules follow standard PyTorch conventions
-- Inplace operations (where supported) can reduce memory usage but should be used carefully with autograd
+- **GPU Acceleration**: Operations automatically use GPU when tensors are on CUDA device
+- **Triton Optimization**: Softmax and dropout use optimized Triton kernels
+- **Memory Efficiency**: View operations share memory when possible
+- **Mixed Precision**: Functions support automatic mixed precision when enabled
+
+## Common Usage Patterns
+
+```python
+import genesis
+import genesis.nn.functional as F
+
+# Basic operations
+x = genesis.randn(100, 784)
+y = F.relu(F.matmul(x, weights) + bias)
+
+# Shape manipulation
+x = genesis.randn(32, 3, 224, 224)
+x_flat = F.flatten(x, start_dim=1)  # (32, 150528)
+
+# Aggregation
+logits = genesis.randn(32, 10)
+probs = F.softmax(logits, dim=1)
+max_vals = F.max(logits, axis=1)
+
+# Advanced indexing
+indices = genesis.tensor([0, 2, 4])
+selected = F.getitem(x, indices)
+```
+
+## Future Features (Roadmap)
+
+The following functions are planned for future releases:
+- Advanced activation functions (gelu, silu, swish)
+- Loss functions (cross_entropy, mse_loss, l1_loss)
+- Normalization functions (layer_norm, batch_norm)
+- Convolution operations (conv1d, conv2d)
+- Attention mechanisms (scaled_dot_product_attention)
+
+To track progress on these features, see the project roadmap on GitHub.
