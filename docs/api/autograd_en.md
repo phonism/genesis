@@ -369,15 +369,16 @@ Prevent gradient explosion:
 genesis.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 ```
 
-### 4. Mixed Precision Training
+### 4. Mixed Precision Support
 
-Use automatic mixed precision for faster training:
+Genesis supports mixed precision through automatic type casting in the Function class. When `genesis.enable_autocast` is set to `True`, operations automatically handle float16/float32 conversions:
 
 ```python
+# Enable mixed precision globally
 genesis.enable_autocast = True
-with genesis.autocast():
-    output = model(input)
-    loss = criterion(output, target)
+
+# The framework will automatically handle type conversions
+# during forward and backward passes
 ```
 
 ## Common Patterns
@@ -407,11 +408,11 @@ for epoch in range(num_epochs):
 Save memory by recomputing activations:
 
 ```python
-# Coming in future versions
+# Available in future versions
 from genesis.utils.checkpoint import checkpoint
 
 def forward(self, x):
-    # Checkpoint intermediate computation
+    # Checkpoint intermediate computations
     x = checkpoint(self.layer1, x)
     x = checkpoint(self.layer2, x)
     return self.layer3(x)
@@ -421,7 +422,7 @@ def forward(self, x):
 
 ### Gradient Checking
 
-Verify gradients with numerical differentiation:
+Verify gradients using numerical differentiation:
 
 ```python
 from genesis.autograd import gradcheck
@@ -452,7 +453,7 @@ print(y.grad_fn.next_functions)  # Connected operations
 
 ## See Also
 
-- [Neural Network Modules](nn/modules.md) - Building models with Genesis
-- [Optimizers](optim/optimizers.md) - Training with gradient descent
-- [Tensor Operations](../ndarray/index.md) - Low-level tensor operations
+- [Neural Network Modules](nn/modules_en.md) - Building models with Genesis
+- [Optimizers](optim/optimizers_en.md) - Training with gradient descent
+- [Tensor Operations](../ndarray/index_en.md) - Low-level tensor operations
 - [Examples](../../samples/) - Complete working examples

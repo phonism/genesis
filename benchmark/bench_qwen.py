@@ -218,7 +218,7 @@ class QwenBenchmarkSuite:
             # Pre-convert to Genesis tensor (one-time cost, not part of benchmark)
             input_np = input_ids.detach().cpu().numpy()
             import genesis
-            genesis_input = genesis.tensor(input_np, device=genesis.cuda(), requires_grad=False).long()
+            genesis_input = genesis.tensor(input_np, device=genesis.device("cuda"), requires_grad=False).long()
             
             # Benchmark Genesis - pure computation only
             def genesis_forward():
@@ -320,8 +320,8 @@ class QwenBenchmarkSuite:
             input_np = input_ids.detach().cpu().numpy()
             labels_np = labels.detach().cpu().numpy()
             import genesis
-            genesis_input = genesis.tensor(input_np, device=genesis.cuda(), requires_grad=False).long()
-            genesis_labels = genesis.tensor(labels_np, device=genesis.cuda(), requires_grad=False).long()
+            genesis_input = genesis.tensor(input_np, device=genesis.device("cuda"), requires_grad=False).long()
+            genesis_labels = genesis.tensor(labels_np, device=genesis.device("cuda"), requires_grad=False).long()
             
             # Benchmark Genesis backward - pure computation only
             def genesis_backward():

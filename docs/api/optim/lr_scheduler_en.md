@@ -4,7 +4,7 @@ Genesis provides learning rate schedulers to adjust the learning rate during tra
 
 ## Overview
 
-Learning rate scheduling is a technique used to adjust the learning rate throughout the training process. Genesis provides PyTorch-compatible learning rate schedulers that can significantly improve model convergence.
+Learning rate scheduling is a technique used to adjust the learning rate throughout the training process. Genesis provides a simple and effective scheduler implementation.
 
 ## Available Schedulers
 
@@ -13,8 +13,6 @@ Learning rate scheduling is a technique used to adjust the learning rate through
 The `LambdaLR` scheduler allows you to define a custom function to modify the learning rate at each epoch.
 
 ```python
-import genesis.optim as optim
-
 class LambdaLR:
     def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
         """
@@ -22,17 +20,26 @@ class LambdaLR:
         
         Args:
             optimizer: Wrapped optimizer
-            lr_lambda: Function or list of functions to compute multiplicative factor
-            last_epoch: The index of last epoch
-            verbose: If True, prints a message for each update
+            lr_lambda: Function to compute multiplicative factor
+            last_epoch: The index of last epoch (default: -1)
+            verbose: If True, prints a message for each update (not used)
+            
+        Attributes:
+            base_lrs: Base learning rate from optimizer
         """
 ```
+
+**Implementation Details:**
+- The scheduler stores the base learning rate from the optimizer
+- Each step multiplies the base learning rate by the lambda function output
+- Directly modifies the optimizer's `lr` attribute
 
 **Usage Example:**
 ```python
 import genesis
 import genesis.nn as nn
 import genesis.optim as optim
+from genesis.optim.lr_scheduler import LambdaLR
 
 # Create model and optimizer
 model = nn.Linear(10, 1)
@@ -44,7 +51,7 @@ def lr_lambda(epoch):
     return 0.95 ** (epoch // 10)
 
 # Create scheduler
-scheduler = optim.LambdaLR(optimizer, lr_lambda=lr_lambda)
+scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 # Training loop
 for epoch in range(100):
@@ -72,12 +79,17 @@ def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
         
     Returns:
         LambdaLR scheduler object
+        
+    Schedule:
+        - Linear warmup from 0 to base_lr over num_warmup_steps
+        - Cosine annealing from base_lr to 0 over remaining steps
     """
 ```
 
 **Usage Example:**
 ```python
 import genesis.optim as optim
+from genesis.optim.lr_scheduler import get_cosine_schedule_with_warmup
 
 # Training configuration
 num_epochs = 100
@@ -87,7 +99,7 @@ warmup_steps = total_steps // 10  # 10% warmup
 
 # Create optimizer and scheduler
 optimizer = optim.AdamW(model.parameters(), lr=5e-4)
-scheduler = optim.get_cosine_schedule_with_warmup(
+scheduler = get_cosine_schedule_with_warmup(
     optimizer, 
     num_warmup_steps=warmup_steps,
     num_training_steps=total_steps
@@ -113,8 +125,6 @@ for epoch in range(num_epochs):
 
 ## Scheduler Methods
 
-All schedulers provide the following methods:
-
 ### step()
 ```python
 def step(self, epoch=None):
@@ -123,6 +133,11 @@ def step(self, epoch=None):
     
     Args:
         epoch: Current epoch (optional, uses internal counter if None)
+        
+    Updates:
+        - Increments last_epoch if epoch is None
+        - Computes new learning rate using lr_lambda
+        - Updates optimizer.lr directly
     """
 ```
 
@@ -133,7 +148,9 @@ def get_last_lr(self):
     Return the last computed learning rate.
     
     Returns:
-        Current learning rate value
+        float: Current learning rate value
+        
+    Note: Returns the value stored in _last_lr attribute
     """
 ```
 
@@ -144,7 +161,9 @@ def state_dict(self):
     Return the state of the scheduler as a dict.
     
     Returns:
-        Dictionary containing scheduler state
+        Dictionary containing:
+        - last_epoch: Current epoch counter
+        - base_lrs: Base learning rate
     """
 ```
 
@@ -156,6 +175,10 @@ def load_state_dict(self, state_dict):
     
     Args:
         state_dict: Dictionary containing scheduler state
+        
+    Loads:
+        - last_epoch: Restore epoch counter
+        - base_lrs: Restore base learning rate
     """
 ```
 
@@ -164,7 +187,7 @@ def load_state_dict(self, state_dict):
 ### Exponential Decay
 ```python
 # Decay learning rate by 0.95 every epoch
-scheduler = optim.LambdaLR(optimizer, lr_lambda=lambda epoch: 0.95 ** epoch)
+scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: 0.95 ** epoch)
 ```
 
 ### Step Decay
@@ -173,7 +196,7 @@ scheduler = optim.LambdaLR(optimizer, lr_lambda=lambda epoch: 0.95 ** epoch)
 def step_decay(epoch):
     return 0.5 ** (epoch // 30)
 
-scheduler = optim.LambdaLR(optimizer, lr_lambda=step_decay)
+scheduler = LambdaLR(optimizer, lr_lambda=step_decay)
 ```
 
 ### Polynomial Decay
@@ -182,7 +205,7 @@ scheduler = optim.LambdaLR(optimizer, lr_lambda=step_decay)
 def poly_decay(epoch, total_epochs=100, power=0.9):
     return (1 - epoch / total_epochs) ** power
 
-scheduler = optim.LambdaLR(optimizer, lr_lambda=lambda epoch: poly_decay(epoch))
+scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: poly_decay(epoch))
 ```
 
 ### Cosine with Restarts
@@ -193,7 +216,7 @@ def cosine_restart(epoch, restart_period=50):
     epoch_in_cycle = epoch % restart_period
     return 0.5 * (1 + math.cos(math.pi * epoch_in_cycle / restart_period))
 
-scheduler = optim.LambdaLR(optimizer, lr_lambda=cosine_restart)
+scheduler = LambdaLR(optimizer, lr_lambda=cosine_restart)
 ```
 
 ## Integration with Training
@@ -203,6 +226,7 @@ scheduler = optim.LambdaLR(optimizer, lr_lambda=cosine_restart)
 import genesis
 import genesis.nn as nn
 import genesis.optim as optim
+from genesis.optim.lr_scheduler import LambdaLR
 
 # Setup
 model = nn.Sequential(
@@ -212,9 +236,9 @@ model = nn.Sequential(
 )
 
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = optim.get_cosine_schedule_with_warmup(
-    optimizer, num_warmup_steps=1000, num_training_steps=10000
-)
+
+# Simple exponential decay
+scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: 0.95 ** epoch)
 
 # Training loop
 for epoch in range(num_epochs):
@@ -222,18 +246,17 @@ for epoch in range(num_epochs):
     for batch_idx, (data, targets) in enumerate(train_loader):
         # Forward pass
         outputs = model(data)
-        loss = nn.CrossEntropyLoss()(outputs, targets)
+        loss = nn.SoftmaxLoss()(outputs, targets)
         
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        scheduler.step()  # Update learning rate
         
-        # Logging
-        if batch_idx % 100 == 0:
-            current_lr = scheduler.get_last_lr()
-            print(f'Epoch: {epoch}, Batch: {batch_idx}, LR: {current_lr:.6f}, Loss: {loss.item():.4f}')
+    # Update learning rate after each epoch
+    scheduler.step()
+    current_lr = scheduler.get_last_lr()
+    print(f'Epoch: {epoch}, LR: {current_lr:.6f}, Loss: {loss.item():.4f}')
 ```
 
 ### Checkpoint Integration
@@ -248,10 +271,10 @@ checkpoint = {
     'epoch': epoch,
     'loss': loss
 }
-genesis.save_checkpoint(checkpoint, 'checkpoint.pth')
+genesis.save(checkpoint, 'checkpoint.pth')
 
 # Load scheduler state
-checkpoint = genesis.load_checkpoint('checkpoint.pth')
+checkpoint = genesis.load('checkpoint.pth')
 model.load_state_dict(checkpoint['model_state_dict'])
 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
@@ -283,16 +306,30 @@ scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
 ### Transformer Training Schedule
 ```python
-# Typical transformer training schedule
-def get_transformer_schedule(optimizer, d_model=512, warmup_steps=4000):
-    def lr_lambda(step):
-        if step == 0:
-            return 0
-        return min(step ** -0.5, step * warmup_steps ** -1.5) * (d_model ** -0.5)
-    
-    return optim.LambdaLR(optimizer, lr_lambda=lr_lambda)
+# Typical transformer training schedule with warmup
+from genesis.optim.lr_scheduler import get_cosine_schedule_with_warmup
 
-scheduler = get_transformer_schedule(optimizer, d_model=512, warmup_steps=4000)
+# 10K warmup steps, 100K total steps
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer, 
+    num_warmup_steps=10000,
+    num_training_steps=100000
+)
+```
+
+### Custom Schedule Function
+```python
+def custom_schedule(epoch, warmup_epochs=5, total_epochs=100):
+    """Custom schedule with warmup and decay."""
+    if epoch < warmup_epochs:
+        # Linear warmup
+        return (epoch + 1) / warmup_epochs
+    else:
+        # Exponential decay after warmup
+        progress = (epoch - warmup_epochs) / (total_epochs - warmup_epochs)
+        return 0.5 ** (progress * 3)  # Decay to 1/8 of original
+
+scheduler = LambdaLR(optimizer, lr_lambda=lambda e: custom_schedule(e))
 ```
 
 ### Learning Rate Range Test
@@ -302,14 +339,18 @@ def lr_range_test(model, optimizer, start_lr=1e-7, end_lr=10, num_it=100):
     lrs = []
     losses = []
     
+    # Exponential growth from start_lr to end_lr
     lr_lambda = lambda step: (end_lr / start_lr) ** (step / num_it)
-    scheduler = optim.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
+    
+    # Set initial learning rate
+    optimizer.lr = start_lr
     
     for i in range(num_it):
         # Training step
         loss = train_step(model, batch)
         losses.append(loss)
-        lrs.append(scheduler.get_last_lr())
+        lrs.append(optimizer.lr)
         
         scheduler.step()
         
@@ -319,21 +360,12 @@ def lr_range_test(model, optimizer, start_lr=1e-7, end_lr=10, num_it=100):
     return lrs, losses
 ```
 
-## Migration from PyTorch
+## Implementation Notes
 
-Genesis learning rate schedulers are designed to be drop-in replacements for PyTorch schedulers:
+The Genesis LambdaLR scheduler is a simplified but effective implementation that:
+- Directly modifies the optimizer's learning rate attribute
+- Maintains minimal state (epoch counter and base learning rate)
+- Provides flexible scheduling through lambda functions
+- Is compatible with all Genesis optimizers
 
-```python
-# PyTorch code
-import torch.optim as optim
-scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
-
-# Genesis equivalent
-import genesis.optim as optim
-scheduler = optim.LambdaLR(
-    optimizer, 
-    lr_lambda=lambda epoch: 0.5 * (1 + math.cos(math.pi * epoch / 100))
-)
-```
-
-The API is compatible, making it easy to migrate existing PyTorch training scripts to Genesis.
+The API is designed to be familiar to PyTorch users while being simpler and more direct in its implementation.

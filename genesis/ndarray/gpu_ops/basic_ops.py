@@ -1,6 +1,7 @@
 """
 Basic arithmetic operations for GPU backend.
 """
+import numpy as np
 import triton
 import triton.language as tl
 from ..cuda_storage import CUDAStorage
@@ -544,7 +545,6 @@ def pow(x, scalar):
             return result
         else:
             # base^tensor = exp(tensor * log(base))
-            import numpy as np
             log_base = np.log(base_scalar)
             scaled = mul_scalar_kernel_wrapper(tensor, log_base)
             return exp(scaled)

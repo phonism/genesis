@@ -232,7 +232,7 @@ class Tensor:
         return detached
     
     def cpu(self):
-        return Tensor(self.data.cpu(), device=genesis.cpu())
+        return Tensor(self.data.cpu(), device=genesis.device('cpu'))
 
     @staticmethod
     def _array_from_numpy(numpy_array, device, dtype):

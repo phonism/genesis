@@ -15,10 +15,10 @@ import genesis.nn.functional as F
 import genesis
 
 _DEVICES = [
-        genesis.cpu(),
+        genesis.device('cpu'),
         pytest.param(
-                genesis.cuda(), 
-                marks=pytest.mark.skipif(not genesis.cuda().enabled(), reason="No GPU"))]
+                genesis.device("cuda"), 
+                marks=pytest.mark.skipif(not genesis.device("cuda").enabled(), reason="No GPU"))]
 
 
 SOFTMAX_SHAPES = [
@@ -76,7 +76,7 @@ def test_batchnorm1d(shape, device):
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     norm = genesis.nn.BatchNorm1d(shape[1])
-    if device == genesis.cuda():
+    if device == genesis.device("cuda"):
         norm.cuda()
     C = norm(A)
     TC = torch.nn.BatchNorm1d(shape[1])(TA)
@@ -109,7 +109,7 @@ def test_linear(shape, device):
     linear = genesis.nn.Linear(shape[1], 10)
     linear.weight = genesis.nn.Parameter(T_linear.weight.detach().numpy())
     linear.bias = genesis.nn.Parameter(T_linear.bias.detach().numpy())
-    if device == genesis.cuda():
+    if device == genesis.device("cuda"):
         linear.cuda()
     C = linear(A)
     np.testing.assert_allclose(TC.detach().numpy(), C.detach().numpy(), atol=1e-5, rtol=1e-5)
@@ -136,7 +136,7 @@ def test_layernorm(shape, device):
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     norm = genesis.nn.LayerNorm(shape[-1])
-    if device == genesis.cuda():
+    if device == genesis.device("cuda"):
         norm.cuda()
     C = norm(A)
     TC = torch.nn.LayerNorm(shape[-1])(TA)
@@ -160,14 +160,14 @@ def test_fusedlayernorm(shape, device):
         - Backward gradients match PyTorch implementation
         - Skips test on CPU devices
     """
-    if device == genesis.cpu():
+    if device == genesis.device('cpu'):
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     norm = genesis.nn.FusedLayerNorm(shape[-1])
-    if device == genesis.cuda():
+    if device == genesis.device("cuda"):
         norm.cuda()
     C = norm(A)
     TC = torch.nn.LayerNorm(shape[-1])(TA)
@@ -233,7 +233,7 @@ def test_onehead_attention(shape, device):
     attn.w_out = genesis.nn.Parameter(torch_attn.out_proj.weight.detach().numpy().T)
     M = torch.triu(-float("inf") * torch.ones(shape[1], shape[1]), 1)
 
-    if device == genesis.cuda():
+    if device == genesis.device("cuda"):
         attn.cuda()
     genesis_out = attn(A)
     torch_out = torch_attn(TA, TA, TA, attn_mask=M)
@@ -280,7 +280,7 @@ def test_multihead_attention(shape, device):
     attn.w_out = genesis.nn.Parameter(torch_attn.out_proj.weight.detach().numpy().T)
     M = torch.triu(-float("inf") * torch.ones(shape[1], shape[1]), 1)
 
-    if device == genesis.cuda():
+    if device == genesis.device("cuda"):
         attn.cuda()
     genesis_out = attn(A)
     torch_out = torch_attn(TA, TA, TA, attn_mask=M)
@@ -313,7 +313,7 @@ def test_fused_multihead_attention(shape, device):
         - Backward gradients match PyTorch implementation
         - Skips test on CPU devices
     """
-    if device == genesis.cpu():
+    if device == genesis.device('cpu'):
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device, requires_grad=True)
@@ -328,7 +328,7 @@ def test_fused_multihead_attention(shape, device):
     attn.w_out = genesis.nn.Parameter(torch_attn.out_proj.weight.detach().numpy().T)
     M = torch.triu(-float("inf") * torch.ones(shape[1], shape[1]), 1)
 
-    if device == genesis.cuda():
+    if device == genesis.device("cuda"):
         attn.cuda()
     genesis_out = attn(A)
     torch_out = torch_attn(TA, TA, TA, attn_mask=M)
@@ -359,7 +359,7 @@ def test_scaled_dot_product_attention(shape, device):
         - Causal masking is automatically applied
         - Skips test on CPU devices
     """
-    if device == genesis.cpu():
+    if device == genesis.device('cpu'):
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _Q = np.random.randn(*shape).astype(np.float32)
     Q = genesis.Tensor(_Q, device=device)
@@ -406,7 +406,7 @@ def test_embedding(device):
     torch_embed = torch.nn.Embedding(num_embeddings, embedding_dim)
     embed.weight = genesis.nn.Parameter(torch_embed.weight.detach().numpy())
 
-    if device == genesis.cuda():
+    if device == genesis.device("cuda"):
         embed.cuda()
 
     genesis_out = embed(A)

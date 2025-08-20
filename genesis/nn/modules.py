@@ -452,15 +452,26 @@ class BatchNorm1d(Module):
         """
         if self.training:
             batch = x.shape[0]
-            mean = F.summation(x, axis=0) / batch
-            self.running_mean = (self.momentum * mean.detach() + (1 - self.momentum) * self.running_mean).detach()
-            var = F.summation((x - mean) ** 2, axis=0) / batch
-            self.running_var = (self.momentum * var.detach() + (1 - self.momentum) * self.running_var).detach()
+            # Use keepdims to maintain shape consistency
+            mean = F.summation(x, axis=0, keepdims=True) / batch
+            mean_squeezed = mean.squeeze(0)
+            self.running_mean = (self.momentum * mean_squeezed.detach() + (1 - self.momentum) * self.running_mean).detach()
+            
+            # Compute variance with keepdims
+            centered = x - mean
+            var = F.summation(centered ** 2, axis=0, keepdims=True) / batch
+            var_squeezed = var.squeeze(0)
+            self.running_var = (self.momentum * var_squeezed.detach() + (1 - self.momentum) * self.running_var).detach()
+            
+            # Normalize
+            x_normalized = centered / F.sqrt(var + self.eps)
         else:
             mean = self.running_mean
             var = self.running_var
-        x = (x - mean) / (var + self.eps) ** 0.5
-        x = self.weight * x + self.bias
+            x_normalized = (x - mean) / F.sqrt(var + self.eps)
+        
+        # Scale and shift
+        x = self.weight * x_normalized + self.bias
         return x
 
 
@@ -564,7 +575,7 @@ class Softmax(Module):
         """
         Forward pass of the softmax activation function.
         """
-        if x.device == genesis.cpu() or genesis.use_triton is False:
+        if x.device == genesis.device('cpu') or genesis.use_triton is False:
             x_exp = F.exp(x - F.max(x, self.dim, keepdims=True))
             x = x_exp / F.summation(x_exp, axis=self.dim, keepdims=True)
             return x

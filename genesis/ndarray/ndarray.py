@@ -482,6 +482,22 @@ class NDArray:
         out.data = self.device.broadcast_to(self.data, new_shape)
         return out
 
+    def squeeze(self, dim=None):
+        """Remove dimensions of size 1"""
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = self.device.squeeze(self.data, dim)
+        return out
+
+    def unsqueeze(self, dim):
+        """Add a dimension of size 1"""
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = self.device.unsqueeze(self.data, dim)
+        return out
+
     def __getitem__(self, idxs):
         # Optimized: avoid NDArray.make() overhead
         if isinstance(idxs, NDArray):
@@ -612,12 +628,7 @@ class NDArray:
         Returns:
             int: Element size (bytes)
         """
-        if hasattr(self.data, 'itemsize'):
-            return self.data.itemsize
-        else:
-            # Calculate from dtype
-            import numpy as np
-            return np.dtype(self._dtype).itemsize
+        return self.data.itemsize
     
     @property
     def is_cuda(self):
@@ -767,6 +778,12 @@ def sqrt(a):
 
 def split(a, cnt, dim=None):
     return a.split(cnt, dim=dim)
+
+def squeeze(a, dim=None):
+    return a.squeeze(dim)
+
+def unsqueeze(a, dim):
+    return a.unsqueeze(dim)
 
 def view(a, new_shape):
     return a.view(new_shape)

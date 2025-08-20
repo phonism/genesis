@@ -7,8 +7,6 @@ over CPU (NumPy) and GPU (CUDA) backends for unified tensor computation.
 from . import ndarray as array_api
 from .ndarray import (
         all_devices,      # List of all available devices
-        cpu,              # CPU device constructor
-        cuda,             # CUDA device constructor  
         device,           # Generic device constructor
         default_device,   # Get default device
         Device,           # Device class

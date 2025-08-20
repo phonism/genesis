@@ -41,7 +41,7 @@ git checkout -b feature/your-feature-name
 
 ### 2. Development Environment Setup
 
-See the [Development Environment Configuration](development.md) documentation for details.
+See the [Development Environment Configuration](development_en.md) documentation for details.
 
 ### 3. Code Development
 
@@ -271,6 +271,6 @@ By contributing code, you agree that your contributions will be licensed under t
 ---
 
 !!! info "Start Contributing"
-    Ready to start contributing? Begin with [Development Environment Configuration](development.md)!
+    Ready to start contributing? Begin with [Development Environment Configuration](development_en.md)!
 
 Thank you for your contribution to the Genesis project! 🎉

@@ -373,7 +373,7 @@ class ComprehensiveOpRegistry:
                 filtered[name] = op
         return filtered
 
-def filter_outliers(times, method="iqr", iqr_factor=2.5):
+def filter_outliers(times, method="iqr", iqr_factor=1.8):
     """
     Filter outliers from timing measurements using statistical methods optimized for GPU timing.
     
@@ -386,18 +386,31 @@ def filter_outliers(times, method="iqr", iqr_factor=2.5):
         filtered_times: List of times with outliers removed
         outlier_info: Dict with outlier statistics
     """
-    if len(times) < 3:
+    # 增加最小样本要求确保统计有效性  
+    if len(times) < 10:
         return times, {"outliers_removed": 0, "original_count": len(times)}
     
     times = np.array(times)
     original_count = len(times)
     
     if method == "gpu":
-        # GPU-specific outlier detection
-        # Remove only extreme outliers (>10x median or <0.1x median)
+        # GPU-optimized method: 更保守更稳健的异常值检测
         median_time = np.median(times)
-        lower_bound = median_time * 0.1   # 10 times below median
-        upper_bound = median_time * 10.0  # 10 times above median
+        mad = np.median(np.abs(times - median_time))  # 中位绝对偏差，更稳健
+        
+        if mad == 0:  # 如果MAD为0，使用标准差
+            std_time = np.std(times)
+            lower_bound = median_time - 3 * std_time
+            upper_bound = median_time + 3 * std_time
+        else:
+            # 基于MAD的更稳健的界限
+            mad_scaled = mad * 1.4826  # 正态分布校正因子
+            lower_bound = median_time - 3 * mad_scaled
+            upper_bound = median_time + 3 * mad_scaled
+        
+        # 额外保护：确保不会过度过滤
+        lower_bound = max(lower_bound, median_time * 0.2)  # 最多5倍差异
+        upper_bound = min(upper_bound, median_time * 5.0)   # 最多5倍差异
         
         mask = (times >= lower_bound) & (times <= upper_bound)
         filtered_times = times[mask]
@@ -451,7 +464,7 @@ def filter_outliers(times, method="iqr", iqr_factor=2.5):
 class BenchmarkTimer:
     """Professional benchmark timer with comprehensive metrics and outlier filtering"""
     
-    def __init__(self, warmup_iters=20, test_iters=100, outlier_filter=True):
+    def __init__(self, warmup_iters=50, test_iters=200, outlier_filter=True):
         self.warmup_iters = warmup_iters
         self.test_iters = test_iters
         self.outlier_filter = outlier_filter
@@ -461,6 +474,9 @@ class BenchmarkTimer:
         # Create CUDA events for precise timing
         self.start_event = torch.cuda.Event(enable_timing=True)
         self.end_event = torch.cuda.Event(enable_timing=True)
+        
+        # 稳定性改进: 预热状态跟踪和缓存清理
+        self._warmup_done = False
     
     def _get_theoretical_bandwidth(self) -> float:
         """Get theoretical memory bandwidth for current GPU"""
@@ -581,17 +597,26 @@ class BenchmarkTimer:
         """Run benchmark with CUDA events for precise timing"""
         tensor_sizes = tensor_sizes or [0]
         
-        # Warmup
-        for _ in range(self.warmup_iters):
+        # 改进的Warmup: 清理缓存并充分预热
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()  # 清理GPU缓存确保一致环境
+        
+        # 充分warmup: 增加迭代次数并确保编译完成
+        for i in range(self.warmup_iters):
             try:
                 _ = fn(*args, **kwargs)
+                # 每隔10次同步一次，避免过度同步开销
+                if i % 10 == 9 and torch.cuda.is_available():
+                    torch.cuda.synchronize()
             except Exception:
                 # Silent failure during warmup
                 break
         
-        # Single sync after warmup
+        # 最终同步确保所有操作完成
         if torch.cuda.is_available():
             torch.cuda.synchronize()
+            # 再次清理缓存确保测试时的一致性
+            torch.cuda.empty_cache()
         
         # Actual timing using CUDA events
         times = []
@@ -694,17 +719,24 @@ class BenchmarkTimer:
         # Get iteration counts
         warmup_iters, test_iters = self._get_iterations(tensor_size)
         
-        # Warmup to eliminate compilation overhead
-        for _ in range(warmup_iters):
+        # 改进的Warmup策略与real timing一致
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        # 充分warmup确保编译完成
+        for i in range(warmup_iters):
             try:
                 _ = fn(*args, **kwargs)
+                # 每隔10次同步一次
+                if i % 10 == 9 and torch.cuda.is_available():
+                    torch.cuda.synchronize()
             except Exception:
-                # Silent failure during warmup
                 break
         
-        # Single sync after warmup
+        # 最终同步和缓存清理
         if torch.cuda.is_available():
             torch.cuda.synchronize()
+            torch.cuda.empty_cache()
         
         # Batch timing with CUDA events
         self.start_event.record()
@@ -885,7 +917,7 @@ def benchmark_activation_functions(shapes: List[Tuple[int, ...]], dtype=torch.fl
         np_x = np.random.randn(*shape).astype(np.float32 if dtype == torch.float32 else np.float16)
         
         torch_x = torch.from_numpy(np_x).cuda()
-        genesis_x = genesis.tensor(np_x, device=genesis.cuda())
+        genesis_x = genesis.tensor(np_x, device=genesis.device("cuda"))
         
         for act_name, torch_act, genesis_act in activations:
             torch_results = timer.benchmark(torch_act, torch_x)
@@ -918,7 +950,7 @@ def benchmark_reduction_ops(shapes: List[Tuple[int, ...]], dtype=torch.float32):
         np_x = np.random.randn(*shape).astype(np.float32 if dtype == torch.float32 else np.float16)
         
         torch_x = torch.from_numpy(np_x).cuda()
-        genesis_x = genesis.tensor(np_x, device=genesis.cuda())
+        genesis_x = genesis.tensor(np_x, device=genesis.device("cuda"))
         
         # Test different reduction operations
         reductions = [
@@ -970,7 +1002,7 @@ def benchmark_memory_ops(shapes: List[Tuple[int, ...]], dtype=torch.float32):
         np_x = np.random.randn(*shape).astype(np.float32 if dtype == torch.float32 else np.float16)
         
         torch_x = torch.from_numpy(np_x).cuda()
-        genesis_x = genesis.tensor(np_x, device=genesis.cuda())
+        genesis_x = genesis.tensor(np_x, device=genesis.device("cuda"))
         
         # Test memory operations
         operations = [
@@ -1034,8 +1066,8 @@ def benchmark_broadcast_ops(dtype=torch.float32):
         
         torch_a = torch.from_numpy(np_a).cuda()
         torch_b = torch.from_numpy(np_b).cuda()
-        genesis_a = genesis.tensor(np_a, device=genesis.cuda())
-        genesis_b = genesis.tensor(np_b, device=genesis.cuda())
+        genesis_a = genesis.tensor(np_a, device=genesis.device("cuda"))
+        genesis_b = genesis.tensor(np_b, device=genesis.device("cuda"))
         
         # Benchmark addition with broadcasting
         torch_results = timer.benchmark(lambda: torch_a + torch_b)
@@ -1405,8 +1437,8 @@ def benchmark_arithmetic_ops_professional(shapes_dict: Dict[str, List[Tuple[int,
                     
                     torch_a = torch.from_numpy(np_a).cuda()
                     torch_b = torch.from_numpy(np_b).cuda() if 'pow' not in op_key else None
-                    genesis_a = genesis.tensor(np_a, device=genesis.cuda())
-                    genesis_b = genesis.tensor(np_b, device=genesis.cuda()) if 'pow' not in op_key else None
+                    genesis_a = genesis.tensor(np_a, device=genesis.device("cuda"))
+                    genesis_b = genesis.tensor(np_b, device=genesis.device("cuda")) if 'pow' not in op_key else None
                     
                     tensor_size = np.prod(shape)
                     tensor_sizes = [tensor_size] if 'pow' in op_key else [tensor_size, tensor_size]
@@ -1509,7 +1541,7 @@ def benchmark_activation_functions_professional(shapes_dict: Dict[str, List[Tupl
                     np_x = np.random.randn(*shape).astype(np_dtype)
                     
                     torch_x = torch.from_numpy(np_x).to(dtype).cuda()
-                    genesis_x = genesis.tensor(np_x.astype(np.float32), device=genesis.cuda())  # Genesis uses float32
+                    genesis_x = genesis.tensor(np_x.astype(np.float32), device=genesis.device("cuda"))  # Genesis uses float32
                     
                     tensor_size = np.prod(shape)
                     tensor_sizes = [tensor_size]
@@ -1563,7 +1595,7 @@ class ComprehensiveBenchmarkRunner:
         """Create test data for benchmarking"""
         np_data = np.random.randn(*shape).astype(np.float32)
         torch_data = torch.from_numpy(np_data).to(dtype).cuda()
-        genesis_data = genesis.tensor(np_data, device=genesis.cuda())
+        genesis_data = genesis.tensor(np_data, device=genesis.device("cuda"))
         return np_data, torch_data, genesis_data
     
     def _benchmark_operation(self, op_spec: OpSpec, shape: Tuple[int, ...], 

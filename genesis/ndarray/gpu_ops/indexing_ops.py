@@ -228,9 +228,21 @@ def getitem(x, idxs):
 def setitem(x, idxs, other):
     """
     Set tensor elements by indices with optimizations for common cases.
+    Supports broadcasting to match CPU/PyTorch behavior.
     """
     if not isinstance(x, CUDAStorage):
         return x.__setitem__(idxs, other)
+    
+    # Handle broadcasting for CUDAStorage (to match CPU/PyTorch behavior)
+    if isinstance(other, CUDAStorage):
+        # Get target shape by creating a temporary view
+        target_view = x[idxs]
+        target_shape = target_view.shape
+        
+        # Check if broadcasting is needed
+        if other.shape != target_shape:
+            # Broadcast other to target shape
+            other = other.broadcast_to(target_shape)
     
     # For simple cases, CUDAStorage handles efficiently
     if isinstance(idxs, (int, slice)):

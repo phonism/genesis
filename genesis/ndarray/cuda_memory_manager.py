@@ -34,6 +34,18 @@ class Block:
     size: int         # block size  
     is_free: bool     # is free
     segment_id: int   # segment id
+
+
+@dataclass
+class RefCountedBlock:
+    """Reference-counted memory block for efficient pooling"""
+    ptr: int
+    size: int
+    is_free: bool
+    segment_id: int
+    ref_count: int = 1
+    last_used_time: float = 0.0
+    stream_id: Optional[int] = None
     
 class Segment:
     """
@@ -171,70 +183,592 @@ class Segment:
                 pass
 
 
-class TwoLevelCache:
-    """Two-level cache architecture - Stream-local cache + Global cache (with event synchronization)"""
+class FragmentationDetector:
+    """Detect and analyze memory fragmentation patterns"""
     
     def __init__(self):
+        self.fragmentation_threshold = 0.3  # 30% fragmentation triggers defrag
+        self.min_defrag_size = 1024 * 1024  # 1MB minimum for defrag consideration
+        self.fragmentation_history = []
+        self.defrag_operations = 0
+        
+    def analyze_fragmentation(self, memory_pool: dict, segments: list) -> Dict:
+        """Analyze current memory fragmentation levels"""
+        stats = {
+            'pool_fragmentation': self._analyze_pool_fragmentation(memory_pool),
+            'segment_fragmentation': self._analyze_segment_fragmentation(segments),
+            'overall_fragmentation': 0.0,
+            'needs_defrag': False,
+            'recommended_action': 'none'
+        }
+        
+        # Calculate overall fragmentation
+        pool_frag = stats['pool_fragmentation']['fragmentation_ratio']
+        segment_frag = stats['segment_fragmentation']['average_fragmentation']
+        stats['overall_fragmentation'] = (pool_frag + segment_frag) / 2
+        
+        # Determine if defragmentation is needed
+        if stats['overall_fragmentation'] > self.fragmentation_threshold:
+            stats['needs_defrag'] = True
+            stats['recommended_action'] = 'defragment'
+        elif pool_frag > 0.5:  # High pool fragmentation
+            stats['recommended_action'] = 'compact_pool'
+        elif segment_frag > 0.4:  # High segment fragmentation
+            stats['recommended_action'] = 'merge_segments'
+        
+        # Record in history
+        self.fragmentation_history.append({
+            'timestamp': time.time(),
+            'overall_fragmentation': stats['overall_fragmentation'],
+            'pool_fragmentation': pool_frag,
+            'segment_fragmentation': segment_frag
+        })
+        
+        # Keep only recent history
+        if len(self.fragmentation_history) > 100:
+            self.fragmentation_history = self.fragmentation_history[-50:]
+        
+        return stats
+    
+    def _analyze_pool_fragmentation(self, memory_pool: dict) -> Dict:
+        """Analyze fragmentation in memory pool buckets"""
+        if not memory_pool:
+            return {
+                'fragmentation_ratio': 0.0,
+                'wasted_space': 0,
+                'bucket_distribution': {},
+                'largest_contiguous': 0
+            }
+        
+        bucket_sizes = list(memory_pool.keys())
+        bucket_counts = {size: len(blocks) for size, blocks in memory_pool.items()}
+        
+        # Calculate wasted space due to bucket size granularity
+        total_wasted = 0
+        total_allocated = 0
+        largest_bucket = 0
+        
+        for bucket_size, blocks in memory_pool.items():
+            block_count = len(blocks)
+            total_allocated += bucket_size * block_count
+            largest_bucket = max(largest_bucket, bucket_size)
+            
+            # Estimate waste: assume average allocation is 75% of bucket size
+            avg_usage = bucket_size * 0.75
+            total_wasted += (bucket_size - avg_usage) * block_count
+        
+        fragmentation_ratio = total_wasted / max(1, total_allocated)
+        
+        return {
+            'fragmentation_ratio': fragmentation_ratio,
+            'wasted_space': total_wasted,
+            'bucket_distribution': bucket_counts,
+            'largest_contiguous': largest_bucket,
+            'total_buckets': len(bucket_sizes)
+        }
+    
+    def _analyze_segment_fragmentation(self, segments: list) -> Dict:
+        """Analyze fragmentation in memory segments"""
+        if not segments:
+            return {
+                'average_fragmentation': 0.0,
+                'worst_fragmentation': 0.0,
+                'fragmented_segments': 0,
+                'total_segments': 0
+            }
+        
+        segment_frags = []
+        fragmented_count = 0
+        
+        for segment in segments:
+            if hasattr(segment, 'blocks') and segment.blocks:
+                frag_ratio = self._calculate_segment_fragmentation(segment)
+                segment_frags.append(frag_ratio)
+                if frag_ratio > 0.3:  # Consider >30% as fragmented
+                    fragmented_count += 1
+        
+        if not segment_frags:
+            return {
+                'average_fragmentation': 0.0,
+                'worst_fragmentation': 0.0,
+                'fragmented_segments': 0,
+                'total_segments': len(segments)
+            }
+        
+        return {
+            'average_fragmentation': sum(segment_frags) / len(segment_frags),
+            'worst_fragmentation': max(segment_frags),
+            'fragmented_segments': fragmented_count,
+            'total_segments': len(segments)
+        }
+    
+    def _calculate_segment_fragmentation(self, segment) -> float:
+        """Calculate fragmentation ratio for a single segment"""
+        if not hasattr(segment, 'blocks') or not segment.blocks:
+            return 0.0
+        
+        # Count free blocks and gaps
+        free_blocks = [b for b in segment.blocks if b.is_free]
+        if len(free_blocks) <= 1:
+            return 0.0  # No fragmentation with 0 or 1 free block
+        
+        # Calculate fragmentation based on number of free blocks vs total free space
+        total_free_space = sum(b.size for b in free_blocks)
+        if total_free_space == 0:
+            return 0.0
+        
+        # More free blocks = more fragmentation
+        # Ideal case: 1 large free block
+        # Worst case: many small free blocks
+        fragmentation = (len(free_blocks) - 1) / len(free_blocks)
+        
+        return min(fragmentation, 1.0)
+    
+    def get_defrag_stats(self) -> Dict:
+        """Get defragmentation statistics"""
+        recent_history = self.fragmentation_history[-10:] if self.fragmentation_history else []
+        
+        return {
+            'defrag_operations': self.defrag_operations,
+            'fragmentation_threshold': self.fragmentation_threshold,
+            'recent_fragmentation': [h['overall_fragmentation'] for h in recent_history],
+            'trend': self._calculate_fragmentation_trend(),
+            'recommendation': self._get_defrag_recommendation()
+        }
+    
+    def _calculate_fragmentation_trend(self) -> str:
+        """Calculate fragmentation trend over recent history"""
+        if len(self.fragmentation_history) < 3:
+            return 'insufficient_data'
+        
+        recent = self.fragmentation_history[-5:]
+        if len(recent) < 2:
+            return 'stable'
+        
+        # Simple trend calculation
+        first_half = sum(h['overall_fragmentation'] for h in recent[:len(recent)//2])
+        second_half = sum(h['overall_fragmentation'] for h in recent[len(recent)//2:])
+        
+        first_avg = first_half / max(1, len(recent)//2)
+        second_avg = second_half / max(1, len(recent) - len(recent)//2)
+        
+        if second_avg > first_avg * 1.1:
+            return 'increasing'
+        elif second_avg < first_avg * 0.9:
+            return 'decreasing'
+        else:
+            return 'stable'
+    
+    def _get_defrag_recommendation(self) -> str:
+        """Get recommendation for defragmentation"""
+        if not self.fragmentation_history:
+            return 'monitor'
+        
+        current = self.fragmentation_history[-1]['overall_fragmentation']
+        trend = self._calculate_fragmentation_trend()
+        
+        if current > 0.5:
+            return 'urgent_defrag'
+        elif current > self.fragmentation_threshold:
+            if trend == 'increasing':
+                return 'schedule_defrag'
+            else:
+                return 'monitor_closely'
+        else:
+            return 'monitor'
+    
+    def get_defrag_history(self) -> Dict:
+        """Get complete defragmentation history and statistics"""
+        recent_history = self.fragmentation_history[-20:] if self.fragmentation_history else []
+        
+        return {
+            'defrag_operations_count': self.defrag_operations,
+            'fragmentation_threshold': self.fragmentation_threshold,
+            'min_defrag_size_mb': self.min_defrag_size / (1024 * 1024),
+            'recent_fragmentation': [
+                {
+                    'timestamp': h['timestamp'],
+                    'overall_fragmentation': h['overall_fragmentation'],
+                    'pool_fragmentation': h['pool_fragmentation'],
+                    'segment_fragmentation': h['segment_fragmentation']
+                }
+                for h in recent_history
+            ],
+            'fragmentation_trend': self._calculate_fragmentation_trend(),
+            'recommendation': self._get_defrag_recommendation(),
+            'history_length': len(self.fragmentation_history)
+        }
+    
+    def defragment(self, memory_pool: dict, segments: list) -> Optional[Dict]:
+        """Perform memory defragmentation on pool and segments"""
+        if not memory_pool:
+            return None
+            
+        # Analyze current fragmentation
+        frag_stats = self.analyze_fragmentation(memory_pool, segments)
+        
+        # Only defragment if needed
+        if not frag_stats['needs_defrag'] and frag_stats['overall_fragmentation'] < 0.1:
+            return None
+            
+        buckets_before = len([bucket for bucket, blocks in memory_pool.items() if blocks])
+        blocks_before = sum(len(blocks) for blocks in memory_pool.values())
+        
+        # Consolidate small buckets into larger ones
+        blocks_consolidated = 0
+        memory_freed = 0
+        
+        # Find small buckets that can be consolidated
+        small_buckets = [(size, blocks) for size, blocks in memory_pool.items() 
+                        if blocks and size < self.min_defrag_size and len(blocks) > 1]
+        
+        for bucket_size, blocks in small_buckets:
+            if len(blocks) > 1:
+                # Keep one block, free others to be reallocated as larger blocks
+                blocks_to_consolidate = blocks[1:]  # Keep first block
+                for block in blocks_to_consolidate:
+                    try:
+                        from cuda import cuda
+                        _ok(cuda.cuMemFree(block.ptr))
+                        memory_freed += block.size
+                        blocks_consolidated += 1
+                    except:
+                        pass  # Continue on error
+                
+                # Update the bucket
+                memory_pool[bucket_size] = blocks[:1]  # Keep only first block
+        
+        buckets_after = len([bucket for bucket, blocks in memory_pool.items() if blocks])
+        
+        # Record defragmentation operation
+        self.defrag_operations += 1
+        
+        # Calculate improvement
+        frag_after = self.analyze_fragmentation(memory_pool, segments)
+        improvement = frag_stats['overall_fragmentation'] - frag_after['overall_fragmentation']
+        
+        return {
+            'buckets_before': buckets_before,
+            'buckets_after': buckets_after,
+            'blocks_consolidated': blocks_consolidated,
+            'memory_freed': memory_freed,
+            'fragmentation_improvement': improvement,
+            'blocks_before': blocks_before,
+            'blocks_after': sum(len(blocks) for blocks in memory_pool.values())
+        }
+
+
+class MemoryPressureMonitor:
+    """Monitor GPU memory pressure and trigger cleanup"""
+    
+    def __init__(self):
+        self.pressure_threshold = 0.8  # 80% memory usage triggers cleanup
+        self.critical_threshold = 0.95  # 95% triggers aggressive cleanup
+        self.last_check_time = 0.0
+        self.check_interval = 1.0  # Check every 1 second
+        self.gc_triggered_count = 0
+        self.critical_gc_count = 0
+        
+    def check_memory_pressure(self) -> tuple[float, bool, bool]:
+        """Check current memory pressure, returns (usage_ratio, needs_gc, critical)"""
+        current_time = time.time()
+        
+        # Rate limit checks to avoid overhead
+        if current_time - self.last_check_time < self.check_interval:
+            return 0.0, False, False
+            
+        self.last_check_time = current_time
+        
+        try:
+            # Get GPU memory info
+            free_bytes, total_bytes = _ok(cuda.cuMemGetInfo())
+            used_bytes = total_bytes - free_bytes
+            usage_ratio = used_bytes / total_bytes
+            
+            needs_gc = usage_ratio > self.pressure_threshold
+            critical = usage_ratio > self.critical_threshold
+            
+            if critical:
+                self.critical_gc_count += 1
+            elif needs_gc:
+                self.gc_triggered_count += 1
+                
+            return usage_ratio, needs_gc, critical
+            
+        except Exception:
+            # If memory info fails, assume no pressure
+            return 0.0, False, False
+    
+    def get_stats(self) -> Dict:
+        """Get memory pressure monitoring statistics"""
+        return {
+            'pressure_threshold': f'{self.pressure_threshold * 100:.1f}%',
+            'critical_threshold': f'{self.critical_threshold * 100:.1f}%',
+            'gc_triggered_count': self.gc_triggered_count,
+            'critical_gc_count': self.critical_gc_count,
+            'last_check_time': self.last_check_time
+        }
+
+
+class RefCountedMemoryPool:
+    """Reference-counted memory pool with lazy cleanup and pressure-based eviction"""
+    
+    def __init__(self):
+        # Memory pool: bucket_size -> [RefCountedBlock]
+        self.memory_pool = defaultdict(list)
+        
+        # Active blocks: ptr -> RefCountedBlock (for reference counting)
+        self.active_blocks = {}
+        
         # Stream-level cache - Level 1 (very fast, no events)
-        self.stream_cache = defaultdict(lambda: defaultdict(list))  # stream -> bucket -> [ptr_list]
+        self.stream_cache = defaultdict(lambda: defaultdict(list))  # stream -> bucket -> [RefCountedBlock]
         
         # Global cache - Level 2 (with event synchronization)
-        self.global_cache = defaultdict(list)  # bucket -> [(ptr, event)]
+        self.global_cache = defaultdict(list)  # bucket -> [(RefCountedBlock, event)]
         
         # Fine-grained locks
         self.stream_locks = defaultdict(threading.Lock)
         self.global_lock = threading.Lock()
+        self.pool_lock = threading.Lock()
+        
+        # Configuration with PyTorch-like parameters
+        self.max_pool_size = 2 * 1024 * 1024 * 1024  # 2GB pool limit
+        self.current_pool_size = 0
+        self.gc_threshold = 0.8  # trigger cleanup at 80% usage
+        self.max_split_size_mb = 128  # prevent over-fragmentation
+        self.expandable_segments = True  # allow segment expansion
+        
+        # Memory pressure monitoring
+        self.pressure_monitor = MemoryPressureMonitor()
+        
+        # Fragmentation detection and management
+        self.fragmentation_detector = FragmentationDetector()
         
         # Statistics
-        self.cache_hits = 0
-        self.cache_misses = 0
-    
-    def get_from_cache(self, size: int, stream: int) -> Optional[int]:
-        """Get memory block from cache"""
+        self.pool_hits = 0
+        self.pool_misses = 0
+        self.ref_count_saves = 0  # blocks saved from immediate deallocation
+        self.pressure_cleanups = 0  # cleanups triggered by memory pressure
+        self.critical_cleanups = 0  # critical memory situation cleanups
+        self.defrag_operations = 0  # defragmentation operations performed
+        
+    def allocate_block(self, size: int, stream: Optional[int] = None) -> 'RefCountedBlock':
+        """Allocate a reference-counted block from pool or create new one"""
         bucket = self._get_bucket(size)
+        current_time = time.time()
         
-        # 1. Try stream-local cache (Level 1, very fast, no events)
-        with self.stream_locks[stream]:
-            if self.stream_cache[stream][bucket]:
-                self.cache_hits += 1
-                ptr = self.stream_cache[stream][bucket].pop()
-                # Comment out memory cleanup to avoid affecting gradient calculations
-                # _ok(cuda.cuMemsetD8(ptr, 0, bucket))
-                return ptr
+        # Try to get from memory pool first
+        with self.pool_lock:
+            if self.memory_pool[bucket]:
+                block = self.memory_pool[bucket].pop(0)
+                block.ref_count = 1
+                block.is_free = False
+                block.last_used_time = current_time
+                block.stream_id = stream
+                self.active_blocks[block.ptr] = block
+                self.current_pool_size -= bucket
+                self.pool_hits += 1
+                return block
         
-        # 2. Try global cache (Level 2, cross-stream reuse requires event synchronization)
-        with self.global_lock:
-            if self.global_cache[bucket]:
-                ptr, event = self.global_cache[bucket].pop()
-                # Wait for the event recorded by the release stream
-                _ok(cuda.cuEventDestroy(event))
-                # Comment out memory cleanup to avoid affecting gradient calculations
-                # _ok(cuda.cuMemsetD8(ptr, 0, bucket))
-                self.cache_hits += 1
-                return ptr
+        # Pool miss - try stream cache
+        if stream is not None:
+            with self.stream_locks[stream]:
+                if self.stream_cache[stream][bucket]:
+                    block = self.stream_cache[stream][bucket].pop()
+                    block.ref_count = 1
+                    block.is_free = False
+                    block.last_used_time = current_time
+                    self.active_blocks[block.ptr] = block
+                    self.pool_hits += 1
+                    return block
         
-        self.cache_misses += 1
-        return None
+        # Cache miss - allocate new block
+        try:
+            ptr = _ok(cuda.cuMemAlloc(bucket))
+            block = RefCountedBlock(
+                ptr=ptr,
+                size=bucket,
+                is_free=False,
+                segment_id=-1,  # pool blocks don't belong to segments
+                ref_count=1,
+                last_used_time=current_time,
+                stream_id=stream
+            )
+            self.active_blocks[ptr] = block
+            self.pool_misses += 1
+            return block
+        except Exception as e:
+            # Allocation failed - trigger garbage collection and retry
+            self._trigger_gc()
+            ptr = _ok(cuda.cuMemAlloc(bucket))
+            block = RefCountedBlock(
+                ptr=ptr,
+                size=bucket,
+                is_free=False,
+                segment_id=-1,
+                ref_count=1,
+                last_used_time=current_time,
+                stream_id=stream
+            )
+            self.active_blocks[ptr] = block
+            self.pool_misses += 1
+            return block
     
-    def put_to_cache(self, ptr: int, size: int, stream: int):
-        """Put memory block into cache"""
-        bucket = self._get_bucket(size)
+    def decrease_ref(self, ptr: int, stream: Optional[int] = None) -> bool:
+        """Decrease reference count and potentially return to pool"""
+        with self.pool_lock:
+            if ptr not in self.active_blocks:
+                return False
+            
+            block = self.active_blocks[ptr]
+            block.ref_count -= 1
+            
+            if block.ref_count <= 0:
+                # Reference count reached zero - move to pool instead of immediate free
+                del self.active_blocks[ptr]
+                block.is_free = True
+                block.last_used_time = time.time()
+                
+                # Return to memory pool if there's space
+                if self.current_pool_size + block.size <= self.max_pool_size:
+                    self.memory_pool[block.size].append(block)
+                    self.current_pool_size += block.size
+                    self.ref_count_saves += 1
+                    return True
+                else:
+                    # Pool is full - actually free to CUDA
+                    try:
+                        _ok(cuda.cuMemFree(ptr))
+                    except:
+                        pass
+                    return True
+            
+            return False  # Still has references
+    
+    def increase_ref(self, ptr: int) -> bool:
+        """Increase reference count for shared ownership"""
+        with self.pool_lock:
+            if ptr in self.active_blocks:
+                self.active_blocks[ptr].ref_count += 1
+                return True
+            return False
+    
+    def _trigger_gc(self, max_age: float = 60.0):
+        """Standard garbage collection of old blocks"""
+        current_time = time.time()
+        
+        stats = {
+            'freed_bytes': 0,
+            'freed_blocks': 0,
+            'pool_blocks_freed': 0,
+            'stream_blocks_freed': 0
+        }
+        
+        with self.pool_lock:
+            # Clean up old blocks from pool
+            total_freed = 0
+            blocks_freed = 0
+            for bucket, blocks in list(self.memory_pool.items()):
+                remaining_blocks = []
+                for block in blocks:
+                    if current_time - block.last_used_time > max_age:
+                        # Free old block
+                        try:
+                            _ok(cuda.cuMemFree(block.ptr))
+                            total_freed += block.size
+                            blocks_freed += 1
+                        except:
+                            pass
+                    else:
+                        remaining_blocks.append(block)
+                
+                if remaining_blocks:
+                    self.memory_pool[bucket] = remaining_blocks
+                else:
+                    del self.memory_pool[bucket]
+            
+            self.current_pool_size -= total_freed
+            stats['freed_bytes'] += total_freed
+            stats['freed_blocks'] += blocks_freed
+            stats['pool_blocks_freed'] = blocks_freed
+            
+        # Also clean up stream caches
+        stream_blocks_freed = 0
+        for stream_id in list(self.stream_cache.keys()):
+            with self.stream_locks[stream_id]:
+                for bucket in list(self.stream_cache[stream_id].keys()):
+                    remaining = []
+                    for block in self.stream_cache[stream_id][bucket]:
+                        if current_time - block.last_used_time <= max_age:
+                            remaining.append(block)
+                        else:
+                            try:
+                                _ok(cuda.cuMemFree(block.ptr))
+                                stats['freed_bytes'] += block.size
+                                stats['freed_blocks'] += 1
+                                stream_blocks_freed += 1
+                            except:
+                                pass
+                    
+                    if remaining:
+                        self.stream_cache[stream_id][bucket] = remaining
+                    else:
+                        del self.stream_cache[stream_id][bucket]
+        
+        stats['stream_blocks_freed'] = stream_blocks_freed
+        return stats
+    
+    def _emergency_cleanup(self):
+        """Emergency cleanup when system is under critical memory pressure"""
+        # Clear all caches immediately
+        total_freed = self.clear_all_caches()
+        
+        # Force aggressive GC with very short max age
+        gc_stats = self._trigger_gc(max_age=5.0)  # Keep only blocks used in last 5 seconds
+        
+        self.critical_cleanups += 1
+        
+        return {
+            'cache_freed': total_freed,
+            'gc_stats': gc_stats,
+            'total_freed': total_freed + gc_stats['freed_bytes']
+        }
+    
+    def put_to_pool(self, block: 'RefCountedBlock', stream: Optional[int] = None):
+        """Put block into appropriate cache level"""
+        bucket = block.size
+        block.last_used_time = time.time()
         
         # 1. Priority: stream-local cache (Level 1, no events, stream-order guarantee)
-        with self.stream_locks[stream]:
-            if len(self.stream_cache[stream][bucket]) < 10:
-                self.stream_cache[stream][bucket].append(ptr)
-                return
+        if stream is not None:
+            with self.stream_locks[stream]:
+                if len(self.stream_cache[stream][bucket]) < 10:
+                    self.stream_cache[stream][bucket].append(block)
+                    return
         
         # 2. Second priority: global cache (Level 2, must synchronize events)
-        event = _ok(cuda.cuEventCreate(0))
-        _ok(cuda.cuEventRecord(event, stream))
-        with self.global_lock:
-            if len(self.global_cache[bucket]) < 100:
-                self.global_cache[bucket].append((ptr, event))
+        if stream is not None:
+            event = _ok(cuda.cuEventCreate(0))
+            _ok(cuda.cuEventRecord(event, stream))
+            with self.global_lock:
+                if len(self.global_cache[bucket]) < 100:
+                    self.global_cache[bucket].append((block, event))
+                    return
+                else:
+                    # Global cache is full, destroy event and fall through to pool
+                    _ok(cuda.cuEventDestroy(event))
+        
+        # 3. Final fallback: memory pool
+        with self.pool_lock:
+            if self.current_pool_size + bucket <= self.max_pool_size:
+                self.memory_pool[bucket].append(block)
+                self.current_pool_size += bucket
             else:
-                # Global cache is full, fallback strategy: immediately destroy event and discard (defer to upper layer to free to Segment)
-                _ok(cuda.cuEventDestroy(event))
+                # Pool is full - actually free to CUDA
+                try:
+                    _ok(cuda.cuMemFree(block.ptr))
+                except:
+                    pass
     
     def _get_bucket(self, size: int) -> int:
         """Get bucket size - align up to 64B, reduce memory waste"""
@@ -247,44 +781,97 @@ class TwoLevelCache:
             bucket *= 2
         return bucket
     
-    def clear_cache_with(self, ptr_size_map, free_cb):
-        """Clear cache and return pointers to segment"""
+    def clear_all_caches(self):
+        """Clear all caches and free all pooled memory"""
+        total_freed = 0
+        
         with self.global_lock:
-            # Clear global cache, destroy events and return pointers
+            # Clear global cache, destroy events and free memory
             for bucket_list in self.global_cache.values():
-                for ptr, event in bucket_list:
+                for block, event in bucket_list:
                     try:
                         _ok(cuda.cuEventDestroy(event))
                     except:
                         pass  # Ignore destroy failure
-                    free_cb(ptr)  # Return pointer to segment
+                    try:
+                        _ok(cuda.cuMemFree(block.ptr))
+                        total_freed += block.size
+                    except:
+                        pass
             self.global_cache.clear()
             
             # Clear stream-local cache
             for stream in list(self.stream_cache.keys()):
                 with self.stream_locks[stream]:
-                    for bucket, lst in self.stream_cache[stream].items():
-                        for ptr in lst:
-                            free_cb(ptr)  # Return pointer to segment
+                    for bucket, blocks in self.stream_cache[stream].items():
+                        for block in blocks:
+                            try:
+                                _ok(cuda.cuMemFree(block.ptr))
+                                total_freed += block.size
+                            except:
+                                pass
                     self.stream_cache[stream].clear()
+        
+        # Clear memory pool
+        with self.pool_lock:
+            for bucket, blocks in self.memory_pool.items():
+                for block in blocks:
+                    try:
+                        _ok(cuda.cuMemFree(block.ptr))
+                        total_freed += block.size
+                    except:
+                        pass
+            self.memory_pool.clear()
+            self.current_pool_size = 0
+        
+        return total_freed
     
-    def clear_cache(self):
-        """Clear all cache - compatible interface, but will drop pointers!"""
-        # This interface has memory leak risk, recommend using clear_cache_with
-        with self.global_lock:
-            # Clear global cache, destroy events
-            for bucket_list in self.global_cache.values():
-                for ptr, event in bucket_list:
-                    try:
-                        _ok(cuda.cuEventDestroy(event))
-                    except:
-                        pass  # Ignore destroy failure
-            self.global_cache.clear()
+    def get_pool_stats(self) -> Dict:
+        """Get comprehensive memory pool statistics"""
+        with self.pool_lock:
+            pool_blocks = sum(len(blocks) for blocks in self.memory_pool.values())
+            active_blocks = len(self.active_blocks)
+            total_refs = sum(block.ref_count for block in self.active_blocks.values())
+        
+        # Get current memory pressure
+        usage_ratio, needs_gc, critical = self.pressure_monitor.check_memory_pressure()
+        
+        # Count cached blocks
+        stream_cached = 0
+        global_cached = 0
+        for stream_cache in self.stream_cache.values():
+            for bucket_blocks in stream_cache.values():
+                stream_cached += len(bucket_blocks)
+        
+        for bucket_blocks in self.global_cache.values():
+            global_cached += len(bucket_blocks)
+        
+        stats = {
+            'pool_hits': self.pool_hits,
+            'pool_misses': self.pool_misses,
+            'ref_count_saves': self.ref_count_saves,
+            'pool_size_mb': self.current_pool_size / (1024 * 1024),
+            'pool_blocks': pool_blocks,
+            'active_blocks': active_blocks,
+            'total_references': total_refs,
+            'hit_rate': f'{self.pool_hits / max(1, self.pool_hits + self.pool_misses) * 100:.1f}%',
             
-            # Clear stream-local cache
-            for stream in list(self.stream_cache.keys()):
-                with self.stream_locks[stream]:
-                    self.stream_cache[stream].clear()
+            # Memory pressure stats
+            'memory_usage_ratio': f'{usage_ratio * 100:.1f}%',
+            'memory_pressure': needs_gc,
+            'critical_pressure': critical,
+            'pressure_cleanups': self.pressure_cleanups,
+            'critical_cleanups': self.critical_cleanups,
+            
+            # Cache distribution
+            'stream_cached_blocks': stream_cached,
+            'global_cached_blocks': global_cached,
+            
+            # Pressure monitor stats
+            'pressure_monitor': self.pressure_monitor.get_stats()
+        }
+        
+        return stats
 
 # ============= Main Memory Manager =============
 
@@ -348,6 +935,9 @@ class CUDAMemoryManager:
         
         # Initialize default stream (already have current context)
         self.default_stream = self._create_stream()
+        
+        # Initialize reference counting memory pool
+        self.ref_pool = RefCountedMemoryPool()
         
     def _init_cuda(self):
         """Initialize CUDA environment using primary context"""
@@ -601,6 +1191,12 @@ class CUDAMemoryManager:
                     'utilization': f'{segment.used_bytes / segment.total_size * 100:.1f}%'
                 })
             
+            # Get ref pool stats
+            ref_pool_stats = self.ref_pool.get_pool_stats()
+            
+            # Get memory info
+            memory_info = get_memory_info()
+            
             stats = {
                 # Overall stats
                 'total_alloc_count': self.alloc_count + self.block_alloc_count,
@@ -622,7 +1218,13 @@ class CUDAMemoryManager:
                 'segment_memory_mb': total_segment_memory // (1024 * 1024),
                 'segment_used_mb': total_used_memory // (1024 * 1024),
                 'segment_utilization': f'{total_used_memory / max(1, total_segment_memory) * 100:.1f}%',
-                'segments': segment_stats
+                'segments': segment_stats,
+                
+                # Reference counting pool stats
+                'ref_pool': ref_pool_stats,
+                
+                # Memory info
+                'memory_info': memory_info
             }
             
             return stats
@@ -686,12 +1288,32 @@ def get_memory_manager() -> CUDAMemoryManager:
 # ============= External Interfaces =============
 
 def allocate_memory(nbytes: int, stream: Optional[int] = None) -> int:
-    """Allocate GPU memory"""
-    return get_memory_manager().allocate(nbytes, stream)
+    """Allocate GPU memory with reference counting for small allocations"""
+    manager = get_memory_manager()
+    
+    # Use ref pool for small allocations (< 1MB)
+    if nbytes < 1024 * 1024:
+        block = manager.ref_pool.allocate_block(nbytes, stream)
+        return block.ptr
+    else:
+        # Use traditional allocator for large allocations
+        return manager.allocate(nbytes, stream)
 
 def free_memory(ptr: int, nbytes: int = 0, stream: Optional[int] = None):
     """Free GPU memory with size info for caching"""
     get_memory_manager().free(ptr, stream)
+
+def increase_ref_count(ptr: int) -> bool:
+    """Increase reference count for shared tensor ownership"""
+    return get_memory_manager().ref_pool.increase_ref(ptr)
+
+def decrease_ref_count(ptr: int, stream: Optional[int] = None) -> bool:
+    """Decrease reference count and potentially return to pool"""
+    return get_memory_manager().ref_pool.decrease_ref(ptr, stream)
+
+def trigger_gc():
+    """Manually trigger garbage collection"""
+    return get_memory_manager().ref_pool._trigger_gc()
 
 def memory_stats() -> Dict:
     """Get memory statistics"""
@@ -700,6 +1322,81 @@ def memory_stats() -> Dict:
 def empty_cache():
     """Empty memory cache"""
     get_memory_manager().empty_cache()
+
+def get_memory_info() -> Dict:
+    """Get system memory information"""
+    try:
+        from cuda import cuda
+        free_bytes, total_bytes = _ok(cuda.cuMemGetInfo())
+        used_bytes = total_bytes - free_bytes
+        usage_ratio = used_bytes / total_bytes
+        
+        return {
+            'gpu_memory': {
+                'total_mb': total_bytes / (1024 * 1024),
+                'used_mb': used_bytes / (1024 * 1024),
+                'free_mb': free_bytes / (1024 * 1024),
+                'usage_ratio': f'{usage_ratio:.3f}'
+            },
+            'system_memory': {
+                'total_mb': 'N/A',
+                'used_mb': 'N/A',
+                'available_mb': 'N/A'
+            }
+        }
+    except Exception as e:
+        return {
+            'gpu_memory': {'error': str(e)},
+            'system_memory': {'error': 'Not available'}
+        }
+
+def check_memory_pressure() -> bool:
+    """Check if system is under memory pressure"""
+    manager = get_memory_manager()
+    usage_ratio, needs_gc, critical = manager.ref_pool.pressure_monitor.check_memory_pressure()
+    return needs_gc or critical
+
+def set_memory_config(**kwargs):
+    """Set memory management configuration"""
+    manager = get_memory_manager()
+    
+    if 'gc_threshold' in kwargs:
+        manager.ref_pool.gc_threshold = kwargs['gc_threshold']
+        manager.ref_pool.pressure_monitor.pressure_threshold = kwargs['gc_threshold']
+    
+    if 'max_pool_size_mb' in kwargs:
+        manager.ref_pool.max_pool_size = kwargs['max_pool_size_mb'] * 1024 * 1024
+    
+    if 'max_split_size_mb' in kwargs:
+        manager.ref_pool.max_split_size_mb = kwargs['max_split_size_mb']
+    
+    if 'fragmentation_threshold' in kwargs:
+        manager.ref_pool.fragmentation_detector.fragmentation_threshold = kwargs['fragmentation_threshold']
+
+def defragment_memory() -> Optional[Dict]:
+    """Manually trigger memory defragmentation"""
+    manager = get_memory_manager()
+    return manager.ref_pool.fragmentation_detector.defragment(
+        manager.ref_pool.memory_pool, 
+        []  # No segments for pool-based defrag
+    )
+
+def get_fragmentation_stats() -> Dict:
+    """Get memory fragmentation statistics"""
+    manager = get_memory_manager()
+    defrag_history = manager.ref_pool.fragmentation_detector.get_defrag_history()
+    
+    return {
+        'defrag_history': defrag_history
+    }
+
+def analyze_memory_fragmentation() -> Dict:
+    """Analyze current memory fragmentation"""
+    manager = get_memory_manager()
+    return manager.ref_pool.fragmentation_detector.analyze_fragmentation(
+        manager.ref_pool.memory_pool,
+        []  # No segments for pool-based analysis
+    )
 
 # ============= Test Functions =============
 

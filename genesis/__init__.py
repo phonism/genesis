@@ -21,8 +21,10 @@ from .init import (
         randn,
         ones,
         zeros,
+        full,
         empty,
         empty_like,
+        zeros_like,
         one_hot,
 )
 from .serialization import (
@@ -37,3 +39,4 @@ from . import optim
 from . import utils
 from .backend import *
 from .functional import *
+from . import cuda  # CUDA memory management utilities
