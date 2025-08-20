@@ -5,10 +5,6 @@
          <lastmod>2025-08-20</lastmod>
     </url>
     <url>
-         <loc>https://phonism.github.io/genesis/en/index.zh/</loc>
-         <lastmod>2025-08-20</lastmod>
-    </url>
-    <url>
          <loc>https://phonism.github.io/genesis/en/memory-allocator-optimization/</loc>
          <lastmod>2025-08-20</lastmod>
     </url>
@@ -46,6 +42,26 @@
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/en/api-reference/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/en/api-reference/functional/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/en/api-reference/genesis/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/en/api-reference/nn/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/en/api-reference/optim/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/en/api-reference/utils/</loc>
          <lastmod>2025-08-20</lastmod>
     </url>
     <url>
@@ -93,6 +109,10 @@
          <lastmod>2025-08-20</lastmod>
     </url>
     <url>
+         <loc>https://phonism.github.io/genesis/en/core-components/tensor/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
          <loc>https://phonism.github.io/genesis/en/getting-started/</loc>
          <lastmod>2025-08-20</lastmod>
     </url>
@@ -125,6 +145,10 @@
          <lastmod>2025-08-20</lastmod>
     </url>
     <url>
+         <loc>https://phonism.github.io/genesis/en/tutorials/amp-training/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
          <loc>https://phonism.github.io/genesis/en/tutorials/basic-training/</loc>
          <lastmod>2025-08-20</lastmod>
     </url>
@@ -133,11 +157,23 @@
          <lastmod>2025-08-20</lastmod>
     </url>
     <url>
+         <loc>https://phonism.github.io/genesis/en/tutorials/data-loading/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/en/tutorials/distributed-training/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
          <loc>https://phonism.github.io/genesis/en/tutorials/llm-training/</loc>
          <lastmod>2025-08-20</lastmod>
     </url>
     <url>
          <loc>https://phonism.github.io/genesis/en/tutorials/mixed-precision/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/en/tutorials/model-definition/</loc>
          <lastmod>2025-08-20</lastmod>
     </url>
     <url>
