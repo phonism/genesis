@@ -121,21 +121,21 @@ graph TB
 ## 🎓 学习路径
 
 ### 初学者
-1. [快速开始](getting-started/index.zh.zh.md) - 安装和第一个程序
-2. [基础教程](tutorials/basic-training.zh.zh.md) - 简单神经网络训练
-3. [API参考](api-reference/index.zh.zh.md) - 常用API使用
+1. [快速开始](getting-started/index.md) - 安装和第一个程序
+2. [基础教程](tutorials/basic-training.md) - 简单神经网络训练
+3. [API参考](api-reference/index.md) - 常用API使用
 
 ### 高级用户
-1. [架构设计](architecture/index.zh.zh.md) - 深入理解系统设计
-2. [自定义操作](tutorials/custom-ops.zh.zh.md) - 实现自定义操作
-3. [性能优化](performance/optimization-guide.zh.zh.md) - 性能分析和优化指南
-4. [性能调优](tutorials/performance-tuning.zh.zh.md) - 训练性能调优技巧
-5. [Qwen模型指南](models/qwen.zh.zh.md) - 使用和训练Qwen LLM模型
+1. [架构设计](architecture/index.md) - 深入理解系统设计
+2. [自定义操作](tutorials/custom-ops.md) - 实现自定义操作
+3. [性能优化](performance/optimization-guide.md) - 性能分析和优化指南
+4. [性能调优](tutorials/performance-tuning.md) - 训练性能调优技巧
+5. [Qwen模型指南](models/qwen.md) - 使用和训练Qwen LLM模型
 
 ### 贡献者
-1. [开发环境](contributing/development.zh.zh.md) - 配置开发环境
-2. [核心组件](core-components/index.zh.zh.md) - 理解内部实现
-3. [测试指南](contributing/testing.zh.zh.md) - 代码贡献指南
+1. [开发环境](contributing/development.md) - 配置开发环境
+2. [核心组件](core-components/index.md) - 理解内部实现
+3. [测试指南](contributing/testing.md) - 代码贡献指南
 
 ## 🌟 项目亮点
 
@@ -164,7 +164,7 @@ graph TB
 - **📝 文档改进** - 帮助改善文档质量
 - **💻 代码贡献** - 直接参与代码开发
 
-详情请参考 [贡献指南](contributing/index.zh.zh.md)。
+详情请参考 [贡献指南](contributing/index.md)。
 
 ## 📞 联系方式
 
@@ -186,7 +186,7 @@ graph TB
 
     立即开始使用Genesis构建您的第一个神经网络
 
-    [:octicons-arrow-right-24: 快速开始](getting-started/index.zh.zh.md)
+    [:octicons-arrow-right-24: 快速开始](getting-started/index.md)
 
 -   :material-github:{ .lg .middle } **查看源码**
 
