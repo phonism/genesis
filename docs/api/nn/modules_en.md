@@ -244,7 +244,7 @@ class Conv2d(Module):
     Args:
         in_channels: Number of input channels
         out_channels: Number of output channels
-        kernel_size: Size of convolution kernel
+        kernel_size: Size of convolving kernel
         stride: Stride of convolution (default: 1)
         padding: Zero-padding added to both sides (default: 0)
         bias: Whether to add bias (default: True)
@@ -259,6 +259,7 @@ class Conv2d(Module):
         >>> output = conv(x)  # Shape: (32, 64, 224, 224)
     """
 ```
+
 
 ### Activation Functions
 
@@ -281,37 +282,6 @@ class ReLU(Module):
     """
 ```
 
-#### `nn.Sigmoid`
-
-Sigmoid activation function.
-
-```python
-class Sigmoid(Module):
-    """
-    Sigmoid activation: f(x) = 1 / (1 + exp(-x))
-    
-    Example:
-        >>> sigmoid = nn.Sigmoid()
-        >>> x = genesis.randn(10)
-        >>> output = sigmoid(x)  # Values in (0, 1)
-    """
-```
-
-#### `nn.Tanh`
-
-Hyperbolic tangent activation.
-
-```python
-class Tanh(Module):
-    """
-    Tanh activation: f(x) = tanh(x)
-    
-    Example:
-        >>> tanh = nn.Tanh()
-        >>> x = genesis.randn(10)
-        >>> output = tanh(x)  # Values in (-1, 1)
-    """
-```
 
 #### `nn.SiLU` (Swish)
 
@@ -329,22 +299,6 @@ class SiLU(Module):
     """
 ```
 
-#### `nn.GELU`
-
-Gaussian Error Linear Unit activation.
-
-```python
-class GELU(Module):
-    """
-    GELU activation: f(x) = x * Φ(x)
-    where Φ(x) is the cumulative distribution function of standard Gaussian.
-    
-    Example:
-        >>> gelu = nn.GELU()
-        >>> x = genesis.randn(10)
-        >>> output = gelu(x)
-    """
-```
 
 #### `nn.Softmax`
 
@@ -369,20 +323,22 @@ class Softmax(Module):
 
 #### `nn.BatchNorm1d`
 
-Batch normalization for 1D or 2D inputs.
+Batch normalization for 1D inputs.
 
 ```python
 class BatchNorm1d(Module):
     """
-    Batch normalization over 2D or 3D input.
+    Batch normalization over 1D input.
     
     Args:
-        num_features: Number of features (C in [N, C] or [N, C, L])
+        dim: Number of features to normalize
         eps: Small value for numerical stability (default: 1e-5)
         momentum: Momentum for running stats (default: 0.1)
+        device: Device placement (optional)
+        dtype: Data type (default: "float32")
         
     Shape:
-        - Input: (N, C) or (N, C, L)
+        - Input: (N, C) where C = dim
         - Output: Same as input
         
     Example:
@@ -399,18 +355,20 @@ Layer normalization.
 ```python
 class LayerNorm(Module):
     """
-    Layer normalization over last dimensions.
+    Layer normalization over last dimension.
     
     Args:
-        normalized_shape: Shape of dimensions to normalize
+        dim: Dimension size to normalize
         eps: Small value for numerical stability (default: 1e-5)
+        device: Device placement (optional)
+        dtype: Data type (default: "float32")
         
     Shape:
-        - Input: (*, normalized_shape)
+        - Input: (..., dim)
         - Output: Same as input
         
     Example:
-        >>> ln = nn.LayerNorm([768])
+        >>> ln = nn.LayerNorm(768)
         >>> x = genesis.randn(32, 100, 768)
         >>> output = ln(x)  # Normalize over last dimension
     """
@@ -438,53 +396,6 @@ class Dropout(Module):
     """
 ```
 
-### Pooling Layers
-
-#### `nn.MaxPool2d`
-
-2D max pooling.
-
-```python
-class MaxPool2d(Module):
-    """
-    Max pooling over 2D input.
-    
-    Args:
-        kernel_size: Size of pooling window
-        stride: Stride of pooling (default: kernel_size)
-        padding: Zero-padding (default: 0)
-        
-    Shape:
-        - Input: (N, C, H, W)
-        - Output: (N, C, H_out, W_out)
-        
-    Example:
-        >>> pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        >>> x = genesis.randn(1, 16, 32, 32)
-        >>> output = pool(x)  # Shape: (1, 16, 16, 16)
-    """
-```
-
-#### `nn.AvgPool2d`
-
-2D average pooling.
-
-```python
-class AvgPool2d(Module):
-    """
-    Average pooling over 2D input.
-    
-    Args:
-        kernel_size: Size of pooling window
-        stride: Stride of pooling (default: kernel_size)
-        padding: Zero-padding (default: 0)
-        
-    Example:
-        >>> pool = nn.AvgPool2d(kernel_size=2, stride=2)
-        >>> x = genesis.randn(1, 16, 32, 32)
-        >>> output = pool(x)  # Shape: (1, 16, 16, 16)
-    """
-```
 
 ### Embedding Layers
 
@@ -524,21 +435,41 @@ class MultiheadAttention(Module):
     Multi-head attention mechanism.
     
     Args:
-        embed_dim: Embedding dimension
-        num_heads: Number of attention heads
-        dropout: Dropout probability (default: 0.0)
-        bias: Whether to add bias (default: True)
+        dim: Feature dimension (default: 64)
+        heads: Number of attention heads (default: 1)
+        device: Device placement (optional)
+        dtype: Data type (default: "float32")
         
-    Shape:
-        - Query: (L, N, E) or (N, L, E)
-        - Key: (S, N, E) or (N, S, E)
-        - Value: (S, N, E) or (N, S, E)
-        - Output: (L, N, E) or (N, L, E)
+    Note: Uses QKV projection matrix internally.
         
     Example:
-        >>> attn = nn.MultiheadAttention(embed_dim=512, num_heads=8)
-        >>> x = genesis.randn(10, 32, 512)  # (seq_len, batch, embed_dim)
-        >>> output, weights = attn(x, x, x)
+        >>> attn = nn.MultiheadAttention(dim=64, heads=8)
+        >>> x = genesis.randn(32, 10, 64)  # (batch, seq_len, dim)
+        >>> output, attention_weights = attn(x)
+    """
+```
+
+#### `nn.FusedMultiheadAttention`
+
+Fused multi-head attention with optimized kernels.
+
+```python
+class FusedMultiheadAttention(Module):
+    """
+    Fused multi-head attention using optimized kernels.
+    
+    Args:
+        dim: Feature dimension (default: 64)
+        heads: Number of attention heads (default: 1)
+        device: Device placement (optional)
+        dtype: Data type (default: "float32")
+        
+    Note: Returns None for attention weights when using fused kernels.
+        
+    Example:
+        >>> attn = nn.FusedMultiheadAttention(dim=64, heads=8)
+        >>> x = genesis.randn(32, 10, 64)  # (batch, seq_len, dim)
+        >>> output, _ = attn(x)  # weights is None
     """
 ```
 
@@ -614,120 +545,128 @@ class ModuleDict(Module):
 
 ## Loss Functions
 
-### `nn.MSELoss`
+### `nn.SoftmaxLoss`
 
-Mean squared error loss.
-
-```python
-class MSELoss(Module):
-    """
-    Mean squared error loss: L = mean((y_pred - y_true)^2)
-    
-    Args:
-        reduction: 'mean', 'sum', or 'none' (default: 'mean')
-        
-    Example:
-        >>> loss_fn = nn.MSELoss()
-        >>> pred = genesis.randn(32, 10)
-        >>> target = genesis.randn(32, 10)
-        >>> loss = loss_fn(pred, target)
-    """
-```
-
-### `nn.CrossEntropyLoss`
-
-Cross entropy loss for classification.
+Softmax cross-entropy loss.
 
 ```python
-class CrossEntropyLoss(Module):
+class SoftmaxLoss(Module):
     """
-    Cross entropy loss for multi-class classification.
+    Softmax cross-entropy loss for classification.
     
-    Args:
-        weight: Manual rescaling weight for each class
-        reduction: 'mean', 'sum', or 'none' (default: 'mean')
-        
+    Handles label masking with -1 values.
+    
     Shape:
         - Input: (N, C) where C is number of classes
-        - Target: (N,) containing class indices
+        - Target: (N,) containing class indices or -1 for masked positions
         
     Example:
-        >>> loss_fn = nn.CrossEntropyLoss()
+        >>> loss_fn = nn.SoftmaxLoss()
         >>> logits = genesis.randn(32, 10)  # 32 samples, 10 classes
         >>> targets = genesis.randint(0, 10, (32,))
         >>> loss = loss_fn(logits, targets)
     """
 ```
 
-### `nn.BCELoss`
+## Additional Modules
 
-Binary cross entropy loss.
+### `nn.Residual`
+
+Residual connection wrapper.
 
 ```python
-class BCELoss(Module):
+class Residual(Module):
     """
-    Binary cross entropy loss.
+    Residual connection wrapper.
     
     Args:
-        reduction: 'mean', 'sum', or 'none' (default: 'mean')
-        
-    Shape:
-        - Input: (N, *) where * means any number of dimensions
-        - Target: Same shape as input
+        fn: Module to wrap with residual connection
         
     Example:
-        >>> loss_fn = nn.BCELoss()
-        >>> pred = genesis.sigmoid(genesis.randn(32, 1))
-        >>> target = genesis.randint(0, 2, (32, 1)).float()
-        >>> loss = loss_fn(pred, target)
+        >>> layer = nn.Residual(nn.Linear(256, 256))
+        >>> x = genesis.randn(32, 256)
+        >>> output = layer(x)  # output = fn(x) + x
     """
 ```
 
-## Utilities
+### `nn.FusedLayerNorm`
 
-### Weight Initialization
+Fused layer normalization with optimized kernels.
 
 ```python
-def init_weights(module: Module, init_type: str = 'xavier'):
+class FusedLayerNorm(Module):
     """
-    Initialize module weights.
+    Fused layer normalization for better performance.
     
     Args:
-        module: Module to initialize
-        init_type: 'xavier', 'kaiming', 'normal', 'uniform'
+        dim: Dimension to normalize
+        eps: Small value for stability (default: 1e-6)
         
     Example:
-        >>> model = nn.Linear(10, 5)
-        >>> init_weights(model, 'xavier')
+        >>> ln = nn.FusedLayerNorm(768)
+        >>> x = genesis.randn(32, 100, 768)
+        >>> output = ln(x)
     """
 ```
 
-### Gradient Clipping
+### `nn.RMSNorm`
+
+Root Mean Square normalization.
 
 ```python
-def clip_grad_norm_(parameters, max_norm: float, norm_type: float = 2.0):
+class RMSNorm(Module):
     """
-    Clip gradients by norm.
+    RMS normalization (used in some LLMs).
     
     Args:
-        parameters: Iterable of parameters
-        max_norm: Maximum norm value
-        norm_type: Type of norm (default: 2.0)
+        dim: Dimension to normalize
+        eps: Small value for stability (default: 1e-6)
         
     Example:
-        >>> nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        >>> rms = nn.RMSNorm(768)
+        >>> x = genesis.randn(32, 100, 768)
+        >>> output = rms(x)
     """
+```
 
-def clip_grad_value_(parameters, clip_value: float):
+### `nn.RotaryEmbedding`
+
+Rotary position embeddings.
+
+```python
+class RotaryEmbedding(Module):
     """
-    Clip gradients by value.
+    Rotary position embeddings for transformers.
     
     Args:
-        parameters: Iterable of parameters
-        clip_value: Maximum absolute value
+        dim: Embedding dimension
+        max_position_embeddings: Maximum sequence length (default: 2048)
+        base: Base for frequency computation (default: 10000)
         
     Example:
-        >>> nn.utils.clip_grad_value_(model.parameters(), clip_value=0.5)
+        >>> rope = nn.RotaryEmbedding(64, max_position_embeddings=2048)
+        >>> x = genesis.randn(1, 8, 100, 64)  # (batch, heads, seq, dim)
+        >>> cos, sin = rope(x, seq_len=100)
+    """
+```
+
+### `nn.FeedFowardSwiGLU`
+
+SwiGLU feedforward network.
+
+```python
+class FeedFowardSwiGLU(Module):
+    """
+    SwiGLU feedforward network (https://arxiv.org/pdf/2002.05202.pdf).
+    
+    Args:
+        dim: Input/output dimension
+        hidden_dim: Hidden layer dimension
+        
+    Example:
+        >>> ff = nn.FeedFowardSwiGLU(768, 3072)
+        >>> x = genesis.randn(32, 100, 768)
+        >>> output = ff(x)
     """
 ```
 
@@ -761,45 +700,37 @@ output = layer(x)
 ### Example: Custom Model
 
 ```python
-class ResidualBlock(nn.Module):
-    def __init__(self, channels):
+class SimpleBlock(nn.Module):
+    def __init__(self, dim):
         super().__init__()
-        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(channels)
-        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn2 = nn.BatchNorm2d(channels)
+        self.linear1 = nn.Linear(dim, dim)
+        self.linear2 = nn.Linear(dim, dim)
+        self.norm = nn.LayerNorm(dim)
         self.relu = nn.ReLU()
         
     def forward(self, x):
         residual = x
-        x = self.relu(self.bn1(self.conv1(x)))
-        x = self.bn2(self.conv2(x))
-        x = x + residual  # Skip connection
-        x = self.relu(x)
+        x = self.relu(self.linear1(x))
+        x = self.linear2(x)
+        x = self.norm(x + residual)  # Skip connection
         return x
 
-class ResNet(nn.Module):
-    def __init__(self, num_classes=10):
+class SimpleTransformer(nn.Module):
+    def __init__(self, dim=768, num_classes=10):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 64, 7, stride=2, padding=3)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU()
-        self.maxpool = nn.MaxPool2d(3, stride=2, padding=1)
-        
-        # Residual blocks
-        self.layer1 = nn.Sequential(*[ResidualBlock(64) for _ in range(3)])
-        self.layer2 = nn.Sequential(*[ResidualBlock(64) for _ in range(4)])
-        
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(64, num_classes)
+        self.embedding = nn.Embedding(10000, dim)
+        self.layers = nn.ModuleList([
+            SimpleBlock(dim) for _ in range(6)
+        ])
+        self.norm = nn.LayerNorm(dim)
+        self.fc = nn.Linear(dim, num_classes)
         
     def forward(self, x):
-        x = self.relu(self.bn1(self.conv1(x)))
-        x = self.maxpool(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
+        x = self.embedding(x)
+        for layer in self.layers:
+            x = layer(x)
+        x = self.norm(x)
+        x = x.mean(dim=1)  # Global average pooling
         x = self.fc(x)
         return x
 ```
@@ -815,7 +746,7 @@ class ResNet(nn.Module):
 
 ## See Also
 
-- [Functional API](functional.md) - Functional operations
-- [Optimizers](../optim/optimizers.md) - Training optimizers
-- [Autograd](../autograd.md) - Automatic differentiation
+- [Functional API](functional_en.md) - Functional operations
+- [Optimizers](../optim/optimizers_en.md) - Training optimizers
+- [Autograd](../autograd_en.md) - Automatic differentiation
 - [Examples](../../../samples/) - Complete examples

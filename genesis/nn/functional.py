@@ -2,13 +2,10 @@
 # Global operator table.
 from numbers import Number
 from typing import Optional, List
-import numpy
-import numpy as np
 from ..autograd import Function, NDArray, Tensor
 import genesis
 from genesis import init
 import math
-import torch
 from ..backend import array_api, NDArray
 #try:
 if True:
@@ -27,10 +24,17 @@ def sum_to_shape(data, shape):
     # Calculate which axes need to be summed
     while len(data.shape) > len(shape):
         data = data.sum(axis=0)
-                                
+    
+    # Collect axes that need to be summed (where target is 1 but current is not)
+    axes_to_sum = []
     for i, (dim, target_dim) in enumerate(zip(data.shape, shape)):
-        if target_dim == 1:
-            data = data.sum(axis=i, keepdims=True) 
+        if target_dim == 1 and dim != 1:
+            axes_to_sum.append(i)
+    
+    # Sum over all collected axes at once, keeping dimensions
+    if axes_to_sum:
+        data = data.sum(axis=tuple(axes_to_sum), keepdims=True)
+    
     return data
 
 class EWiseAdd(Function):
@@ -158,8 +162,10 @@ class EWiseDiv(Function):
         grad_b = out_grad.data * (-1) * a.data / b.data / b.data
         grad_a = sum_to_shape(grad_a, a.shape)
         grad_b = sum_to_shape(grad_b, b.shape)
-        return (Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype), 
-                Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype))
+        return (
+            Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype), 
+            Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype)
+        )
 
 def divide(a, b):
     return EWiseDiv.apply(a, b)
@@ -409,12 +415,12 @@ def _is_basic_indexing(index):
         return True
     if isinstance(index, tuple):
         for idx in index:
-            if isinstance(idx, (Tensor, list, np.ndarray)):
+            if isinstance(idx, (Tensor, list)):
                 return False
-            if isinstance(idx, tuple) and any(isinstance(x, (Tensor, list, np.ndarray)) for x in idx):
+            if isinstance(idx, tuple) and any(isinstance(x, (Tensor, list)) for x in idx):
                 return False
         return True
-    if isinstance(index, (Tensor, list, np.ndarray)):
+    if isinstance(index, (Tensor, list)):
         return False
     return True
 
@@ -843,39 +849,16 @@ class Cat(Function):
     
     @staticmethod
     def backward(ctx, out_grad):
-        # Handle different data types for getting shapes
-        sizes = []
-        for t in ctx.saved_tensors:
-            if hasattr(t.data, 'data'):
-                sizes.append(t.data.data.shape[ctx.dim])
-            else:
-                sizes.append(t.data.shape[ctx.dim])
+        # Get sizes from saved tensors
+        sizes = [t.data.shape[ctx.dim] for t in ctx.saved_tensors]
         
-        # Handle different data types for out_grad
-        if hasattr(out_grad.data, 'data') and hasattr(out_grad.data.data, 'to_numpy'):
-            # CUDATensor case - use our split method
-            grads = out_grad.data.data.split(sizes, dim=ctx.dim)
-            result = []
-            for g in grads:
-                # Create NDArray wrapper for the CUDATensor
-                grad_ndarray = array_api.NDArray.__new__(array_api.NDArray)
-                grad_ndarray._device = out_grad.device
-                grad_ndarray._dtype = out_grad.dtype
-                grad_ndarray.data = g
-                result.append(Tensor.make_const(grad_ndarray, requires_grad=False))
-        else:
-            # CPU case - use torch.split
-            if hasattr(out_grad.data, 'data'):
-                grads = torch.split(out_grad.data.data, sizes, dim=ctx.dim)
-            else:
-                # Convert CUDATensor to torch tensor for split operation
-                np_data = out_grad.data.to_numpy() if hasattr(out_grad.data, 'to_numpy') else out_grad.data.numpy()
-                torch_data = torch.from_numpy(np_data).cuda()
-                grads = torch.split(torch_data, sizes, dim=ctx.dim)
-            
-            result = []
-            for g in grads:
-                result.append(Tensor.make_const(g, requires_grad=False))
+        # Use NDArray split method directly
+        grad_splits = out_grad.data.split(sizes, dim=ctx.dim)
+        
+        # Convert split results to Tensors
+        result = []
+        for grad_ndarray in grad_splits:
+            result.append(Tensor.make_const(grad_ndarray, requires_grad=False))
         
         return tuple(result) 
 
@@ -886,45 +869,15 @@ class Squeeze(Function):
     @staticmethod
     def forward(ctx, tensor, dim):
         ctx.dim = dim
-        # Handle different data types
-        if hasattr(tensor.data, 'data') and hasattr(tensor.data.data, 'to_numpy'):
-            # CUDATensor case
-            squeezed_cuda = tensor.data.data.squeeze(dim)
-            # Create NDArray wrapper for the squeezed CUDATensor
-            squeezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
-            squeezed_ndarray._device = tensor.device
-            squeezed_ndarray._dtype = tensor.dtype
-            squeezed_ndarray.data = squeezed_cuda
-            return Tensor.make_const(squeezed_ndarray, requires_grad=tensor.requires_grad)
-        elif hasattr(tensor.data, 'data'):
-            # NDArray with PyTorch tensor
-            data = tensor.data.data.squeeze(dim)
-            return Tensor(data, device=tensor.device, requires_grad=tensor.requires_grad, dtype=tensor.dtype)
-        else:
-            # Direct tensor case
-            squeezed_data = tensor.data.squeeze(dim)
-            return Tensor.make_const(squeezed_data, requires_grad=tensor.requires_grad) 
+        # Use NDArray squeeze method directly
+        squeezed_ndarray = tensor.data.squeeze(dim)
+        return Tensor(squeezed_ndarray, device=tensor.device, requires_grad=tensor.requires_grad, dtype=tensor.dtype)
     
     @staticmethod
     def backward(ctx, out_grad):
-        # Handle different data types for unsqueeze
-        if hasattr(out_grad.data, 'data') and hasattr(out_grad.data.data, 'to_numpy'):
-            # CUDATensor case
-            unsqueezed_cuda = out_grad.data.data.unsqueeze(ctx.dim)
-            # Create NDArray wrapper
-            unsqueezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
-            unsqueezed_ndarray._device = out_grad.device
-            unsqueezed_ndarray._dtype = out_grad.dtype
-            unsqueezed_ndarray.data = unsqueezed_cuda
-            return (Tensor.make_const(unsqueezed_ndarray, requires_grad=False), )
-        elif hasattr(out_grad.data, 'data'):
-            # NDArray with PyTorch tensor
-            grad = out_grad.data.data.unsqueeze(ctx.dim)
-            return (Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype), )
-        else:
-            # Direct tensor case
-            unsqueezed_data = out_grad.data.unsqueeze(ctx.dim)
-            return (Tensor.make_const(unsqueezed_data, requires_grad=False), ) 
+        # Use NDArray unsqueeze method directly
+        unsqueezed_ndarray = out_grad.data.unsqueeze(ctx.dim)
+        return (Tensor.make_const(unsqueezed_ndarray, requires_grad=False), ) 
 
 def squeeze(tensor, dim):
     return Squeeze.apply(tensor, dim)
@@ -933,45 +886,15 @@ class Unsqueeze(Function):
     @staticmethod
     def forward(ctx, tensor, dim):
         ctx.dim = dim
-        # Handle different data types
-        if hasattr(tensor.data, 'data') and hasattr(tensor.data.data, 'to_numpy'):
-            # CUDATensor case
-            unsqueezed_cuda = tensor.data.data.unsqueeze(dim)
-            # Create NDArray wrapper for the unsqueezed CUDATensor
-            unsqueezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
-            unsqueezed_ndarray._device = tensor.device
-            unsqueezed_ndarray._dtype = tensor.dtype
-            unsqueezed_ndarray.data = unsqueezed_cuda
-            return Tensor.make_const(unsqueezed_ndarray, requires_grad=tensor.requires_grad)
-        elif hasattr(tensor.data, 'data'):
-            # NDArray with PyTorch tensor
-            data = tensor.data.data.unsqueeze(dim)
-            return Tensor(data, device=tensor.device, requires_grad=tensor.requires_grad, dtype=tensor.dtype)
-        else:
-            # Direct tensor case
-            unsqueezed_data = tensor.data.unsqueeze(dim)
-            return Tensor.make_const(unsqueezed_data, requires_grad=tensor.requires_grad) 
+        # Use NDArray unsqueeze method directly
+        unsqueezed_ndarray = tensor.data.unsqueeze(dim)
+        return Tensor(unsqueezed_ndarray, device=tensor.device, requires_grad=tensor.requires_grad, dtype=tensor.dtype)
     
     @staticmethod
     def backward(ctx, out_grad):
-        # Handle different data types for squeeze
-        if hasattr(out_grad.data, 'data') and hasattr(out_grad.data.data, 'to_numpy'):
-            # CUDATensor case
-            squeezed_cuda = out_grad.data.data.squeeze(ctx.dim)
-            # Create NDArray wrapper
-            squeezed_ndarray = array_api.NDArray.__new__(array_api.NDArray)
-            squeezed_ndarray._device = out_grad.device
-            squeezed_ndarray._dtype = out_grad.dtype
-            squeezed_ndarray.data = squeezed_cuda
-            return (Tensor.make_const(squeezed_ndarray, requires_grad=False), )
-        elif hasattr(out_grad.data, 'data'):
-            # NDArray with PyTorch tensor
-            grad = out_grad.data.data.squeeze(ctx.dim)
-            return (Tensor(grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype), )
-        else:
-            # Direct tensor case
-            squeezed_data = out_grad.data.squeeze(ctx.dim)
-            return (Tensor.make_const(squeezed_data, requires_grad=False), )
+        # Use NDArray squeeze method directly
+        squeezed_ndarray = out_grad.data.squeeze(ctx.dim)
+        return (Tensor.make_const(squeezed_ndarray, requires_grad=False), )
 
 def unsqueeze(tensor, dim):
     return Unsqueeze.apply(tensor, dim)
@@ -996,43 +919,11 @@ class Split(Function):
 
     @staticmethod
     def backward(ctx, out_grad, idx):
-        import time
         x, = ctx.saved_tensors
-        
-        start = time.time()
-        
-        # FIXME: This implementation copies data to CPU for processing
-        # Should be replaced with a GPU-native implementation using CUDA kernels
-        # for better performance on GPU tensors
-        
-        # FASTEST METHOD: Use empty tensor + direct memory copy via numpy
-        # This avoids the slow Genesis setitem completely
-        import numpy as np
-        
-        # Create empty tensor (fast)
-        result = genesis.empty(*x.shape, dtype=x.dtype, device=x.device, requires_grad=False)
-        
-        # Convert to numpy for fast manipulation
-        # Handle both CPU (numpy) and GPU (CUDATensor) cases
-        if hasattr(result.data, 'to_numpy'):
-            result_numpy = result.data.to_numpy() * 0  # GPU case: CUDATensor
-            out_grad_numpy = out_grad.data.to_numpy()
-        else:
-            result_numpy = result.numpy() * 0  # CPU case: direct numpy
-            out_grad_numpy = out_grad.numpy()
-        
-        # Use numpy's fast indexing
+        result = genesis.zeros_like(x, requires_grad=False)
         slices = [slice(None)] * len(x.shape)
         slices[ctx.axis] = slice(idx, idx+1)
-        result_numpy[tuple(slices)] = out_grad_numpy
-        
-        # Copy back to GPU tensor
-        if hasattr(result.data, 'from_numpy'):
-            result.data.from_numpy(result_numpy)  # GPU case
-        else:
-            # CPU case: create new tensor from numpy
-            result = genesis.Tensor(result_numpy, device=x.device, requires_grad=False, dtype=x.dtype)
-        
+        result.data[tuple(slices)] = out_grad.data
         return (result,)
 
 def split(a, axis):

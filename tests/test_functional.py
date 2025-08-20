@@ -53,10 +53,10 @@ def backward_check(f, *args, **kwargs):
     return [g.numpy() for g in backward_grad]
 
 _DEVICES = [
-        genesis.cpu(),
+        genesis.device('cpu'),
         pytest.param(
-            genesis.cuda(), 
-            marks=pytest.mark.skipif(not genesis.cuda().enabled(), reason="No GPU"))]
+            genesis.device("cuda"), 
+            marks=pytest.mark.skipif(not genesis.device("cuda").enabled(), reason="No GPU"))]
 
 _DTYPE = [(genesis.float32, torch.float32), (genesis.float16, torch.float16)]
 
@@ -305,7 +305,57 @@ SUMMATION_PARAMETERS = [
     ((8, 3, 2), 1),
     ((8, 3, 2), 2),
     ((8, 3, 2048), 2),
-    ((8, 3, 2048), 1)
+    ((8, 3, 2048), 1),
+    # Large tensor tests to catch precision issues
+    ((2048, 2048), 0),  # Same as failing BatchNorm1d test
+    ((2048, 2048), 1),
+    ((1024, 1024), None),
+    ((4096, 512), 0),
+    ((512, 4096), 1),
+    # Edge cases
+    ((1, 2048), 0),
+    ((2048, 1), 1),
+    ((16, 16, 16), (0, 2)),  # Multi-axis reduction
+]
+
+# Max parameters without multi-axis cases (PyTorch max doesn't support multiple axes)
+MAX_PARAMETERS = [
+    ((1, 1, 1), None),
+    ((5, 3), 0),
+    ((8, 3, 2), 1),
+    ((8, 3, 2), 2),
+    ((8, 3, 2048), 2),
+    ((8, 3, 2048), 1),
+    # Large tensor tests to catch precision issues
+    ((2048, 2048), 0),
+    ((2048, 2048), 1),
+    ((1024, 1024), None),
+    ((4096, 512), 0),
+    ((512, 4096), 1),
+    # Edge cases
+    ((1, 2048), 0),
+    ((2048, 1), 1),
+    # Note: No multi-axis cases like ((16, 16, 16), (0, 2))
+]
+
+# LogSumExp parameters without multi-axis cases (reshape issue with multiple axes)
+LOGSUMEXP_PARAMETERS = [
+    ((1, 1, 1), None),
+    ((5, 3), 0),
+    ((8, 3, 2), 1),
+    ((8, 3, 2), 2),
+    ((8, 3, 2048), 2),
+    ((8, 3, 2048), 1),
+    # Large tensor tests to catch precision issues
+    ((2048, 2048), 0),
+    ((2048, 2048), 1),
+    ((1024, 1024), None),
+    ((4096, 512), 0),
+    ((512, 4096), 1),
+    # Edge cases
+    ((1, 2048), 0),
+    ((2048, 1), 1),
+    # Note: No multi-axis cases like ((16, 16, 16), (0, 2)) due to reshape issues
 ]
 @pytest.mark.parametrize("shape, axes", SUMMATION_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
@@ -336,7 +386,7 @@ def test_summation(shape, axes, device, dtype):
     F.summation(A, axis=axes).sum().backward()
     np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
-@pytest.mark.parametrize("shape, axes", SUMMATION_PARAMETERS)
+@pytest.mark.parametrize("shape, axes", MAX_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
 def test_max(shape, axes, device, dtype):
@@ -733,7 +783,7 @@ def test_transpose(shape, axes, device):
     F.transpose(A, axes).sum().backward()
     np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
-@pytest.mark.parametrize("shape, axes", SUMMATION_PARAMETERS)
+@pytest.mark.parametrize("shape, axes", LOGSUMEXP_PARAMETERS)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_logsumexp(shape, axes, device):
     """Test log-sum-exp operation (numerically stable).
@@ -1039,8 +1089,6 @@ def test_setitem_advanced(shape, device):
         - Boolean mask assignment with array
         - Integer list assignment
     """
-    # TODO: implement
-    pytest.skip("Not implemented")
     _A = np.random.randn(*shape).astype(np.float32)
     
     # Boolean mask assignment with scalar
@@ -1159,6 +1207,290 @@ def test_squeeze(shape, dim, device):
     B.sum().backward()
     TB.sum().backward()
     np.testing.assert_allclose(TA.grad.detach().numpy(), A.grad.detach().numpy(), atol=atol, rtol=rtol)
+
+
+# Strided Memory Layout Tests
+STRIDED_SETITEM_CASES = [
+    # Format: (target_shape, value_shape, slice_indices)
+    ((8, 32, 3, 64), (8, 32, 1, 64), [slice(None), slice(None), slice(2, 3), slice(None)]),
+    ((4, 16, 5, 32), (4, 16, 1, 32), [slice(None), slice(None), slice(1, 2), slice(None)]),  
+    ((2, 8, 4, 16), (2, 8, 1, 16), [slice(None), slice(None), slice(0, 1), slice(None)]),
+    ((6, 10, 7, 8), (6, 10, 2, 8), [slice(None), slice(None), slice(2, 4), slice(None)]),
+]
+
+@pytest.mark.parametrize("target_shape,value_shape,slice_idx", STRIDED_SETITEM_CASES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_setitem_non_contiguous_assignment(target_shape, value_shape, slice_idx, device):
+    """Test tensor assignment to non-contiguous memory layouts.
+    
+    This test verifies that setitem operations work correctly when the target
+    tensor slice has a non-contiguous memory layout, which requires strided
+    memory copy operations.
+    
+    Args:
+        target_shape: Shape of the target tensor
+        value_shape: Shape of the value tensor to assign  
+        slice_idx: Slice indices that create the target region
+        device: Device to run test on (CPU or CUDA)
+        
+    Tests:
+        - Assignment to non-contiguous tensor slices
+        - Correctness of strided memory copy operations
+        - Element-wise value preservation
+    """
+    # Create test tensors
+    target = genesis.zeros(target_shape, device=device)
+    value = genesis.full(value_shape, 3.5, device=device)
+    
+    # Get the target view and check its memory layout
+    target_view = target[tuple(slice_idx)]
+    
+    # Perform assignment operation
+    target[tuple(slice_idx)] = value
+    
+    # Verify assignment correctness
+    result_view = target[tuple(slice_idx)]
+    
+    # Compare with expected result
+    np.testing.assert_allclose(
+        result_view.detach().numpy(), 
+        value.detach().numpy(),
+        atol=1e-6, rtol=1e-6,
+        err_msg=f"Non-contiguous assignment failed for shape {target_shape}"
+    )
+    
+    # Verify unmodified regions remain zero
+    target_numpy = target.detach().numpy()
+    region_mask = np.zeros(target_shape, dtype=bool)
+    region_mask[tuple(slice_idx)] = True
+    
+    unmodified_region = target_numpy[~region_mask]
+    assert np.allclose(unmodified_region, 0.0, atol=1e-6), \
+        "Assignment modified regions outside target slice"
+
+
+CONTIGUOUS_COMPARISON_CASES = [
+    # Format: (shape, contiguous_slice, non_contiguous_slice)
+    ((4, 6, 8, 12), [slice(0, 2), slice(None), slice(None), slice(None)],   # contiguous
+                    [slice(None), slice(None), slice(2, 3), slice(None)]),  # non-contiguous
+    ((3, 5, 7, 9), [slice(None), slice(0, 3), slice(None), slice(None)],    # contiguous  
+                   [slice(None), slice(None), slice(1, 2), slice(None)]),   # non-contiguous
+]
+
+@pytest.mark.parametrize("shape,contiguous_slice,non_contiguous_slice", CONTIGUOUS_COMPARISON_CASES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])  
+def test_setitem_memory_layout_consistency(shape, contiguous_slice, non_contiguous_slice, device):
+    """Test consistency between contiguous and non-contiguous setitem operations.
+    
+    This test ensures that both contiguous and non-contiguous memory assignments
+    produce identical results, validating the correctness of strided copy
+    implementations across different memory layouts.
+    
+    Args:
+        shape: Base tensor shape for testing
+        contiguous_slice: Slice that creates contiguous memory layout
+        non_contiguous_slice: Slice that creates non-contiguous memory layout  
+        device: Device to run test on (CPU or CUDA)
+        
+    Tests:
+        - Contiguous memory assignment correctness
+        - Non-contiguous memory assignment correctness
+        - Consistency between different memory layout operations
+    """
+    test_value = 7.25
+    
+    # Test contiguous assignment
+    tensor_c = genesis.zeros(shape, device=device)
+    contiguous_view = tensor_c[tuple(contiguous_slice)]
+    tensor_c[tuple(contiguous_slice)] = test_value
+    
+    # Test non-contiguous assignment  
+    tensor_nc = genesis.zeros(shape, device=device)
+    non_contiguous_view = tensor_nc[tuple(non_contiguous_slice)]
+    tensor_nc[tuple(non_contiguous_slice)] = test_value
+    
+    # Verify contiguous assignment
+    result_c = tensor_c[tuple(contiguous_slice)]
+    expected_c = genesis.full(contiguous_view.shape, test_value, device=device)
+    np.testing.assert_allclose(
+        result_c.detach().numpy(),
+        expected_c.detach().numpy(), 
+        atol=1e-6, rtol=1e-6,
+        err_msg="Contiguous memory assignment failed"
+    )
+    
+    # Verify non-contiguous assignment
+    result_nc = tensor_nc[tuple(non_contiguous_slice)]  
+    expected_nc = genesis.full(non_contiguous_view.shape, test_value, device=device)
+    np.testing.assert_allclose(
+        result_nc.detach().numpy(),
+        expected_nc.detach().numpy(),
+        atol=1e-6, rtol=1e-6, 
+        err_msg="Non-contiguous memory assignment failed"
+    )
+
+
+MULTIDIMENSIONAL_SLICE_CASES = [
+    # Complex slicing patterns that test various strided access patterns
+    ((5, 8, 6, 10), [slice(1, 4), slice(2, 6), slice(None), slice(3, 8)]),
+    ((6, 12, 4, 8), [slice(None, None, 2), slice(1, 11, 2), slice(None), slice(None)]),
+    ((4, 7, 9, 5), [slice(0, 3), slice(None), slice(2, 7, 2), slice(1, 4)]),
+]
+
+@pytest.mark.parametrize("tensor_shape,slice_pattern", MULTIDIMENSIONAL_SLICE_CASES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_setitem_complex_strided_patterns(tensor_shape, slice_pattern, device):
+    """Test setitem with complex multidimensional strided access patterns.
+    
+    This test covers advanced slicing scenarios that involve multiple
+    dimensions with different stride patterns, ensuring robust handling
+    of complex memory access patterns.
+    
+    Args:
+        tensor_shape: Shape of the base tensor
+        slice_pattern: Complex slice pattern with multiple strided dimensions
+        device: Device to run test on (CPU or CUDA)
+        
+    Tests:
+        - Complex multidimensional slicing operations
+        - Strided access pattern correctness
+        - Memory layout preservation under complex indexing
+    """
+    # Create base tensor and value tensor
+    base_tensor = genesis.zeros(tensor_shape, device=device)
+    target_view = base_tensor[tuple(slice_pattern)]
+    value_tensor = genesis.full(target_view.shape, 4.75, device=device)
+    
+    # Perform complex strided assignment
+    base_tensor[tuple(slice_pattern)] = value_tensor
+    
+    # Verify assignment correctness
+    result_view = base_tensor[tuple(slice_pattern)]
+    np.testing.assert_allclose(
+        result_view.detach().numpy(),
+        value_tensor.detach().numpy(),
+        atol=1e-6, rtol=1e-6,
+        err_msg=f"Complex strided assignment failed for pattern {slice_pattern}"
+    )
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_reduce_sum_precision_issue(device):
+    """Test reduce_sum precision for large tensors - specifically for BatchNorm1d issue.
+    
+    This test reproduces the exact scenario that causes BatchNorm1d to fail
+    with shape (2048, 2048).
+    
+    Args:
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - Forward pass summation for large tensors
+        - Backward gradient consistency
+        - Gradient values should not be near-zero or uniform
+    """
+    # Test the exact case that fails in BatchNorm1d
+    shape = (2048, 2048)
+    np.random.seed(42)  # For reproducibility
+    _A = np.random.randn(*shape).astype(np.float32)
+    
+    # PyTorch reference
+    TA = torch.Tensor(_A)
+    TA.requires_grad = True
+    torch_sum = torch.sum(TA, dim=0)
+    torch_sum.sum().backward()
+    
+    # Genesis
+    A = genesis.Tensor(_A, device=device)
+    genesis_sum = F.summation(A, axis=0)
+    genesis_sum.sum().backward()
+    
+    # Check forward pass
+    np.testing.assert_allclose(
+        torch_sum.detach().numpy(), 
+        genesis_sum.detach().numpy(), 
+        atol=1e-3, rtol=1e-3,
+        err_msg="Forward pass summation mismatch for large tensor"
+    )
+    
+    # Check backward pass
+    torch_grad = TA.grad.numpy()
+    genesis_grad = A.grad.numpy()
+    
+    # Debug info
+    print(f"Shape: {shape}, Device: {device}")
+    print(f"PyTorch grad range: [{torch_grad.min():.6e}, {torch_grad.max():.6e}]")
+    print(f"Genesis grad range: [{genesis_grad.min():.6e}, {genesis_grad.max():.6e}]")
+    print(f"PyTorch grad unique values: {len(np.unique(torch_grad))}")
+    print(f"Genesis grad unique values: {len(np.unique(genesis_grad))}")
+    
+    # The gradient should be 1.0 everywhere for sum().backward()
+    expected_grad = np.ones_like(_A)
+    
+    # Check if Genesis gradients are wrong (near zero or incorrect)
+    if np.abs(genesis_grad).max() < 1e-5:
+        pytest.fail(f"Genesis gradients are near zero: max={np.abs(genesis_grad).max():.6e}")
+    
+    # Check gradient correctness
+    np.testing.assert_allclose(
+        torch_grad, 
+        genesis_grad, 
+        atol=1e-5, rtol=1e-5,
+        err_msg="Backward pass gradient mismatch for large tensor reduction"
+    )
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"]) 
+def test_reduce_sum_keepdims(device):
+    """Test reduce_sum with keepdims parameter.
+    
+    Args:
+        device: Device to run test on (CPU or CUDA)
+    
+    Tests:
+        - keepdims=True preserves reduced dimensions with size 1
+        - Backward pass works correctly with keepdims
+    """
+    shapes_and_axes = [
+        ((4, 5, 6), 1),
+        ((10, 20), 0),
+        ((3, 4, 5), (0, 2)),
+        ((2048, 512), 1),
+    ]
+    
+    for shape, axes in shapes_and_axes:
+        _A = np.random.randn(*shape).astype(np.float32)
+        
+        # PyTorch reference
+        TA = torch.Tensor(_A)
+        TA.requires_grad = True
+        torch_sum = torch.sum(TA, dim=axes, keepdim=True)
+        torch_sum.sum().backward()
+        
+        # Genesis  
+        A = genesis.Tensor(_A, device=device)
+        genesis_sum = F.summation(A, axis=axes, keepdims=True)
+        genesis_sum.sum().backward()
+        
+        # Check shapes
+        assert torch_sum.shape == genesis_sum.shape, \
+            f"Shape mismatch with keepdims: {torch_sum.shape} vs {genesis_sum.shape}"
+        
+        # Check values
+        np.testing.assert_allclose(
+            torch_sum.detach().numpy(),
+            genesis_sum.detach().numpy(),
+            atol=1e-4, rtol=1e-4,
+            err_msg=f"keepdims forward mismatch for shape {shape}, axes {axes}"
+        )
+        
+        # Check gradients
+        np.testing.assert_allclose(
+            TA.grad.numpy(),
+            A.grad.numpy(), 
+            atol=1e-5, rtol=1e-5,
+            err_msg=f"keepdims backward mismatch for shape {shape}, axes {axes}"
+        )
 
 
 if __name__ == "__main__":

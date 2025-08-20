@@ -99,7 +99,7 @@ graph TB
 !!! info "Performance Update"
     Genesis has achieved major breakthroughs in memory management, reaching or exceeding PyTorch performance in multiple key scenarios. Current focus is on fixing remaining operator bottlenecks.
     
-    For detailed analysis, see: [Memory Allocator Optimization Report](memory-allocator-optimization.md)
+    For detailed analysis, see: [Memory Allocator Optimization Report](memory-allocator-optimization_en.md)
 
 ## 🛠️ Technology Stack
 
@@ -121,21 +121,21 @@ graph TB
 ## 🎓 Learning Path
 
 ### Beginners
-1. [Getting Started](getting-started/index.md) - Installation and first program
-2. [Basic Tutorial](tutorials/basic-training.md) - Simple neural network training
-3. [API Reference](api-reference/index.md) - Common API usage
+1. [Getting Started](getting-started/index_en.md) - Installation and first program
+2. [Basic Tutorial](tutorials/basic-training_en.md) - Simple neural network training
+3. [API Reference](api-reference/index_en.md) - Common API usage
 
 ### Advanced Users
-1. [Architecture Design](architecture/index.md) - Deep understanding of system design
-2. [Custom Operations](tutorials/custom-ops.md) - Implementing custom operations
-3. [Performance Optimization](performance/optimization-guide.md) - Performance analysis and optimization guide
-4. [Performance Tuning](tutorials/performance-tuning.md) - Training performance tuning techniques
-5. [Qwen Model Guide](models/qwen.md) - Using and training Qwen LLM models
+1. [Architecture Design](architecture/index_en.md) - Deep understanding of system design
+2. [Custom Operations](tutorials/custom-ops_en.md) - Implementing custom operations
+3. [Performance Optimization](performance/optimization-guide_en.md) - Performance analysis and optimization guide
+4. [Performance Tuning](tutorials/performance-tuning_en.md) - Training performance tuning techniques
+5. [Qwen Model Guide](models/qwen_en.md) - Using and training Qwen LLM models
 
 ### Contributors
-1. [Development Environment](contributing/development.md) - Setting up development environment
-2. [Core Components](core-components/index.md) - Understanding internal implementation
-3. [Testing Guidelines](contributing/testing.md) - Code contribution guidelines
+1. [Development Environment](contributing/development_en.md) - Setting up development environment
+2. [Core Components](core-components/index_en.md) - Understanding internal implementation
+3. [Testing Guidelines](contributing/testing_en.md) - Code contribution guidelines
 
 ## 🌟 Project Highlights
 
@@ -164,7 +164,7 @@ We welcome all forms of contributions:
 - **📝 Documentation Improvements** - Help improve documentation quality
 - **💻 Code Contributions** - Direct participation in code development
 
-For details, please refer to [Contributing Guide](contributing/index.md).
+For details, please refer to [Contributing Guide](contributing/index_en.md).
 
 ## 📞 Contact
 
@@ -186,7 +186,7 @@ For details, please refer to [Contributing Guide](contributing/index.md).
 
     Start building your first neural network with Genesis immediately
 
-    [:octicons-arrow-right-24: Getting Started](getting-started/index.md)
+    [:octicons-arrow-right-24: Getting Started](getting-started/index_en.md)
 
 -   :material-github:{ .lg .middle } **View Source**
 

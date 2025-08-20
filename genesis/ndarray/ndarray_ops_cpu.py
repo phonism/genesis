@@ -124,15 +124,27 @@ def array(shape, device_id=None, dtype=None):
     # Convert dtype to string for comparison (handles both DType objects and strings)
     dtype_str = dtype if isinstance(dtype, str) else (dtype.name if hasattr(dtype, 'name') else str(dtype))
     
-    if dtype is None or dtype_str == "float32":
-        arr = torch.empty(shape, dtype=torch.float32, device=torch.device("cpu"))
-    elif dtype_str == "float16":
-        arr = torch.empty(shape, dtype=torch.float16, device=torch.device("cpu"))
-    elif dtype_str == "bfloat16":
-        arr = torch.empty(shape, dtype=torch.bfloat16, device=torch.device("cpu"))
+    # Handle scalar case (empty shape tuple) - need to pass empty tuple directly
+    if len(shape) == 0:
+        if dtype is None or dtype_str == "float32":
+            arr = torch.empty((), dtype=torch.float32, device=torch.device("cpu"))
+        elif dtype_str == "float16":
+            arr = torch.empty((), dtype=torch.float16, device=torch.device("cpu"))
+        elif dtype_str == "bfloat16":
+            arr = torch.empty((), dtype=torch.bfloat16, device=torch.device("cpu"))
+        else:
+            arr = torch.empty((), dtype=torch.float32, device=torch.device("cpu"))
     else:
-        # Default to float32
-        arr = torch.empty(shape, dtype=torch.float32, device=torch.device("cpu"))
+        # For non-scalar tensors, unpack the shape tuple
+        if dtype is None or dtype_str == "float32":
+            arr = torch.empty(*shape, dtype=torch.float32, device=torch.device("cpu"))
+        elif dtype_str == "float16":
+            arr = torch.empty(*shape, dtype=torch.float16, device=torch.device("cpu"))
+        elif dtype_str == "bfloat16":
+            arr = torch.empty(*shape, dtype=torch.bfloat16, device=torch.device("cpu"))
+        else:
+            # Default to float32
+            arr = torch.empty(*shape, dtype=torch.float32, device=torch.device("cpu"))
     return arr
 
 def cat(arrays, dim=0):
@@ -197,6 +209,18 @@ def split(x, cnt, dim=None):
     Split tensor along dimension.
     """
     return torch.split(x, cnt, dim=dim)
+
+def squeeze(x, dim=None):
+    """
+    Remove dimensions of size 1.
+    """
+    return torch.squeeze(x, dim=dim)
+
+def unsqueeze(x, dim):
+    """
+    Add a dimension of size 1.
+    """
+    return torch.unsqueeze(x, dim=dim)
 
 def to_dtype(x, dtype):
     """

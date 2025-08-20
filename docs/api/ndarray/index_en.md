@@ -550,7 +550,7 @@ except RuntimeError as e:
 
 ## See Also
 
-- [Tensor Operations](../autograd.md) - High-level tensor interface
-- [Neural Network Modules](../nn/modules.md) - Building on ndarray
+- [Tensor Operations](../autograd_en.md) - High-level tensor interface
+- [Neural Network Modules](../nn/modules_en.md) - Building on ndarray
 - [Performance Guide](../../performance/) - Optimization techniques
-- [CUDA Storage](../../../core-components/cuda-storage.md) - Low-level CUDA implementation
+- [CUDA Storage](../../../core-components/cuda-storage_en.md) - Low-level CUDA implementation

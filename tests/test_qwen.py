@@ -180,7 +180,7 @@ def _test_qwen_consistency(use_cuda: bool = False):
     
     # Genesis forward pass
     import genesis
-    device = genesis.cuda() if use_cuda else genesis.cpu()
+    device = genesis.device("cuda") if use_cuda else genesis.device('cpu')
     genesis_input = genesis.Tensor(input_ids.astype(np.int64), device=device, requires_grad=False).long()
     
     genesis_model.eval() 
@@ -379,7 +379,7 @@ def _test_qwen_backward(use_cuda: bool = False):
     
     # Genesis forward and backward pass  
     import genesis
-    device = genesis.cuda() if use_cuda else genesis.cpu()
+    device = genesis.device("cuda") if use_cuda else genesis.device('cpu')
     genesis_input = genesis.Tensor(input_ids.astype(np.int64), device=device, requires_grad=False).long()
     genesis_target = genesis.Tensor(target_ids.astype(np.int64), device=device, requires_grad=False).long()
     

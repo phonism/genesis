@@ -13,4 +13,4 @@ from .indexing_ops import getitem, setitem, fill, fill_tensor, cat
 from .matrix_ops import matmul
 from .utils import prod, broadcast_shapes, from_numpy, from_tensor, array
 from .random_ops import randn, rand
-from .tensor_ops import triu, split, to_dtype
+from .tensor_ops import triu, split, to_dtype, squeeze, unsqueeze
