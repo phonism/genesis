@@ -1,0 +1,7 @@
+genesis-team:
+  name: Genesis Team
+  description: >
+    Core development team of the Genesis deep learning framework.
+    Passionate about GPU computing, performance optimization, and
+    open source AI infrastructure.
+  avatar: https://github.com/phonism.png
