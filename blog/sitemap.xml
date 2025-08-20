@@ -1,7 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-         <loc>https://blog.genesis-ai.org/</loc>
+         <loc>https://phonism.github.io/genesis/blog/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/blog/2025-08-20-reduction-ops-optimization/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://phonism.github.io/genesis/blog/about/</loc>
          <lastmod>2025-08-20</lastmod>
     </url>
 </urlset>
