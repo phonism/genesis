@@ -659,6 +659,160 @@ def sqrt(x):
     return output
 
 
+@triton.jit
+def abs_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Absolute value kernel.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    output = tl.abs(x)
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def abs(x):
+    """
+    Element-wise absolute value.
+    """
+    output = CUDAStorage(x.shape, dtype=x.dtype)
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    n_elements = x.size
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    abs_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+
+@triton.jit
+def sign_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Sign function kernel.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    # Sign function: -1 if x < 0, 0 if x == 0, 1 if x > 0
+    output = tl.where(x > 0, 1.0, tl.where(x < 0, -1.0, 0.0))
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def sign(x):
+    """
+    Element-wise sign function.
+    """
+    output = CUDAStorage(x.shape, dtype=x.dtype)
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    n_elements = x.size
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    sign_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+
+@triton.jit
+def clamp_kernel(x_ptr, output_ptr, min_val, max_val, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Clamp kernel.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    
+    # Apply clamp
+    if min_val is not None:
+        x = tl.where(x < min_val, min_val, x)
+    if max_val is not None:
+        x = tl.where(x > max_val, max_val, x)
+    
+    tl.store(output_ptr + offsets, x, mask=mask)
+
+
+def clamp(x, min_val=None, max_val=None):
+    """
+    Element-wise clamp/clip operation.
+    """
+    output = CUDAStorage(x.shape, dtype=x.dtype)
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    n_elements = x.size
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    clamp_kernel[grid](x, output, min_val, max_val, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+
+@triton.jit
+def comparison_kernel(x_ptr, y_val, output_ptr, n_elements, op_type, BLOCK_SIZE: tl.constexpr):
+    """
+    Element-wise comparison kernel.
+    op_type: 0=greater_equal, 1=less_equal
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    
+    if op_type == 0:  # greater_equal
+        result = x >= y_val
+    else:  # less_equal
+        result = x <= y_val
+    
+    # Convert bool to float
+    result = tl.where(result, 1.0, 0.0)
+    tl.store(output_ptr + offsets, result, mask=mask)
+
+
+def greater_equal(x, y):
+    """Element-wise greater than or equal comparison."""
+    output = CUDAStorage(x.shape, dtype=x.dtype)
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    n_elements = x.size
+    y_val = float(y) if not isinstance(y, CUDAStorage) else y  # For scalar comparison
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    comparison_kernel[grid](x, y_val, output, n_elements, 0, BLOCK_SIZE=1024)
+    
+    return output
+
+
+def less_equal(x, y):
+    """Element-wise less than or equal comparison."""
+    output = CUDAStorage(x.shape, dtype=x.dtype)
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    n_elements = x.size
+    y_val = float(y) if not isinstance(y, CUDAStorage) else y  # For scalar comparison
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    comparison_kernel[grid](x, y_val, output, n_elements, 1, BLOCK_SIZE=1024)
+    
+    return output
+
+
+def ones(shape, device=None, dtype="float32"):
+    """Create tensor filled with ones."""
+    return CUDAStorage(shape, dtype=dtype).fill(1.0)
+
+
 def maximum(x, y):
     """
     Element-wise maximum with broadcasting support.
@@ -768,3 +922,149 @@ def one_hot(n_classes, indices, dtype="float32"):
     one_hot_kernel[grid](flat_indices, output, n_classes, n_indices, BLOCK_SIZE=256)
     
     return output
+
+
+@triton.jit
+def where_kernel(condition_ptr, x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """Triton kernel for element-wise where operation."""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    condition = tl.load(condition_ptr + offsets, mask=mask)
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    
+    # Convert condition to boolean (non-zero is True)
+    condition_bool = condition != 0.0
+    result = tl.where(condition_bool, x, y)
+    tl.store(output_ptr + offsets, result, mask=mask)
+
+
+def where(condition, x, y):
+    """Element-wise selection of values from x or y based on condition."""
+    # Ensure inputs are contiguous
+    if not condition.is_contiguous():
+        condition = condition.contiguous()
+    if not x.is_contiguous():
+        x = x.contiguous()
+    if not y.is_contiguous():
+        y = y.contiguous()
+    
+    # All inputs should have the same shape
+    if condition.shape != x.shape or condition.shape != y.shape:
+        raise ValueError(f"Shape mismatch: condition {condition.shape}, x {x.shape}, y {y.shape}")
+    
+    n_elements = condition.size
+    output = CUDAStorage(condition.shape, dtype=x.dtype)
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    where_kernel[grid](condition, x, y, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+
+def zeros_like(x):
+    """Create tensor of zeros with same shape and dtype as x."""
+    output = CUDAStorage(x.shape, dtype=x.dtype)
+    output.fill(0.0)
+    return output
+
+
+@triton.jit
+def argmax_kernel(input_ptr, output_ptr, n_elements, stride_input, stride_output, BLOCK_SIZE: tl.constexpr):
+    """Triton kernel for argmax along last dimension."""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load input values
+    input_vals = tl.load(input_ptr + offsets * stride_input, mask=mask, other=float('-inf'))
+    
+    # Find argmax within the block
+    max_val = tl.max(input_vals, axis=0)
+    is_max = input_vals == max_val
+    
+    # Find first occurrence of max value
+    indices = tl.arange(0, BLOCK_SIZE)
+    masked_indices = tl.where(is_max, indices, n_elements)  # Use large number for non-max
+    argmax_idx = tl.min(masked_indices, axis=0)
+    
+    # Store result
+    if pid == 0:  # Only first block stores the result
+        tl.store(output_ptr, block_start + argmax_idx)
+
+
+@triton.jit
+def argmin_kernel(input_ptr, output_ptr, n_elements, stride_input, stride_output, BLOCK_SIZE: tl.constexpr):
+    """Triton kernel for argmin along last dimension."""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load input values
+    input_vals = tl.load(input_ptr + offsets * stride_input, mask=mask, other=float('inf'))
+    
+    # Find argmin within the block
+    min_val = tl.min(input_vals, axis=0)
+    is_min = input_vals == min_val
+    
+    # Find first occurrence of min value
+    indices = tl.arange(0, BLOCK_SIZE)
+    masked_indices = tl.where(is_min, indices, n_elements)  # Use large number for non-min
+    argmin_idx = tl.min(masked_indices, axis=0)
+    
+    # Store result
+    if pid == 0:  # Only first block stores the result
+        tl.store(output_ptr, block_start + argmin_idx)
+
+
+def argmax(x, dim=None, keepdim=False):
+    """Return indices of maximum values along dimension."""
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    if dim is None:
+        # Flatten and find global argmax
+        flat_x = x.reshape((-1,))
+        output = CUDAStorage((), dtype="int64")
+        n_elements = flat_x.size
+        
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        argmax_kernel[grid](flat_x, output, n_elements, 1, 1, BLOCK_SIZE=1024)
+        
+        if keepdim:
+            # Reshape to maintain original shape with 1s
+            output = output.reshape((1,) * len(x.shape))
+        return output
+    else:
+        # Use PyTorch's argmax for specific dimensions (simpler for now)
+        torch_result = torch.argmax(x.to_torch(), dim=dim, keepdim=keepdim)
+        return CUDAStorage.from_torch(torch_result, dtype="int64")
+
+
+def argmin(x, dim=None, keepdim=False):
+    """Return indices of minimum values along dimension."""
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    if dim is None:
+        # Flatten and find global argmin
+        flat_x = x.reshape((-1,))
+        output = CUDAStorage((), dtype="int64")
+        n_elements = flat_x.size
+        
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        argmin_kernel[grid](flat_x, output, n_elements, 1, 1, BLOCK_SIZE=1024)
+        
+        if keepdim:
+            # Reshape to maintain original shape with 1s
+            output = output.reshape((1,) * len(x.shape))
+        return output
+    else:
+        # Use PyTorch's argmin for specific dimensions (simpler for now)
+        torch_result = torch.argmin(x.to_torch(), dim=dim, keepdim=keepdim)
+        return CUDAStorage.from_torch(torch_result, dtype="int64")

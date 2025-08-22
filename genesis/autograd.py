@@ -159,6 +159,47 @@ class Tensor:
             dtype: Data type for tensor elements
             requires_grad: Whether to track gradients for this tensor
         """
+        # Auto-infer dtype from input if not specified (PyTorch-like behavior)
+        if dtype is None:
+            if isinstance(array, Tensor):
+                dtype = array.dtype
+            elif isinstance(array, NDArray):
+                dtype = array.dtype
+            else:
+                # Auto-infer from numpy array or Python types
+                import numpy as np
+                if isinstance(array, (list, tuple)):
+                    # Convert to numpy to infer dtype
+                    np_array = np.array(array)
+                elif isinstance(array, (int, float, bool)):
+                    # Handle scalar values
+                    if isinstance(array, bool):
+                        dtype = genesis.float32  # Convert bool to float32 by default
+                    elif isinstance(array, int):
+                        dtype = genesis.float32  # Convert int to float32 by default
+                    else:  # float
+                        dtype = genesis.float32
+                elif hasattr(array, 'dtype'):
+                    # numpy array or similar
+                    np_array = array
+                else:
+                    np_array = np.array(array)
+                
+                # Map numpy dtypes to Genesis dtypes
+                if 'np_array' in locals():
+                    if np_array.dtype == np.bool_:
+                        dtype = genesis.float32  # Convert bool to float32
+                    elif np_array.dtype in [np.int8, np.int16, np.int32, np.int64]:
+                        dtype = genesis.float32  # Convert int to float32
+                    elif np_array.dtype == np.float16:
+                        dtype = genesis.float16
+                    elif np_array.dtype == np.float32:
+                        dtype = genesis.float32
+                    elif np_array.dtype == np.float64:
+                        dtype = genesis.float32  # Convert float64 to float32 by default
+                    else:
+                        dtype = genesis.float32  # Default fallback
+        
         # Convert dtype to DType object for consistency
         if dtype is not None:
             dtype = get_dtype(dtype)
@@ -166,8 +207,6 @@ class Tensor:
         if isinstance(array, Tensor):
             if device is None:
                 device = array.device
-            if dtype is None:
-                dtype = array.dtype
             # Compare using DType objects
             if device == array.device and dtype == array.dtype:
                 data = array.data
@@ -177,7 +216,7 @@ class Tensor:
             # Directly reuse NDArray to avoid duplicate memory allocation
             if device is None:
                 device = array.device
-            if dtype is None or dtype == array.dtype:
+            if dtype == array.dtype:
                 data = array
             else:
                 # Need type conversion, reallocate
@@ -573,8 +612,44 @@ class Tensor:
         """Find maximum values along specified axis"""
         return genesis.nn.functional.max(self, axis=axis, keepdims=keepdims)
 
+    def mean(self, axis=None, keepdims=False):
+        """
+        Compute the arithmetic mean along the specified axis.
+        
+        Args:
+            axis: Axis or axes along which to compute mean. None means reduce all axes.
+            keepdims: Whether to keep reduced dimensions as size 1
+            
+        Returns:
+            Tensor containing the mean values
+        """
+        return genesis.nn.functional.mean(self, axis=axis, keepdims=keepdims)
+
     def broadcast_to(self, shape):
         return genesis.nn.functional.broadcast_to(self, shape)
+
+    def argmax(self, dim=None, keepdim=False):
+        """Return indices of maximum values along specified dimension."""
+        return genesis.nn.functional.argmax(self, dim=dim, keepdim=keepdim)
+
+    def argmin(self, dim=None, keepdim=False):
+        """Return indices of minimum values along specified dimension."""
+        return genesis.nn.functional.argmin(self, dim=dim, keepdim=keepdim)
+
+    def permute(self, *dims):
+        """Permute the dimensions of the tensor."""
+        # Handle both permute(0, 2, 1) and permute([0, 2, 1]) forms
+        if len(dims) == 1 and isinstance(dims[0], (list, tuple)):
+            dims = dims[0]
+        return genesis.nn.functional.permute(self, dims)
+
+    def gather(self, dim, index):
+        """Gather values along specified dimension using indices."""
+        return genesis.nn.functional.gather(self, dim, index)
+
+    def scatter(self, dim, index, src):
+        """Scatter values from src along specified dimension using indices."""
+        return genesis.nn.functional.scatter(self, dim, index, src)
 
     def __matmul__(self, other):
         return genesis.nn.functional.matmul(self, other)
@@ -590,6 +665,18 @@ class Tensor:
 
     def sqrt(self):
         return genesis.nn.functional.sqrt(self)
+
+    def abs(self):
+        """Compute element-wise absolute value."""
+        return genesis.nn.functional.abs(self)
+
+    def clamp(self, min_val=None, max_val=None):
+        """Clamp tensor values to specified range."""
+        return genesis.nn.functional.clamp(self, min_val, max_val)
+
+    def clip(self, min_val=None, max_val=None):
+        """Clip tensor values to specified range (alias for clamp)."""
+        return genesis.nn.functional.clip(self, min_val, max_val)
 
     def sigmoid(self):
         """Apply sigmoid activation function"""
@@ -619,6 +706,18 @@ class Tensor:
         """Fill tensor with a constant value (in-place)"""
         self.data.fill(value)  # Use NDArray's fill method
         return self
+    
+    def clone(self):
+        """Create a deep copy of the tensor with the same data, device, and dtype.
+        
+        The cloned tensor will have the same requires_grad setting but will be
+        detached from the computation graph.
+        
+        Returns:
+            Tensor: A new tensor that is a deep copy of the current tensor
+        """
+        cloned_data = self.data.clone()
+        return Tensor(cloned_data, device=self.device, dtype=self.dtype, requires_grad=self.requires_grad)
 
     __radd__ = __add__
     __rsub__ = __sub__

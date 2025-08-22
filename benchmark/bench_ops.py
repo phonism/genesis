@@ -275,6 +275,9 @@ class ComprehensiveOpRegistry:
             ("summation_axis0", lambda x: gF.summation(x, axis=0), lambda x: x.sum(dim=0)),
             ("sum_axis1", lambda x: gF.sum(x, axis=1), lambda x: x.sum(dim=1)),
             ("summation_axis1", lambda x: gF.summation(x, axis=1), lambda x: x.sum(dim=1)),
+            ("mean", lambda x: gF.mean(x), lambda x: x.mean()),
+            ("mean_axis0", lambda x: gF.mean(x, axis=0), lambda x: x.mean(dim=0)),
+            ("mean_axis1", lambda x: gF.mean(x, axis=1), lambda x: x.mean(dim=1)),
             ("max", lambda x: gF.max(x), lambda x: x.max()),
             ("max_axis0", lambda x: gF.max(x, axis=0), lambda x: x.max(dim=0)[0]),
             ("max_axis1", lambda x: gF.max(x, axis=1), lambda x: x.max(dim=1)[0]),
@@ -934,7 +937,7 @@ def benchmark_activation_functions(shapes: List[Tuple[int, ...]], dtype=torch.fl
         torch.cuda.empty_cache()
 
 def benchmark_reduction_ops(shapes: List[Tuple[int, ...]], dtype=torch.float32):
-    """Benchmark reduction operations"""
+    """Benchmark reduction operations with version comparison"""
     print(f"\n{'='*80}")
     print(f"Reduction Operations Benchmark ({dtype})")
     print(f"{'='*80}")
@@ -943,8 +946,8 @@ def benchmark_reduction_ops(shapes: List[Tuple[int, ...]], dtype=torch.float32):
     
     for shape in shapes:
         print(f"\nShape: {shape}")
-        print(f"{'Operation':<25} {'PyTorch':<15} {'Genesis':<15} {'Speedup':<10}")
-        print(f"{'-'*65}")
+        print(f"{'Operation':<18} {'PyTorch':<10} {'v1':<10} {'v2':<10} {'v3':<10} {'v1/PT':<6} {'v2/PT':<6} {'v3/PT':<6} {'v2/v1':<6} {'v3/v1':<6}")
+        print(f"{'-'*108}")
         
         # Create test data
         np_x = np.random.randn(*shape).astype(np.float32 if dtype == torch.float32 else np.float16)
@@ -955,27 +958,50 @@ def benchmark_reduction_ops(shapes: List[Tuple[int, ...]], dtype=torch.float32):
         # Test different reduction operations
         reductions = [
             ("Sum (all)", lambda x: x.sum(), lambda x: x.sum()),
-            ("Mean (all)", lambda x: x.mean(), lambda x: x.mean()),
+            ("Sum (axis=0)", lambda x: x.sum(dim=0), lambda x: x.sum(axis=0)),
+            ("Sum (axis=-1)", lambda x: x.sum(dim=-1), lambda x: x.sum(axis=-1)),
             ("Max (all)", lambda x: x.max(), lambda x: x.max()),
+            ("Max (axis=-1)", lambda x: x.max(dim=-1)[0], lambda x: x.max(axis=-1)),
         ]
         
-        # Add axis-specific reductions for multi-dimensional tensors
-        if len(shape) > 1:
-            reductions.extend([
-                ("Sum (axis=0)", lambda x: x.sum(dim=0), lambda x: x.sum(axis=0)),
-                ("Sum (axis=-1)", lambda x: x.sum(dim=-1), lambda x: x.sum(axis=-1)),
-                ("Mean (axis=0)", lambda x: x.mean(dim=0), lambda x: x.mean(axis=0)),
-                ("Max (axis=-1)", lambda x: x.max(dim=-1)[0], lambda x: x.max(axis=-1)),
-            ])
-        
         for op_name, torch_op, genesis_op in reductions:
-            torch_results = timer.benchmark(torch_op, torch_x)
-            genesis_real_results = timer.benchmark(genesis_op, genesis_x)
+            # Calculate tensor size for benchmark
+            tensor_size = np.prod(shape)
+            tensor_sizes = [tensor_size]
             
-            speedup = torch_results["mean"] / genesis_real_results["mean"]
+            # Benchmark PyTorch
+            torch_results = timer.benchmark(torch_op, op_name, tensor_sizes, torch_x)
             
-            print(f"{op_name:<25} {format_results(torch_results):<15} "
-                  f"{format_results(genesis_real_results):<15} {speedup:.2f}x")
+            # Benchmark Genesis v1 (default)
+            os.environ.pop('GENESIS_REDUCTION_VERSION', None)  # Ensure v1 is used
+            genesis_v1_results = timer.benchmark(genesis_op, op_name, tensor_sizes, genesis_x)
+            
+            # Benchmark Genesis v2 
+            os.environ['GENESIS_REDUCTION_VERSION'] = 'v2'
+            genesis_v2_results = timer.benchmark(genesis_op, op_name, tensor_sizes, genesis_x)
+            
+            # Benchmark Genesis v3
+            os.environ['GENESIS_REDUCTION_VERSION'] = 'v3'
+            genesis_v3_results = timer.benchmark(genesis_op, op_name, tensor_sizes, genesis_x)
+            
+            # Calculate speedups
+            v1_speedup = torch_results["mean"] / genesis_v1_results["mean"]
+            v2_speedup = torch_results["mean"] / genesis_v2_results["mean"]
+            v3_speedup = torch_results["mean"] / genesis_v3_results["mean"]
+            v2_vs_v1 = genesis_v1_results["mean"] / genesis_v2_results["mean"]
+            v3_vs_v1 = genesis_v1_results["mean"] / genesis_v3_results["mean"]
+            
+            # Format results (shorter format for compact display)
+            torch_str = f"{torch_results.get('median', torch_results.get('mean', 0)):.2f}ms"
+            v1_str = f"{genesis_v1_results.get('median', genesis_v1_results.get('mean', 0)):.2f}ms"
+            v2_str = f"{genesis_v2_results.get('median', genesis_v2_results.get('mean', 0)):.2f}ms"
+            v3_str = f"{genesis_v3_results.get('median', genesis_v3_results.get('mean', 0)):.2f}ms"
+            
+            print(f"{op_name:<18} {torch_str:<10} {v1_str:<10} {v2_str:<10} {v3_str:<10} "
+                  f"{v1_speedup:>4.2f}x {v2_speedup:>4.2f}x {v3_speedup:>4.2f}x {v2_vs_v1:>4.2f}x {v3_vs_v1:>4.2f}x")
+        
+        # Reset to default
+        os.environ.pop('GENESIS_REDUCTION_VERSION', None)
         
         # Clean up
         del torch_x, genesis_x

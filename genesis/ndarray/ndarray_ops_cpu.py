@@ -36,6 +36,33 @@ def cos(x):
 def sqrt(x):
     return torch.sqrt(x)
 
+def abs(x):
+    return torch.abs(x)
+
+def sign(x):
+    return torch.sign(x)
+
+def clamp(x, min_val=None, max_val=None):
+    return torch.clamp(x, min=min_val, max=max_val)
+
+def greater_equal(x, y):
+    if isinstance(y, torch.Tensor):
+        return torch.greater_equal(x, y)
+    return torch.greater_equal(x, torch.tensor(y, device=x.device, dtype=x.dtype))
+
+def less_equal(x, y):
+    if isinstance(y, torch.Tensor):
+        return torch.less_equal(x, y)
+    return torch.less_equal(x, torch.tensor(y, device=x.device, dtype=x.dtype))
+
+def ones(shape, device=None, dtype="float32"):
+    torch_dtype = torch.float32
+    if dtype == "float16":
+        torch_dtype = torch.float16
+    elif dtype == "bfloat16":
+        torch_dtype = torch.bfloat16
+    return torch.ones(shape, dtype=torch_dtype)
+
 def maximum(x, y):
     if isinstance(y, torch.Tensor):
         return torch.maximum(x, y)
@@ -50,6 +77,7 @@ def reduce_max(x, axis=None, keepdims=False):
     if isinstance(axis, tuple):
         axis = axis[0]
     return torch.max(x, dim=axis, keepdim=keepdims).values
+
 
 def reshape(x, new_shape):
     return x.reshape(new_shape)
@@ -115,10 +143,18 @@ def from_numpy(data, device_id=None, dtype=None):
         torch_dtype = torch.float16
     elif dtype == genesis.bfloat16:
         torch_dtype = torch.bfloat16
+    elif dtype == genesis.bool:
+        torch_dtype = torch.bool
+    elif dtype == genesis.int64:
+        torch_dtype = torch.int64
     return torch.from_numpy(data).to(torch_dtype)
 
 def from_tensor(data, device_id=None):
     return data
+
+def clone(data, device_id=None, dtype=None):
+    """Create a deep copy of the tensor data."""
+    return data.clone()
 
 def array(shape, device_id=None, dtype=None):
     # Convert dtype to string for comparison (handles both DType objects and strings)
@@ -132,6 +168,10 @@ def array(shape, device_id=None, dtype=None):
             arr = torch.empty((), dtype=torch.float16, device=torch.device("cpu"))
         elif dtype_str == "bfloat16":
             arr = torch.empty((), dtype=torch.bfloat16, device=torch.device("cpu"))
+        elif dtype_str == "bool":
+            arr = torch.empty((), dtype=torch.bool, device=torch.device("cpu"))
+        elif dtype_str == "int64":
+            arr = torch.empty((), dtype=torch.int64, device=torch.device("cpu"))
         else:
             arr = torch.empty((), dtype=torch.float32, device=torch.device("cpu"))
     else:
@@ -142,6 +182,10 @@ def array(shape, device_id=None, dtype=None):
             arr = torch.empty(*shape, dtype=torch.float16, device=torch.device("cpu"))
         elif dtype_str == "bfloat16":
             arr = torch.empty(*shape, dtype=torch.bfloat16, device=torch.device("cpu"))
+        elif dtype_str == "bool":
+            arr = torch.empty(*shape, dtype=torch.bool, device=torch.device("cpu"))
+        elif dtype_str == "int64":
+            arr = torch.empty(*shape, dtype=torch.int64, device=torch.device("cpu"))
         else:
             # Default to float32
             arr = torch.empty(*shape, dtype=torch.float32, device=torch.device("cpu"))
@@ -309,6 +353,34 @@ def arange(start, end, step, dtype="float32"):
         torch_dtype = torch.int64
     
     return torch.arange(start, end, step, dtype=torch_dtype, device=torch.device("cpu"))
+
+def where(condition, x, y):
+    """Element-wise selection of values from x or y based on condition."""
+    return torch.where(condition, x, y)
+
+def zeros_like(x):
+    """Create tensor of zeros with same shape and dtype as x."""
+    return torch.zeros_like(x)
+
+def argmax(x, dim=None, keepdim=False):
+    """Return indices of maximum values along dimension."""
+    if dim is None:
+        return torch.argmax(x).unsqueeze(0) if keepdim else torch.argmax(x)
+    return torch.argmax(x, dim=dim, keepdim=keepdim)
+
+def argmin(x, dim=None, keepdim=False):
+    """Return indices of minimum values along dimension."""
+    if dim is None:
+        return torch.argmin(x).unsqueeze(0) if keepdim else torch.argmin(x)
+    return torch.argmin(x, dim=dim, keepdim=keepdim)
+
+def gather(x, dim, index):
+    """Gather values along dimension using indices."""
+    return torch.gather(x, dim, index)
+
+def scatter(x, dim, index, src):
+    """Scatter values from src along dimension using indices."""
+    return x.scatter(dim, index, src)
 
 def broadcast_shapes(shape1, shape2):
     """

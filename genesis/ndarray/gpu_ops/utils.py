@@ -86,6 +86,13 @@ def from_tensor(data, device_id=0, dtype=None):
     return from_numpy(numpy_array)
 
 
+def clone(data, device_id=0, dtype=None):
+    """
+    Create a deep copy of CUDAStorage data.
+    """
+    return data.clone()
+
+
 def array(shape, device_id=0, dtype=None):
     """
     Create empty CUDAStorage array.

@@ -195,6 +195,125 @@ def scatter_linear_kernel(
     tl.store(out_ptr + idx_int64, val, mask=mask)
 
 
+@triton.jit
+def gather_kernel(
+    input_ptr, index_ptr, output_ptr,
+    input_stride_0, input_stride_1, input_stride_2,
+    index_stride_0, index_stride_1, index_stride_2,
+    output_stride_0, output_stride_1, output_stride_2,
+    input_size_0, input_size_1, input_size_2,
+    index_size_0, index_size_1, index_size_2,
+    gather_dim: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Gather operation along specified dimension.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Calculate total elements in output
+    n_elements = index_size_0 * index_size_1 * index_size_2
+    mask = offsets < n_elements
+    
+    # Convert linear offset to 3D coordinates
+    idx_2 = offsets % index_size_2
+    tmp = offsets // index_size_2
+    idx_1 = tmp % index_size_1
+    idx_0 = tmp // index_size_1
+    
+    # Load indices
+    index_offset = (idx_0 * index_stride_0 + 
+                   idx_1 * index_stride_1 + 
+                   idx_2 * index_stride_2)
+    indices = tl.load(index_ptr + index_offset, mask=mask)
+    
+    # Convert indices to int64 for address calculation
+    indices_int64 = indices.to(tl.int64)
+    
+    # Calculate input offset based on gather dimension
+    if gather_dim == 0:
+        input_offset = (indices_int64 * input_stride_0 + 
+                       idx_1 * input_stride_1 + 
+                       idx_2 * input_stride_2)
+    elif gather_dim == 1:
+        input_offset = (idx_0 * input_stride_0 + 
+                       indices_int64 * input_stride_1 + 
+                       idx_2 * input_stride_2)
+    else:  # gather_dim == 2
+        input_offset = (idx_0 * input_stride_0 + 
+                       idx_1 * input_stride_1 + 
+                       indices_int64 * input_stride_2)
+    
+    # Load input values and store to output
+    values = tl.load(input_ptr + input_offset, mask=mask)
+    output_offset = (idx_0 * output_stride_0 + 
+                    idx_1 * output_stride_1 + 
+                    idx_2 * output_stride_2)
+    tl.store(output_ptr + output_offset, values, mask=mask)
+
+
+@triton.jit  
+def scatter_kernel(
+    input_ptr, index_ptr, src_ptr, output_ptr,
+    input_stride_0, input_stride_1, input_stride_2,
+    index_stride_0, index_stride_1, index_stride_2,
+    src_stride_0, src_stride_1, src_stride_2,
+    output_stride_0, output_stride_1, output_stride_2,
+    index_size_0, index_size_1, index_size_2,
+    scatter_dim: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Scatter operation along specified dimension.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Calculate total elements to scatter
+    n_elements = index_size_0 * index_size_1 * index_size_2
+    mask = offsets < n_elements
+    
+    # Convert linear offset to 3D coordinates
+    idx_2 = offsets % index_size_2
+    tmp = offsets // index_size_2
+    idx_1 = tmp % index_size_1
+    idx_0 = tmp // index_size_1
+    
+    # Load indices and source values
+    index_offset = (idx_0 * index_stride_0 + 
+                   idx_1 * index_stride_1 + 
+                   idx_2 * index_stride_2)
+    indices = tl.load(index_ptr + index_offset, mask=mask)
+    
+    src_offset = (idx_0 * src_stride_0 + 
+                 idx_1 * src_stride_1 + 
+                 idx_2 * src_stride_2)
+    src_values = tl.load(src_ptr + src_offset, mask=mask)
+    
+    # Convert indices to int64 for address calculation
+    indices_int64 = indices.to(tl.int64)
+    
+    # Calculate output offset based on scatter dimension
+    if scatter_dim == 0:
+        output_offset = (indices_int64 * output_stride_0 + 
+                        idx_1 * output_stride_1 + 
+                        idx_2 * output_stride_2)
+    elif scatter_dim == 1:
+        output_offset = (idx_0 * output_stride_0 + 
+                        indices_int64 * output_stride_1 + 
+                        idx_2 * output_stride_2)
+    else:  # scatter_dim == 2
+        output_offset = (idx_0 * output_stride_0 + 
+                        idx_1 * output_stride_1 + 
+                        indices_int64 * output_stride_2)
+    
+    # Store values to output
+    tl.store(output_ptr + output_offset, src_values, mask=mask)
+
+
 # =============================================================================
 # GPU OPERATIONS
 # =============================================================================
@@ -278,6 +397,99 @@ def fill_tensor(tensor, value):
     Fill tensor with constant value (alias for fill).
     """
     return fill(tensor, value)
+
+
+def gather(input_tensor, dim, index):
+    """
+    Gather values along dimension using indices.
+    
+    Args:
+        input_tensor: Input CUDAStorage tensor
+        dim: Dimension to gather along
+        index: CUDAStorage tensor with indices
+        
+    Returns:
+        CUDAStorage: Gathered values
+    """
+    if not isinstance(input_tensor, CUDAStorage) or not isinstance(index, CUDAStorage):
+        # Fallback for non-CUDA tensors
+        import torch
+        return torch.gather(input_tensor, dim, index)
+    
+    # Create output tensor with same shape as index
+    output = CUDAStorage(index.shape, dtype=input_tensor.dtype)
+    
+    # Handle up to 3D tensors (extend strides with 1s for lower dimensions)
+    input_shape = list(input_tensor.shape) + [1] * (3 - len(input_tensor.shape))
+    index_shape = list(index.shape) + [1] * (3 - len(index.shape))
+    
+    input_strides = list(input_tensor.strides) + [1] * (3 - len(input_tensor.strides))
+    index_strides = list(index.strides) + [1] * (3 - len(index.strides))
+    output_strides = list(output.strides) + [1] * (3 - len(output.strides))
+    
+    n_elements = index.size
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+    
+    gather_kernel[grid](
+        input_tensor, index, output,
+        input_strides[0], input_strides[1], input_strides[2],
+        index_strides[0], index_strides[1], index_strides[2],
+        output_strides[0], output_strides[1], output_strides[2],
+        input_shape[0], input_shape[1], input_shape[2],
+        index_shape[0], index_shape[1], index_shape[2],
+        gather_dim=dim,
+        BLOCK_SIZE=1024
+    )
+    
+    return output
+
+
+def scatter(input_tensor, dim, index, src):
+    """
+    Scatter values from src along dimension using indices.
+    
+    Args:
+        input_tensor: Input CUDAStorage tensor to scatter into
+        dim: Dimension to scatter along
+        index: CUDAStorage tensor with indices
+        src: CUDAStorage tensor with source values
+        
+    Returns:
+        CUDAStorage: Scattered values
+    """
+    if not all(isinstance(t, CUDAStorage) for t in [input_tensor, index, src]):
+        # Fallback for non-CUDA tensors
+        import torch
+        return input_tensor.scatter(dim, index, src)
+    
+    # Create output tensor as copy of input
+    output = input_tensor.clone()
+    
+    # Handle up to 3D tensors (extend strides with 1s for lower dimensions)
+    input_shape = list(input_tensor.shape) + [1] * (3 - len(input_tensor.shape))
+    index_shape = list(index.shape) + [1] * (3 - len(index.shape))
+    src_shape = list(src.shape) + [1] * (3 - len(src.shape))
+    
+    input_strides = list(input_tensor.strides) + [1] * (3 - len(input_tensor.strides))
+    index_strides = list(index.strides) + [1] * (3 - len(index.strides))
+    src_strides = list(src.strides) + [1] * (3 - len(src.strides))
+    output_strides = list(output.strides) + [1] * (3 - len(output.strides))
+    
+    n_elements = index.size
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+    
+    scatter_kernel[grid](
+        input_tensor, index, src, output,
+        input_strides[0], input_strides[1], input_strides[2],
+        index_strides[0], index_strides[1], index_strides[2],
+        src_strides[0], src_strides[1], src_strides[2],
+        output_strides[0], output_strides[1], output_strides[2],
+        index_shape[0], index_shape[1], index_shape[2],
+        scatter_dim=dim,
+        BLOCK_SIZE=1024
+    )
+    
+    return output
 
 
 def cat(arrays, dim=0):

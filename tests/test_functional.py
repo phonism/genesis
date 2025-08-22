@@ -424,6 +424,38 @@ def test_max(shape, axes, device, dtype):
     F.max(A, axis=axes, keepdims=True).sum().backward()
     np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
 
+@pytest.mark.parametrize("shape, axes", SUMMATION_PARAMETERS)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_mean(shape, axes, device, dtype):
+    """Test tensor mean reduction along specified axes.
+    
+    Args:
+        shape: Input tensor shape
+        axes: Axes to compute mean along (None for all axes)
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+    
+    Tests:
+        - Forward pass mean reduction matches PyTorch
+        - Backward gradients match PyTorch implementation
+        - Tests reduction along different axes including large dimensions
+    """
+    _A = np.random.randn(*shape).astype(np.float32)
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    TA = torch.Tensor(_A).to(dtype[1])
+    TA.requires_grad = True
+    
+    # Test forward pass
+    np.testing.assert_allclose(
+            torch.mean(TA, dim=axes).detach().numpy(), 
+            F.mean(A, axis=axes).detach().numpy(), atol=atol, rtol=rtol)
+
+    # Test backward pass
+    torch.mean(TA, dim=axes).sum().backward()
+    F.mean(A, axis=axes).sum().backward()
+    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
+
 @pytest.mark.parametrize("shape", GENERAL_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
@@ -1417,13 +1449,6 @@ def test_reduce_sum_precision_issue(device):
     torch_grad = TA.grad.numpy()
     genesis_grad = A.grad.numpy()
     
-    # Debug info
-    print(f"Shape: {shape}, Device: {device}")
-    print(f"PyTorch grad range: [{torch_grad.min():.6e}, {torch_grad.max():.6e}]")
-    print(f"Genesis grad range: [{genesis_grad.min():.6e}, {genesis_grad.max():.6e}]")
-    print(f"PyTorch grad unique values: {len(np.unique(torch_grad))}")
-    print(f"Genesis grad unique values: {len(np.unique(genesis_grad))}")
-    
     # The gradient should be 1.0 everywhere for sum().backward()
     expected_grad = np.ones_like(_A)
     
@@ -1491,6 +1516,718 @@ def test_reduce_sum_keepdims(device):
             atol=1e-5, rtol=1e-5,
             err_msg=f"keepdims backward mismatch for shape {shape}, axes {axes}"
         )
+
+
+
+@pytest.mark.parametrize("shape", [(5, 5), (1, 10), (100, 3)])
+@pytest.mark.parametrize("device", [genesis.device("cuda"), genesis.device("cpu")])
+@pytest.mark.parametrize("dtype", [genesis.float32, genesis.float16])
+def test_clone(shape, device, dtype):
+    """Test tensor clone functionality.
+    
+    Args:
+        shape: Shape of tensor to test
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type to test
+        
+    Tests:
+        - Clone creates independent copy
+        - Clone preserves shape, dtype, device
+        - Clone preserves requires_grad setting
+        - Modifications to original don't affect clone
+        - Clone is detached from computation graph
+    """
+    # Create original tensor with random data
+    _A = np.random.randn(*shape).astype(np.float32)
+    
+    # Test with requires_grad=True
+    A = genesis.Tensor(_A, device=device, dtype=dtype, requires_grad=True)
+    A_clone = A.clone()
+    
+    # Check basic properties
+    assert A_clone.shape == A.shape, f"Shape mismatch: {A_clone.shape} vs {A.shape}"
+    assert A_clone.dtype == A.dtype, f"Dtype mismatch: {A_clone.dtype} vs {A.dtype}"
+    assert A_clone.device == A.device, f"Device mismatch: {A_clone.device} vs {A.device}"
+    assert A_clone.requires_grad == A.requires_grad, f"requires_grad mismatch"
+    
+    # Check data independence
+    np.testing.assert_allclose(
+        A.detach().numpy(),
+        A_clone.detach().numpy(),
+        atol=1e-6, rtol=1e-6,
+        err_msg="Clone data mismatch"
+    )
+    
+    # Store clone values before modification
+    clone_data_before_mod = A_clone.detach().numpy().copy()
+    
+    # Verify clone is independent - modify original
+    A.fill_(999.0)
+    
+    # Clone should remain unchanged
+    clone_data_after_mod = A_clone.detach().numpy()
+    
+    # Use appropriate tolerance based on dtype
+    if dtype == genesis.float16:
+        atol, rtol = 1e-3, 1e-3  # More relaxed for float16
+    else:
+        atol, rtol = 1e-6, 1e-6
+        
+    np.testing.assert_allclose(
+        clone_data_after_mod,
+        clone_data_before_mod,
+        atol=atol, rtol=rtol,
+        err_msg="Clone was affected by original modification"
+    )
+    
+    # Test with requires_grad=False
+    B = genesis.Tensor(_A, device=device, dtype=dtype, requires_grad=False)
+    B_clone = B.clone()
+    assert B_clone.requires_grad == False, "requires_grad should be False for cloned tensor"
+    
+    # Check that clone is detached from computation graph
+    C = genesis.Tensor(_A, device=device, dtype=dtype, requires_grad=True)
+    D = C * 2  # Create computation graph
+    D_clone = D.clone()
+    
+    # Clone should have no creator (detached)
+    assert D_clone.creator is None, "Clone should be detached from computation graph"
+
+
+@pytest.mark.parametrize("shape", [(5, 5), (1, 10), (100, 3)])
+@pytest.mark.parametrize("device", [genesis.device("cuda"), genesis.device("cpu")])
+@pytest.mark.parametrize("dtype", [genesis.float32, genesis.float16])
+def test_abs(shape, device, dtype):
+    """Test tensor abs functionality.
+    
+    Args:
+        shape: Shape of tensor to test
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type to test
+        
+    Tests:
+        - abs() computes correct absolute values
+        - abs() preserves shape, dtype, device
+        - abs() gradient computation works correctly
+        - abs() handles positive, negative, and zero values
+    """
+    # Create tensor with mixed positive/negative/zero values
+    _A = np.random.randn(*shape).astype(np.float32) 
+    _A.flat[0] = 0.0  # Include a zero value
+    _A.flat[1] = -2.5  # Include negative value
+    _A.flat[2] = 3.7   # Include positive value
+    
+    # PyTorch reference
+    torch_A = torch.tensor(_A, requires_grad=True, dtype=torch.float32 if dtype == genesis.float32 else torch.float16)
+    torch_abs = torch.abs(torch_A)
+    torch_loss = torch_abs.sum()
+    torch_loss.backward()
+    
+    # Genesis implementation
+    genesis_A = genesis.Tensor(_A, device=device, dtype=dtype, requires_grad=True)
+    genesis_abs = genesis_A.abs()
+    genesis_loss = genesis_abs.sum()
+    genesis_loss.backward()
+    
+    # Check basic properties
+    assert genesis_abs.shape == torch_abs.shape, f"Shape mismatch: {genesis_abs.shape} vs {torch_abs.shape}"
+    assert genesis_abs.dtype == dtype, f"Dtype mismatch: {genesis_abs.dtype} vs {dtype}"
+    assert genesis_abs.device == device, f"Device mismatch: {genesis_abs.device} vs {device}"
+    
+    # Use appropriate tolerance based on dtype
+    if dtype == genesis.float16:
+        atol, rtol = 1e-3, 1e-3
+    else:
+        atol, rtol = 1e-6, 1e-6
+    
+    # Check forward pass values
+    np.testing.assert_allclose(
+        genesis_abs.detach().numpy(),
+        torch_abs.detach().numpy(),
+        atol=atol, rtol=rtol,
+        err_msg="abs forward pass mismatch"
+    )
+    
+    # Check gradients
+    np.testing.assert_allclose(
+        genesis_A.grad.numpy(),
+        torch_A.grad.numpy(),
+        atol=atol, rtol=rtol,
+        err_msg="abs backward pass mismatch"
+    )
+    
+    # Test specific values
+    test_vals = genesis.tensor([[-3.0, 0.0, 2.5]], device=device, dtype=dtype)
+    expected = genesis.tensor([[3.0, 0.0, 2.5]], device=device, dtype=dtype)
+    result = test_vals.abs()
+    
+    np.testing.assert_allclose(
+        result.numpy(),
+        expected.numpy(), 
+        atol=atol, rtol=rtol,
+        err_msg="abs specific values mismatch"
+    )
+
+
+def test_clamp():
+    """Test clamp/clip functionality with comprehensive cases."""
+    
+    # Test shapes and data types
+    test_shapes = [(5,), (3, 4), (2, 3, 4)]
+    test_dtypes = [genesis.float32, genesis.float16, genesis.bfloat16]
+    
+    for shape in test_shapes:
+        for dtype in test_dtypes:
+            # Create test tensor with values in range [-5, 5]
+            np_data = np.random.uniform(-5, 5, shape).astype(np.float32)
+            
+            # Test basic clamp functionality
+            x_genesis = genesis.tensor(np_data, dtype=dtype, requires_grad=True)
+            x_torch = torch.tensor(np_data, dtype=torch.float32, requires_grad=True)
+            
+            # Test clamp with both min and max
+            genesis_result = genesis.clamp(x_genesis, min_val=-2.0, max_val=2.0)
+            torch_result = torch.clamp(x_torch, min=-2.0, max=2.0)
+            
+            # Verify shape and dtype
+            assert genesis_result.shape == torch_result.shape, f"Shape mismatch for {shape}, {dtype}"
+            assert genesis_result.dtype == dtype, f"Dtype mismatch for {dtype}"
+            
+            # Verify values with appropriate tolerance
+            if dtype == genesis.bfloat16:
+                atol, rtol = 1e-2, 1e-2  # bfloat16 has lower precision
+            elif dtype == genesis.float16:
+                atol, rtol = 1e-3, 1e-3
+            else:
+                atol, rtol = 1e-6, 1e-6
+            np.testing.assert_allclose(
+                genesis_result.numpy(), 
+                torch_result.detach().numpy(), 
+                atol=atol, rtol=rtol,
+                err_msg=f"clamp values mismatch for {shape}, {dtype}"
+            )
+            
+            # Test clamp with only min
+            genesis_result_min = genesis.clamp(x_genesis, min_val=-1.0)
+            torch_result_min = torch.clamp(x_torch, min=-1.0)
+            
+            np.testing.assert_allclose(
+                genesis_result_min.numpy(), 
+                torch_result_min.detach().numpy(), 
+                atol=atol, rtol=rtol,
+                err_msg=f"clamp min-only values mismatch for {shape}, {dtype}"
+            )
+            
+            # Test clamp with only max
+            genesis_result_max = genesis.clamp(x_genesis, max_val=1.0)
+            torch_result_max = torch.clamp(x_torch, max=1.0)
+            
+            np.testing.assert_allclose(
+                genesis_result_max.numpy(), 
+                torch_result_max.detach().numpy(), 
+                atol=atol, rtol=rtol,
+                err_msg=f"clamp max-only values mismatch for {shape}, {dtype}"
+            )
+    
+    # Test tensor method interface
+    x = genesis.tensor([[-3.0, -1.0, 0.0, 1.0, 3.0]], dtype=genesis.float32, requires_grad=True)
+    
+    # Test .clamp() method
+    result_clamp = x.clamp(-1.5, 1.5)
+    expected_clamp = np.array([[-1.5, -1.0, 0.0, 1.0, 1.5]])
+    
+    np.testing.assert_allclose(
+        result_clamp.numpy(),
+        expected_clamp,
+        atol=1e-6, rtol=1e-6,
+        err_msg="clamp method values mismatch"
+    )
+    
+    # Test .clip() method (alias)
+    result_clip = x.clip(-1.5, 1.5)
+    np.testing.assert_allclose(
+        result_clip.numpy(),
+        expected_clamp,
+        atol=1e-6, rtol=1e-6,
+        err_msg="clip method values mismatch"
+    )
+    
+    # Test gradient computation
+    x = genesis.tensor([[-3.0, -1.0, 0.0, 1.0, 3.0]], dtype=genesis.float32, requires_grad=True)
+    y = genesis.clamp(x, min_val=-1.5, max_val=1.5)
+    loss = genesis.sum(y)
+    loss.backward()
+    
+    # Expected gradient: 1 where -1.5 <= x <= 1.5, 0 elsewhere
+    expected_grad = np.array([[0.0, 1.0, 1.0, 1.0, 0.0]])
+    
+    np.testing.assert_allclose(
+        x.grad.numpy(),
+        expected_grad,
+        atol=1e-6, rtol=1e-6,
+        err_msg="clamp gradient mismatch"
+    )
+    
+    # Test edge cases
+    x_edge = genesis.tensor([[-2.0, -2.0, 2.0, 2.0]], dtype=genesis.float32, requires_grad=True)
+    y_edge = genesis.clamp(x_edge, min_val=-2.0, max_val=2.0)
+    
+    # Values at boundary should remain unchanged
+    np.testing.assert_allclose(
+        x_edge.numpy(),
+        y_edge.numpy(),
+        atol=1e-6, rtol=1e-6,
+        err_msg="clamp boundary values mismatch"
+    )
+
+
+def test_where():
+    """Test where function with comprehensive cases."""
+    
+    # Test shapes and data types
+    test_shapes = [(5,), (3, 4), (2, 3, 4)]
+    test_dtypes = [genesis.float32, genesis.float16, genesis.bfloat16]
+    
+    for shape in test_shapes:
+        for dtype in test_dtypes:
+            # Create test data
+            condition_data = np.random.choice([True, False], shape)
+            x_data = np.random.uniform(-5, 5, shape).astype(np.float32)
+            y_data = np.random.uniform(-5, 5, shape).astype(np.float32)
+            
+            # Test basic where functionality - use boolean tensor like PyTorch
+            condition_genesis = genesis.tensor(condition_data, dtype=genesis.bool, requires_grad=False)
+            x_genesis = genesis.tensor(x_data, dtype=dtype, requires_grad=True)
+            y_genesis = genesis.tensor(y_data, dtype=dtype, requires_grad=True)
+            
+            condition_torch = torch.tensor(condition_data, dtype=torch.bool, requires_grad=False)
+            x_torch = torch.tensor(x_data, dtype=torch.float32, requires_grad=True)
+            y_torch = torch.tensor(y_data, dtype=torch.float32, requires_grad=True)
+            
+            # Test where function
+            genesis_result = genesis.where(condition_genesis, x_genesis, y_genesis)
+            torch_result = torch.where(condition_torch, x_torch, y_torch)
+            
+            # Verify shape and dtype
+            assert genesis_result.shape == torch_result.shape, f"Shape mismatch for {shape}, {dtype}"
+            assert genesis_result.dtype == dtype, f"Dtype mismatch for {dtype}"
+            
+            # Verify values with appropriate tolerance
+            if dtype == genesis.bfloat16:
+                atol, rtol = 1e-2, 1e-2  # bfloat16 has lower precision
+            elif dtype == genesis.float16:
+                atol, rtol = 1e-3, 1e-3
+            else:
+                atol, rtol = 1e-6, 1e-6
+                
+            np.testing.assert_allclose(
+                genesis_result.numpy(), 
+                torch_result.detach().numpy(), 
+                atol=atol, rtol=rtol,
+                err_msg=f"where values mismatch for {shape}, {dtype}"
+            )
+    
+    # Test gradient computation
+    condition = genesis.tensor([[True, False, True, False]], dtype=genesis.bool, requires_grad=False)
+    x = genesis.tensor([[1.0, 2.0, 3.0, 4.0]], dtype=genesis.float32, requires_grad=True)
+    y = genesis.tensor([[5.0, 6.0, 7.0, 8.0]], dtype=genesis.float32, requires_grad=True)
+    
+    result = genesis.where(condition, x, y)
+    loss = genesis.sum(result)
+    loss.backward()
+    
+    # Expected: x_grad = [1, 0, 1, 0] (where condition is True)
+    #          y_grad = [0, 1, 0, 1] (where condition is False)
+    expected_x_grad = np.array([[1.0, 0.0, 1.0, 0.0]])
+    expected_y_grad = np.array([[0.0, 1.0, 0.0, 1.0]])
+    
+    np.testing.assert_allclose(
+        x.grad.numpy(),
+        expected_x_grad,
+        atol=1e-6, rtol=1e-6,
+        err_msg="where x gradient mismatch"
+    )
+    
+    np.testing.assert_allclose(
+        y.grad.numpy(),
+        expected_y_grad,
+        atol=1e-6, rtol=1e-6,
+        err_msg="where y gradient mismatch"
+    )
+    
+    # Test specific values
+    condition_specific = genesis.tensor([[True, False, True]], dtype=genesis.bool, requires_grad=False)
+    x_specific = genesis.tensor([[1.0, 2.0, 3.0]], dtype=genesis.float32, requires_grad=False)
+    y_specific = genesis.tensor([[4.0, 5.0, 6.0]], dtype=genesis.float32, requires_grad=False)
+    
+    result_specific = genesis.where(condition_specific, x_specific, y_specific)
+    expected_specific = np.array([[1.0, 5.0, 3.0]])  # Take x[0], y[1], x[2]
+    
+    np.testing.assert_allclose(
+        result_specific.numpy(),
+        expected_specific,
+        atol=1e-6, rtol=1e-6,
+        err_msg="where specific values mismatch"
+    )
+
+
+def test_argmax_argmin():
+    """Test argmax and argmin functions with comprehensive cases."""
+    
+    # Test shapes and data types
+    test_shapes = [(5,), (3, 4), (2, 3, 4)]
+    test_dtypes = [genesis.float32, genesis.float16, genesis.bfloat16]
+    
+    for shape in test_shapes:
+        for dtype in test_dtypes:
+            # Create test data with distinct values to avoid ties
+            np_data = np.arange(np.prod(shape), dtype=np.float32).reshape(shape) + np.random.uniform(-0.1, 0.1, shape)
+            
+            # Test basic argmax/argmin functionality
+            x_genesis = genesis.tensor(np_data, dtype=dtype, requires_grad=False)
+            x_torch = torch.tensor(np_data, dtype=torch.float32, requires_grad=False)
+            
+            # Test global argmax (dim=None)
+            genesis_argmax = genesis.argmax(x_genesis)
+            torch_argmax = torch.argmax(x_torch)
+            
+            assert genesis_argmax.shape == torch_argmax.shape, f"Argmax shape mismatch for {shape}, {dtype}"
+            assert genesis_argmax.dtype == genesis.int64, f"Argmax dtype should be int64, got {genesis_argmax.dtype}"
+            
+            # Values should match (convert to same dtype for comparison)
+            np.testing.assert_equal(
+                genesis_argmax.numpy().astype(np.int64),
+                torch_argmax.numpy().astype(np.int64),
+                err_msg=f"argmax values mismatch for {shape}, {dtype}"
+            )
+            
+            # Test global argmin (dim=None)
+            genesis_argmin = genesis.argmin(x_genesis)
+            torch_argmin = torch.argmin(x_torch)
+            
+            assert genesis_argmin.shape == torch_argmin.shape, f"Argmin shape mismatch for {shape}, {dtype}"
+            assert genesis_argmin.dtype == genesis.int64, f"Argmin dtype should be int64, got {genesis_argmin.dtype}"
+            
+            np.testing.assert_equal(
+                genesis_argmin.numpy().astype(np.int64),
+                torch_argmin.numpy().astype(np.int64),
+                err_msg=f"argmin values mismatch for {shape}, {dtype}"
+            )
+            
+            # Test argmax/argmin along specific dimensions (for multi-dimensional tensors)
+            if len(shape) > 1:
+                for dim in range(len(shape)):
+                    # Test with keepdim=False
+                    genesis_argmax_dim = genesis.argmax(x_genesis, dim=dim, keepdim=False)
+                    torch_argmax_dim = torch.argmax(x_torch, dim=dim, keepdim=False)
+                    
+                    assert genesis_argmax_dim.shape == torch_argmax_dim.shape, f"Argmax dim shape mismatch for {shape}, {dtype}, dim={dim}"
+                    
+                    np.testing.assert_equal(
+                        genesis_argmax_dim.numpy().astype(np.int64),
+                        torch_argmax_dim.numpy().astype(np.int64),
+                        err_msg=f"argmax dim values mismatch for {shape}, {dtype}, dim={dim}"
+                    )
+                    
+                    # Test with keepdim=True
+                    genesis_argmax_keepdim = genesis.argmax(x_genesis, dim=dim, keepdim=True)
+                    torch_argmax_keepdim = torch.argmax(x_torch, dim=dim, keepdim=True)
+                    
+                    assert genesis_argmax_keepdim.shape == torch_argmax_keepdim.shape, f"Argmax keepdim shape mismatch for {shape}, {dtype}, dim={dim}"
+                    
+                    np.testing.assert_equal(
+                        genesis_argmax_keepdim.numpy().astype(np.int64),
+                        torch_argmax_keepdim.numpy().astype(np.int64),
+                        err_msg=f"argmax keepdim values mismatch for {shape}, {dtype}, dim={dim}"
+                    )
+    
+    # Test tensor method interface
+    x = genesis.tensor([[1.0, 5.0, 3.0], [2.0, 1.0, 4.0]], dtype=genesis.float32, requires_grad=False)
+    
+    # Test .argmax() method
+    result_argmax = x.argmax()
+    expected_argmax = 1  # Index of maximum value (5.0)
+    
+    assert result_argmax.numpy() == expected_argmax, f"Expected {expected_argmax}, got {result_argmax.numpy()}"
+    
+    # Test .argmin() method  
+    result_argmin = x.argmin()
+    expected_argmin = 0  # Index of minimum value (1.0)
+    
+    assert result_argmin.numpy() == expected_argmin, f"Expected {expected_argmin}, got {result_argmin.numpy()}"
+    
+    # Test argmax along dimension
+    result_argmax_dim0 = x.argmax(dim=0)  # Along rows
+    expected_argmax_dim0 = np.array([1, 0, 1])  # [2.0>1.0, 5.0>1.0, 4.0>3.0]
+    
+    np.testing.assert_equal(
+        result_argmax_dim0.numpy(),
+        expected_argmax_dim0,
+        err_msg="argmax dim=0 values mismatch"
+    )
+    
+    result_argmax_dim1 = x.argmax(dim=1)  # Along columns
+    expected_argmax_dim1 = np.array([1, 2])  # [5.0 is max in row 0, 4.0 is max in row 1]
+    
+    np.testing.assert_equal(
+        result_argmax_dim1.numpy(),
+        expected_argmax_dim1,
+        err_msg="argmax dim=1 values mismatch"
+    )
+
+
+def test_permute():
+    """Test permute function with comprehensive cases."""
+    
+    # Test data types
+    test_dtypes = [genesis.float32, genesis.float16, genesis.bfloat16]
+    
+    for dtype in test_dtypes:
+        # Test 2D tensor permutation
+        np_data_2d = np.arange(6, dtype=np.float32).reshape(2, 3)
+        x_genesis_2d = genesis.tensor(np_data_2d, dtype=dtype, requires_grad=True)
+        x_torch_2d = torch.tensor(np_data_2d, dtype=torch.float32, requires_grad=True)
+        
+        # Test 2D permute (transpose)
+        genesis_result_2d = genesis.permute(x_genesis_2d, [1, 0])
+        torch_result_2d = torch.permute(x_torch_2d, [1, 0])
+        
+        # Verify shape and dtype
+        assert genesis_result_2d.shape == torch_result_2d.shape, f"2D permute shape mismatch for {dtype}"
+        assert genesis_result_2d.dtype == dtype, f"2D permute dtype mismatch for {dtype}"
+        
+        # Verify values with appropriate tolerance
+        if dtype == genesis.bfloat16:
+            atol, rtol = 1e-2, 1e-2
+        elif dtype == genesis.float16:
+            atol, rtol = 1e-3, 1e-3
+        else:
+            atol, rtol = 1e-6, 1e-6
+            
+        np.testing.assert_allclose(
+            genesis_result_2d.numpy(), 
+            torch_result_2d.detach().numpy(), 
+            atol=atol, rtol=rtol,
+            err_msg=f"2D permute values mismatch for {dtype}"
+        )
+        
+        # Test 3D tensor permutation
+        np_data_3d = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+        x_genesis_3d = genesis.tensor(np_data_3d, dtype=dtype, requires_grad=True)
+        x_torch_3d = torch.tensor(np_data_3d, dtype=torch.float32, requires_grad=True)
+        
+        # Test different permutation patterns
+        permutation_patterns = [
+            [0, 2, 1],  # swap last two dims
+            [2, 0, 1],  # cyclic permutation
+            [1, 2, 0],  # another cyclic permutation
+            [2, 1, 0],  # reverse order
+        ]
+        
+        for perm in permutation_patterns:
+            genesis_result_3d = genesis.permute(x_genesis_3d, perm)
+            torch_result_3d = torch.permute(x_torch_3d, perm)
+            
+            assert genesis_result_3d.shape == torch_result_3d.shape, f"3D permute shape mismatch for {dtype}, perm={perm}"
+            assert genesis_result_3d.dtype == dtype, f"3D permute dtype mismatch for {dtype}, perm={perm}"
+            
+            np.testing.assert_allclose(
+                genesis_result_3d.numpy(), 
+                torch_result_3d.detach().numpy(), 
+                atol=atol, rtol=rtol,
+                err_msg=f"3D permute values mismatch for {dtype}, perm={perm}"
+            )
+    
+    # Test tensor method interface with different calling styles
+    x = genesis.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]], 
+                      dtype=genesis.float32, requires_grad=True)  # Shape: (2, 2, 2)
+    
+    # Test .permute() method with tuple/list argument
+    result_list = x.permute([2, 0, 1])  # Shape should be (2, 2, 2)
+    expected_shape = (2, 2, 2)
+    assert result_list.shape == expected_shape, f"Expected shape {expected_shape}, got {result_list.shape}"
+    
+    # Test .permute() method with individual arguments
+    result_args = x.permute(2, 0, 1)  # Shape should be (2, 2, 2)
+    assert result_args.shape == expected_shape, f"Expected shape {expected_shape}, got {result_args.shape}"
+    
+    # Results should be the same
+    np.testing.assert_allclose(
+        result_list.numpy(),
+        result_args.numpy(),
+        atol=1e-6, rtol=1e-6,
+        err_msg="permute list vs args results mismatch"
+    )
+    
+    # Test gradient computation for permute
+    x_grad = genesis.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], 
+                           dtype=genesis.float32, requires_grad=True)  # Shape: (2, 3)
+    
+    y_permuted = x_grad.permute(1, 0)  # Shape: (3, 2)
+    loss = genesis.sum(y_permuted)
+    loss.backward()
+    
+    # Gradient should have the same shape as original tensor
+    assert x_grad.grad.shape == x_grad.shape, f"Gradient shape mismatch: {x_grad.grad.shape} vs {x_grad.shape}"
+    
+    # Gradient values should be all ones (since loss is just sum)
+    expected_grad = np.ones_like(x_grad.numpy())
+    np.testing.assert_allclose(
+        x_grad.grad.numpy(),
+        expected_grad,
+        atol=1e-6, rtol=1e-6,
+        err_msg="permute gradient values mismatch"
+    )
+    
+    # Test specific permutation values
+    x_specific = genesis.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=genesis.float32, requires_grad=False)
+    result_specific = x_specific.permute(1, 0)
+    expected_specific = np.array([[1.0, 3.0], [2.0, 4.0]])  # Transpose
+    
+    np.testing.assert_allclose(
+        result_specific.numpy(),
+        expected_specific,
+        atol=1e-6, rtol=1e-6,
+        err_msg="permute specific values mismatch"
+    )
+    
+    # Test 4D tensor permutation (common in deep learning)
+    x_4d = genesis.tensor(np.arange(48).reshape(2, 3, 4, 2), dtype=genesis.float32, requires_grad=False)
+    
+    # NCHW to NHWC permutation (common in computer vision)
+    result_4d = x_4d.permute(0, 2, 3, 1)  # (2, 3, 4, 2) -> (2, 4, 2, 3)
+    expected_shape_4d = (2, 4, 2, 3)
+    
+    assert result_4d.shape == expected_shape_4d, f"4D permute shape mismatch: {result_4d.shape} vs {expected_shape_4d}"
+
+
+def test_gather_scatter():
+    """Test gather and scatter operations with comprehensive cases."""
+    
+    # Test data types
+    test_dtypes = [genesis.float32, genesis.float16, genesis.bfloat16]
+    
+    for dtype in test_dtypes:
+        # Test 2D gather operation
+        np_data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+        x_genesis = genesis.tensor(np_data, dtype=dtype, requires_grad=True)
+        x_torch = torch.tensor(np_data, dtype=torch.float32, requires_grad=True)
+        
+        # Create index tensor
+        indices_np = np.array([[0, 2], [1, 0]], dtype=np.int64)
+        indices_genesis = genesis.tensor(indices_np, dtype=genesis.int64)
+        indices_torch = torch.tensor(indices_np, dtype=torch.int64)
+        
+        # Test gather along dim=1
+        genesis_gathered = genesis.gather(x_genesis, 1, indices_genesis)
+        torch_gathered = torch.gather(x_torch, 1, indices_torch)
+        
+        # Verify shape and dtype
+        assert genesis_gathered.shape == torch_gathered.shape, f"Gather shape mismatch for {dtype}"
+        assert genesis_gathered.dtype == dtype, f"Gather dtype mismatch for {dtype}"
+        
+        # Verify values with appropriate tolerance
+        if dtype == genesis.bfloat16:
+            atol, rtol = 1e-2, 1e-2
+        elif dtype == genesis.float16:
+            atol, rtol = 1e-3, 1e-3
+        else:
+            atol, rtol = 1e-6, 1e-6
+            
+        np.testing.assert_allclose(
+            genesis_gathered.numpy(), 
+            torch_gathered.detach().numpy(), 
+            atol=atol, rtol=rtol,
+            err_msg=f"Gather values mismatch for {dtype}"
+        )
+        
+        # Test gather gradient
+        loss_gather = genesis.sum(genesis_gathered)
+        loss_gather.backward()
+        
+        loss_torch_gather = torch.sum(torch_gathered)
+        loss_torch_gather.backward()
+        
+        np.testing.assert_allclose(
+            x_genesis.grad.numpy(),
+            x_torch.grad.detach().numpy(),
+            atol=atol, rtol=rtol,
+            err_msg=f"Gather gradient mismatch for {dtype}"
+        )
+        
+        # Test 2D scatter operation
+        x2_genesis = genesis.tensor(np_data.copy(), dtype=dtype, requires_grad=True)
+        x2_torch = torch.tensor(np_data.copy(), dtype=torch.float32, requires_grad=True)
+        
+        src_np = np.array([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32)
+        src_genesis = genesis.tensor(src_np, dtype=dtype, requires_grad=True)
+        src_torch = torch.tensor(src_np, dtype=torch.float32, requires_grad=True)
+        
+        # Test scatter along dim=1
+        genesis_scattered = genesis.scatter(x2_genesis, 1, indices_genesis, src_genesis)
+        torch_scattered = x2_torch.scatter(1, indices_torch, src_torch)
+        
+        # Verify shape and dtype
+        assert genesis_scattered.shape == torch_scattered.shape, f"Scatter shape mismatch for {dtype}"
+        assert genesis_scattered.dtype == dtype, f"Scatter dtype mismatch for {dtype}"
+        
+        np.testing.assert_allclose(
+            genesis_scattered.numpy(), 
+            torch_scattered.detach().numpy(), 
+            atol=atol, rtol=rtol,
+            err_msg=f"Scatter values mismatch for {dtype}"
+        )
+        
+        # Test scatter gradient
+        loss_scatter = genesis.sum(genesis_scattered)
+        loss_scatter.backward()
+        
+        loss_torch_scatter = torch.sum(torch_scattered)
+        loss_torch_scatter.backward()
+        
+        np.testing.assert_allclose(
+            x2_genesis.grad.numpy(),
+            x2_torch.grad.detach().numpy(),
+            atol=atol, rtol=rtol,
+            err_msg=f"Scatter x gradient mismatch for {dtype}"
+        )
+        
+        np.testing.assert_allclose(
+            src_genesis.grad.numpy(),
+            src_torch.grad.detach().numpy(),
+            atol=atol, rtol=rtol,
+            err_msg=f"Scatter src gradient mismatch for {dtype}"
+        )
+    
+    # Test tensor method interface
+    x = genesis.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], 
+                      dtype=genesis.float32, requires_grad=True)
+    indices = genesis.tensor([[0, 3, 1], [2, 1, 0]], dtype=genesis.int64)
+    
+    # Test .gather() method
+    gathered = x.gather(1, indices)
+    expected_gather_shape = (2, 3)
+    assert gathered.shape == expected_gather_shape, f"Expected gather shape {expected_gather_shape}, got {gathered.shape}"
+    
+    # Test .scatter() method
+    src = genesis.tensor([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], dtype=genesis.float32)
+    scattered = x.scatter(1, indices, src)
+    expected_scatter_shape = (2, 4)
+    assert scattered.shape == expected_scatter_shape, f"Expected scatter shape {expected_scatter_shape}, got {scattered.shape}"
+    
+    # Test 3D gather/scatter
+    x_3d = genesis.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]], 
+                         dtype=genesis.float32, requires_grad=True)  # Shape: (2, 2, 2)
+    indices_3d = genesis.tensor([[[0], [1]], [[1], [0]]], dtype=genesis.int64)  # Shape: (2, 2, 1)
+    
+    # Test gather along dim=2
+    gathered_3d = x_3d.gather(2, indices_3d)
+    assert gathered_3d.shape == (2, 2, 1), f"3D gather shape mismatch: {gathered_3d.shape}"
+    
+    # Test scatter along dim=2
+    src_3d = genesis.tensor([[[10.0], [20.0]], [[30.0], [40.0]]], dtype=genesis.float32)
+    scattered_3d = x_3d.scatter(2, indices_3d, src_3d)
+    assert scattered_3d.shape == (2, 2, 2), f"3D scatter shape mismatch: {scattered_3d.shape}"
 
 
 if __name__ == "__main__":

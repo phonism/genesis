@@ -1,5 +1,7 @@
 """Operatpr table."""
 # Global operator table.
+from functools import reduce as functools_reduce
+import operator
 from numbers import Number
 from typing import Optional, List
 from ..autograd import Function, NDArray, Tensor
@@ -316,6 +318,217 @@ class Sqrt(Function):
 
 def sqrt(a):
     return Sqrt.apply(a)
+
+class Abs(Function):
+    @staticmethod
+    def forward(ctx, a):
+        ctx.save_for_backward(a)
+        return Tensor(array_api.abs(a.data), requires_grad=a.requires_grad, dtype=a.dtype)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        a, = ctx.saved_tensors
+        # Gradient of abs(x) is sign(x), but undefined at x=0
+        # We use the convention that sign(0) = 0
+        grad = Tensor(array_api.sign(a.data) * out_grad.data, requires_grad=False, dtype=out_grad.dtype)
+        return (grad, )
+
+def abs(a):
+    return Abs.apply(a)
+
+class Clamp(Function):
+    @staticmethod
+    def forward(ctx, a, min_val=None, max_val=None):
+        ctx.save_for_backward(a, min_val, max_val)
+        return Tensor(array_api.clamp(a.data, min_val, max_val), requires_grad=a.requires_grad, dtype=a.dtype)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        a, min_val, max_val = ctx.saved_tensors
+        # Gradient of clamp: 1 where min_val <= x <= max_val, 0 otherwise
+        mask = array_api.ones(a.shape, device=a.device, dtype=a.dtype)
+        if min_val is not None:
+            mask = mask * array_api.greater_equal(a.data, min_val)
+        if max_val is not None:
+            mask = mask * array_api.less_equal(a.data, max_val)
+        grad = Tensor(mask * out_grad.data, requires_grad=False, dtype=out_grad.dtype)
+        return (grad,)
+
+def clamp(a, min_val=None, max_val=None):
+    return Clamp.apply(a, min_val, max_val)
+
+def clip(a, min_val=None, max_val=None):
+    return Clamp.apply(a, min_val, max_val)
+
+class Where(Function):
+    @staticmethod
+    def forward(ctx, condition, x, y):
+        """Element-wise selection of values from x or y based on condition."""
+        ctx.save_for_backward(condition, x, y)
+        return Tensor(array_api.where(condition.data, x.data, y.data), requires_grad=(x.requires_grad or y.requires_grad), dtype=x.dtype)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Backward pass for where operation."""
+        condition, x, y = ctx.saved_tensors
+        
+        # Simple gradient computation - just pass through out_grad conditionally
+        x_grad = None
+        y_grad = None
+        
+        if x.requires_grad:
+            x_grad = genesis.where(condition, out_grad, genesis.zeros_like(out_grad))
+        
+        if y.requires_grad:
+            y_grad = genesis.where(condition, genesis.zeros_like(out_grad), out_grad)
+        
+        return (None, x_grad, y_grad)
+
+def where(condition, x, y):
+    """Element-wise selection of values from x or y based on condition."""
+    return Where.apply(condition, x, y)
+
+class Argmax(Function):
+    @staticmethod
+    def forward(ctx, a, dim=None, keepdim=False):
+        """Find indices of maximum values along dimension."""
+        ctx.save_for_backward(a, dim, keepdim)
+        result_data = array_api.argmax(a.data, dim=dim, keepdim=keepdim)
+        return Tensor(result_data, requires_grad=False, dtype=genesis.int64)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Argmax is not differentiable - gradient is None."""
+        return (None, None, None)
+
+class Argmin(Function):
+    @staticmethod
+    def forward(ctx, a, dim=None, keepdim=False):
+        """Find indices of minimum values along dimension."""
+        ctx.save_for_backward(a, dim, keepdim)
+        result_data = array_api.argmin(a.data, dim=dim, keepdim=keepdim)
+        return Tensor(result_data, requires_grad=False, dtype=genesis.int64)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Argmin is not differentiable - gradient is None."""
+        return (None, None, None)
+
+def argmax(a, dim=None, keepdim=False):
+    """Return indices of maximum values along specified dimension."""
+    return Argmax.apply(a, dim, keepdim)
+
+def argmin(a, dim=None, keepdim=False):
+    """Return indices of minimum values along specified dimension."""
+    return Argmin.apply(a, dim, keepdim)
+
+class Permute(Function):
+    @staticmethod
+    def forward(ctx, a, dims):
+        """Permute the dimensions of the input tensor."""
+        ctx.save_for_backward(a, dims)
+        result_data = array_api.permute(a.data, dims)
+        return Tensor(result_data, requires_grad=a.requires_grad, dtype=a.dtype)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Backward pass for permute - reverse the permutation."""
+        a, dims = ctx.saved_tensors
+        
+        # Create inverse permutation
+        inv_dims = [0] * len(dims)
+        for i, d in enumerate(dims):
+            inv_dims[d] = i
+        
+        # Apply inverse permutation to gradient
+        grad = genesis.permute(out_grad, inv_dims)
+        return (grad, None)
+
+def permute(a, dims):
+    """Permute the dimensions of the input tensor."""
+    return Permute.apply(a, dims)
+
+class Gather(Function):
+    @staticmethod
+    def forward(ctx, input, dim, index):
+        """Gather values along dimension using indices."""
+        ctx.save_for_backward(input, dim, index)
+        result_data = array_api.gather(input.data, dim, index.data)
+        return Tensor(result_data, requires_grad=input.requires_grad, dtype=input.dtype)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Backward pass for gather - scatter gradient back to original positions."""
+        input, dim, index = ctx.saved_tensors
+        
+        # Input gradient: scatter out_grad back to original positions
+        input_grad = None
+        if input.requires_grad:
+            # Create tensor of zeros with same shape as input but same dtype as out_grad
+            input_grad = genesis.zeros(input.shape, dtype=out_grad.dtype, device=input.device, requires_grad=False)
+            
+            # Use array_api.scatter directly to avoid triggering autograd
+            result_data = array_api.scatter(input_grad.data, dim, index.data, out_grad.data)
+            input_grad = Tensor(result_data, requires_grad=False, dtype=out_grad.dtype, device=input.device)
+        
+        # Dim gradient: always None (scalar, not a tensor)
+        dim_grad = None
+        
+        # Index gradient: always zero tensor with same shape as index
+        index_grad = None
+        if index.requires_grad:
+            zeros_data = array_api.zeros_like(index.data)
+            index_grad = Tensor(zeros_data, requires_grad=False, dtype=index.dtype, device=index.device)
+        
+        return (input_grad, index_grad)
+
+class Scatter(Function):
+    @staticmethod
+    def forward(ctx, input, dim, index, src):
+        """Scatter values from src along dimension using indices."""
+        ctx.save_for_backward(input, dim, index, src)
+        result_data = array_api.scatter(input.data, dim, index.data, src.data)
+        return Tensor(result_data, requires_grad=(input.requires_grad or src.requires_grad), dtype=input.dtype)
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Backward pass for scatter."""
+        input, dim, index, src = ctx.saved_tensors
+        
+        # Input gradient: scattered positions get zero, others get out_grad
+        input_grad = None
+        if input.requires_grad:
+            # Create tensor of zeros with same shape as src but same dtype as out_grad  
+            zeros_at_indices = genesis.zeros(src.shape, dtype=out_grad.dtype, device=src.device, requires_grad=False)
+            
+            # Use array_api.scatter directly to avoid triggering autograd
+            result_data = array_api.scatter(out_grad.data, dim, index.data, zeros_at_indices.data)
+            input_grad = Tensor(result_data, requires_grad=False, dtype=out_grad.dtype, device=input.device)
+        
+        # Dim gradient: always None (scalar, not a tensor)
+        dim_grad = None
+        
+        # Index gradient: always zero tensor with same shape as index
+        index_grad = None
+        if index.requires_grad:
+            zeros_data = array_api.zeros_like(index.data)
+            index_grad = Tensor(zeros_data, requires_grad=False, dtype=index.dtype, device=index.device)
+        
+        # Source gradient: gather from out_grad using same indices
+        src_grad = None
+        if src.requires_grad:
+            result_data = array_api.gather(out_grad.data, dim, index.data)
+            src_grad = Tensor(result_data, requires_grad=False, dtype=src.dtype, device=src.device)
+        
+        return (input_grad, index_grad, src_grad)
+
+def gather(input, dim, index):
+    """Gather values along dimension using indices."""
+    return Gather.apply(input, dim, index)
+
+def scatter(input, dim, index, src):
+    """Scatter values from src along dimension using indices."""
+    return Scatter.apply(input, dim, index, src)
 
 class Transpose(Function):
     @staticmethod
@@ -643,6 +856,81 @@ def summation(a, axis=None, keepdims=False):
 
 def sum(a, axis=None, keepdims=False):
     return Summation.apply(a, axis=axis, keepdims=keepdims)
+
+class Mean(Function):
+    @staticmethod
+    def forward(ctx, a, axis=None, keepdims=False):
+        """
+        Forward pass for mean operation using sum + divide approach.
+        """
+        if isinstance(axis, int):
+            axis = (axis, )
+        ctx.save_for_backward(a)
+        ctx.axis = axis
+        ctx.keepdims = keepdims
+        
+        # Calculate number of elements being reduced for gradient scaling
+        if axis is None:
+            # Full reduction
+            ctx.num_elements = a.numel()
+        else:
+            # Partial reduction - calculate elements in reduced dimensions
+            shape = a.shape
+            ndim = len(shape)
+            normalized_axis = tuple(ax if ax >= 0 else ax + ndim for ax in axis)
+            ctx.num_elements = functools_reduce(operator.mul, [shape[ax] for ax in normalized_axis], 1)
+        
+        # Use sum + divide approach directly with array_api (like PyTorch)
+        sum_data = array_api.sum(a.data, axis=axis, keepdims=keepdims)
+        mean_data = sum_data / ctx.num_elements
+        output = Tensor(mean_data, device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        return output
+
+    @staticmethod
+    def backward(ctx, out_grad: Tensor):
+        """
+        Backward pass for mean operation.
+        
+        The gradient of mean is out_grad / num_elements broadcasted to input shape.
+        """
+        hs, = ctx.saved_tensors
+        axis = ctx.axis
+        keepdims = ctx.keepdims
+        num_elements = ctx.num_elements
+        
+        if axis is None:
+            axis = hs.shape
+        grad_shape = list(out_grad.shape)
+        new_axis = []
+        for x in axis:
+            if x >= 0:
+                new_axis.append(x)
+            else:
+                new_axis.append(x + len(hs.shape))
+        if keepdims is False: 
+            for x in sorted(new_axis):
+                grad_shape.insert(x, 1)
+
+        # Scale gradient by 1/num_elements (since mean = sum/num_elements)
+        scaled_grad = out_grad.data / num_elements
+        grad = Tensor(array_api.broadcast_to(
+            array_api.reshape(scaled_grad, grad_shape), hs.shape), 
+            device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        return (grad, )
+
+def mean(a, axis=None, keepdims=False):
+    """
+    Compute the arithmetic mean along the specified axis.
+    
+    Args:
+        a: Input tensor
+        axis: Axis or axes along which to compute mean. None means reduce all axes.
+        keepdims: Whether to keep reduced dimensions as size 1
+        
+    Returns:
+        Tensor containing the mean values
+    """
+    return Mean.apply(a, axis=axis, keepdims=keepdims)
 
 class Matmul(Function):
     @staticmethod
