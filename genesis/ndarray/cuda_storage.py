@@ -438,6 +438,15 @@ class CUDAStorage:
         copy_strided_kernel(self, new_tensor)
         return new_tensor
     
+    def clone(self) -> 'CUDAStorage':
+        """Create a deep copy of the tensor."""
+        # Create new tensor with same shape and dtype
+        new_tensor = CUDAStorage(self.shape, self.dtype)
+        
+        # Copy data using Triton kernel
+        copy_strided_kernel(self, new_tensor)
+        return new_tensor
+    
     def reshape(self, new_shape: Tuple[int, ...]) -> 'CUDAStorage':
         """Reshape operation"""
         # Handle -1 case

@@ -175,6 +175,9 @@ class NDArray:
         if hasattr(self.data, 'cpu'):
             cpu_data = self.data.cpu()
             if hasattr(cpu_data, 'numpy'):
+                # Handle bfloat16 which is not supported by numpy
+                if cpu_data.dtype == torch.bfloat16:
+                    return cpu_data.float().numpy()
                 return cpu_data.numpy()
             else:
                 # cpu() already returned numpy array
@@ -197,6 +200,11 @@ class NDArray:
 
     def numel(self):
         return prod(self.shape)
+    
+    def clone(self):
+        """Create a deep copy of the NDArray."""
+        cloned_data = self.device.clone(self.data, device_id=self._device.device_id, dtype=self._dtype)
+        return NDArray(cloned_data, device=self._device, dtype=self._dtype)
     
     def is_contiguous(self):
         """Check if tensor has contiguous memory"""
@@ -403,6 +411,54 @@ class NDArray:
         out.data = result_data
         return out
 
+    def abs(self):
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.abs(self.data)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
+        return out
+
+    def sign(self):
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.sign(self.data)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
+        return out
+
+    def clamp(self, min_val=None, max_val=None):
+        """Clamp tensor values to specified range."""
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.clamp(self.data, min_val, max_val)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
+        return out
+
+    def greater_equal(self, other):
+        """Element-wise greater than or equal comparison."""
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.greater_equal(self.data, other)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
+        return out
+
+    def less_equal(self, other):
+        """Element-wise less than or equal comparison."""
+        # Optimized: avoid NDArray.make() overhead
+        result_data = self.device.less_equal(self.data, other)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = result_data
+        return out
+
     def reshape(self, new_shape):
         out = NDArray.make(new_shape, device=self.device)
         out.data = self.device.reshape(self.data, new_shape)
@@ -428,8 +484,24 @@ class NDArray:
         return out
 
     def permute(self, new_axis):
-        out = NDArray.make(self.shape, device=self.device)
+        # Calculate new shape after permutation
+        new_shape = tuple(self.shape[i] for i in new_axis)
+        out = NDArray.make(new_shape, device=self.device, dtype=self.dtype)
         out.data = self.device.permute(self.data, new_axis)
+        return out
+
+    def gather(self, dim, index):
+        """Gather values along dimension using indices."""
+        # Result has same shape as index
+        out = NDArray.make(index.shape, device=self.device, dtype=self.dtype)
+        out.data = self.device.gather(self.data, dim, index.data)
+        return out
+
+    def scatter(self, dim, index, src):
+        """Scatter values from src along dimension using indices."""
+        # Result has same shape as input tensor
+        out = NDArray.make(self.shape, device=self.device, dtype=self.dtype)
+        out.data = self.device.scatter(self.data, dim, index.data, src.data)
         return out
 
     def contiguous(self):
@@ -578,6 +650,7 @@ class NDArray:
         out.data = self.device.reduce_max(self.data, axis=axis, keepdims=keepdims)
         return out
 
+
     def is_floating_point(self):
         return self.data.is_floating_point()
 
@@ -655,6 +728,12 @@ def full(shape, fill_value, dtype=genesis.float32, device=None):
     return device.full(shape, fill_value, dtype)
 
 
+def ones(shape, device=None, dtype=genesis.float32):
+    """Create tensor filled with ones."""
+    device = device if device is not None else default_device()
+    return device.ones(shape, device=device, dtype=dtype)
+
+
 def broadcast_to(array, new_shape):
     return array.broadcast_to(new_shape)
 
@@ -724,6 +803,7 @@ def max(a, axis=None, keepdims=False):
         pre += 1
     return a
 
+
 def reshape(array, new_shape):
     if -1 in new_shape:
         unknown_dim = -1
@@ -775,6 +855,69 @@ def triu(a, k=0):
 
 def sqrt(a):
     return a.sqrt()
+
+def abs(a):
+    return a.abs()
+
+def sign(a):
+    return a.sign()
+
+def clamp(a, min_val=None, max_val=None):
+    """Clamp tensor values to specified range."""
+    return a.clamp(min_val, max_val)
+
+def greater_equal(a, b):
+    """Element-wise greater than or equal comparison."""
+    return a.greater_equal(b)
+
+def less_equal(a, b):
+    """Element-wise less than or equal comparison."""
+    return a.less_equal(b)
+
+def where(condition, x, y):
+    """Element-wise selection of values from x or y based on condition."""
+    # Use device-specific implementation
+    result_data = condition.device.where(condition.data, x.data, y.data)
+    # Return NDArray with correct dtype from x
+    result = NDArray.__new__(NDArray)
+    result._device = x.device
+    result._dtype = x.dtype
+    result.data = result_data
+    return result
+
+def zeros_like(x):
+    """Create tensor of zeros with same shape and dtype as x."""
+    return x.device.zeros_like(x.data)
+
+def argmax(x, dim=None, keepdim=False):
+    """Return indices of maximum values along dimension."""
+    result_data = x.device.argmax(x.data, dim=dim, keepdim=keepdim)
+    result = NDArray.__new__(NDArray)
+    result._device = x.device
+    result._dtype = genesis.int64
+    result.data = result_data
+    return result
+
+def argmin(x, dim=None, keepdim=False):
+    """Return indices of minimum values along dimension."""
+    result_data = x.device.argmin(x.data, dim=dim, keepdim=keepdim)
+    result = NDArray.__new__(NDArray)
+    result._device = x.device
+    result._dtype = genesis.int64
+    result.data = result_data
+    return result
+
+def permute(x, dims):
+    """Permute the dimensions of the tensor."""
+    return x.permute(dims)
+
+def gather(input_tensor, dim, index):
+    """Gather values along dimension using indices."""
+    return input_tensor.gather(dim, index)
+
+def scatter(input_tensor, dim, index, src):
+    """Scatter values from src along dimension using indices."""
+    return input_tensor.scatter(dim, index, src)
 
 def split(a, cnt, dim=None):
     return a.split(cnt, dim=dim)
