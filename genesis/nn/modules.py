@@ -19,6 +19,11 @@ class Parameter(Tensor):
     Parameters are automatically tracked for gradient computation and
     optimization during training.
     """
+    
+    def __init__(self, data, **kwargs):
+        """Initialize a Parameter with requires_grad=True by default."""
+        kwargs.setdefault('requires_grad', True)
+        super().__init__(data, **kwargs)
 
 
 def _unpack_params(value: object) -> List[Tensor]:
@@ -216,11 +221,50 @@ class Module:
         for m in self._children():
             m.training = False
 
-    def to(self, device: str) -> None:
+    def to(self, device) -> "Module":
         """
         Move the module to the specified device.
+        
+        Args:
+            device: Device object or device string
+            
+        Returns:
+            Self for method chaining
         """
-        self.cuda(device)
+        # Handle Genesis Device objects
+        if hasattr(device, 'name'):
+            device_name = device.name
+        else:
+            device_name = str(device)
+        
+        # Move all parameters and buffers to the device
+        for i, param in enumerate(self.parameters()):
+            # Parameters are Tensors, so we need to replace them entirely
+            new_param = param.to_device(device)
+            # Find and replace the parameter in the module
+            for name, value in self.__dict__.items():
+                if isinstance(value, Parameter) and value is param:
+                    self.__dict__[name] = new_param
+                    break
+        
+        for i, var in enumerate(self.vars()):
+            # Variables are also Tensors, replace them
+            new_var = var.to_device(device)
+            for name, value in self.__dict__.items():
+                if value is var:
+                    self.__dict__[name] = new_var
+                    break
+        
+        # Move registered buffers  
+        for name, value in self.__dict__.items():
+            if isinstance(value, Tensor) and not isinstance(value, Parameter):
+                self.__dict__[name] = value.to_device(device)
+        
+        # Recursively move child modules
+        for child in self._children():
+            child.to(device)
+        
+        return self
 
     def cuda(self, device_name: str = "cuda") -> None:
         """
@@ -700,7 +744,7 @@ class MultiheadAttention(Module):
         """
         Forward pass of the multihead attention layer.
         """
-        q, k, v = F.split((x @ self.w_qkv).reshape(x.shape[0], x.shape[1], 3, self.dim), axis=2)
+        q, k, v = F.split((x @ self.w_qkv).reshape(x.shape[0], x.shape[1], 3, self.dim), dim=2)
         q, k, v = [a.reshape(x.shape[0], x.shape[1], self.heads, self.dim // self.heads).transpose((1, 2)) for a in [q, k, v]]
         mask = genesis.triu((-float("inf") * init.ones(x.shape[1], x.shape[1], device=x.device)), k=1, device=x.device)
         atten = self.softmax(q @ F.transpose(k) / np.sqrt(self.dim // self.heads) + mask)
@@ -731,6 +775,6 @@ class FusedMultiheadAttention(Module):
         """
         Forward pass of the fused multihead attention layer.
         """
-        q, k, v = F.split((x @ self.w_qkv).reshape(x.shape[0], x.shape[1], 3, self.dim), axis=2)
+        q, k, v = F.split((x @ self.w_qkv).reshape(x.shape[0], x.shape[1], 3, self.dim), dim=2)
         q, k, v = [a.reshape(x.shape[0], x.shape[1], self.heads, self.dim // self.heads).transpose((1, 2)) for a in [q, k, v]]
         return F.fused_attention(q, k, v).transpose((1, 2)).reshape(x.shape[0], x.shape[1], self.dim) @ self.w_out, None

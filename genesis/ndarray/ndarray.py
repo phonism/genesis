@@ -126,7 +126,20 @@ def all_devices():
 class NDArray:
     def __init__(self, data, device=None, dtype=None):
         self._dtype = dtype
-        if isinstance(data, np.ndarray):
+        # Check if it's a genesis Tensor (imported from autograd)
+        from genesis.autograd import Tensor
+        if isinstance(data, Tensor):
+            # Use the Tensor's underlying NDArray
+            if isinstance(data.data, NDArray):
+                self._device = device if device is not None else data.data.device
+                self._dtype = dtype if dtype is not None else data.data.dtype
+                self.data = data.data.data  # Get the storage from the Tensor's NDArray
+            else:
+                # This shouldn't happen, but handle it gracefully
+                device = device if device is not None else default_device()
+                self._device = device
+                self.data = self._device.from_numpy(data.numpy(), device_id=self._device.device_id, dtype=dtype)
+        elif isinstance(data, np.ndarray):
             device = device if device is not None else default_device()
             self._device = device
             self.data = self._device.from_numpy(data, device_id=self._device.device_id, dtype=dtype)
@@ -140,6 +153,7 @@ class NDArray:
             self._device = device
             self.data = data  # Use directly
         else:
+            device = device if device is not None else default_device()
             self._device = device
             self.data = self._device.from_numpy(np.array(data, dtype=np.float32), device_id=self._device.device_id, dtype=dtype)
 
@@ -504,6 +518,24 @@ class NDArray:
         out.data = self.device.scatter(self.data, dim, index.data, src.data)
         return out
 
+    def scatter_add(self, dim, index, src):
+        """Scatter-add values from src along dimension using indices."""
+        # Result has same shape as input tensor - start with copy of input
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = self.device.scatter_add(self.data.clone(), dim, index.data, src.data)
+        return out
+
+    def repeat_interleave(self, repeats, dim=None):
+        """Repeat elements along specified dimension."""
+        out_data = self.device.repeat_interleave(self.data, repeats, dim)
+        out = NDArray.__new__(NDArray)
+        out._device = self.device
+        out._dtype = self.dtype
+        out.data = out_data
+        return out
+
     def contiguous(self):
         out = NDArray.make(self.shape, device=self.device)
         out.data = self.data.contiguous()
@@ -711,6 +743,31 @@ class NDArray:
             bool: True if on CUDA device
         """
         return hasattr(self._device, 'name') and self._device.name == "cuda"
+    
+    def to_numpy(self):
+        """Convert NDArray to numpy array.
+        
+        Returns:
+            np.ndarray: Numpy array representation of the data
+        """
+        return self.data.to_numpy()
+    
+    def to_device(self, device):
+        """Move NDArray to specified device.
+        
+        Args:
+            device: Target device object or device name
+            
+        Returns:
+            NDArray: New NDArray on target device
+        """
+        # If already on the target device, return self
+        if self._device == device or (hasattr(device, 'name') and self._device.name == device.name):
+            return self
+            
+        # Convert data to numpy and create new NDArray on target device
+        data_numpy = self.to_numpy()
+        return NDArray(data_numpy, device=device, dtype=self.dtype)
 
 def array(a, dtype=genesis.float32, device=None):
     """ Convenience methods to match numpy a bit more closely."""
@@ -962,3 +1019,109 @@ def cat(arrays, dim=0):
     result._dtype = arrays[0].dtype
     result.data = result_data
     return result
+
+
+def topk(x, k, dim=-1, largest=True, sorted=True):
+    """
+    Returns the k largest/smallest elements along a dimension.
+    
+    Args:
+        x: Input NDArray
+        k: Number of top values to return
+        dim: Dimension along which to find top-k values
+        largest: If True, return largest values; if False, return smallest
+        sorted: If True, return values in sorted order
+        
+    Returns:
+        Tuple of (values, indices) NDArrays
+    """
+    values_data, indices_data = x.device.topk(x.data, k, dim, largest, sorted)
+    
+    # Create NDArrays for results
+    values = NDArray.__new__(NDArray)
+    values._device = x.device
+    values._dtype = x.dtype
+    values.data = values_data
+    
+    indices = NDArray.__new__(NDArray)
+    indices._device = x.device
+    indices._dtype = genesis.int64
+    indices.data = indices_data
+    
+    return values, indices
+
+
+def argsort(x, dim=-1, descending=False):
+    """
+    Returns indices that sort a tensor along a dimension.
+    
+    Args:
+        x: Input NDArray
+        dim: Dimension along which to sort
+        descending: If True, sort in descending order
+        
+    Returns:
+        NDArray of indices
+    """
+    indices_data = x.device.argsort(x.data, dim, descending)
+    
+    indices = NDArray.__new__(NDArray)
+    indices._device = x.device
+    indices._dtype = genesis.int64
+    indices.data = indices_data
+    
+    return indices
+
+
+def bincount(x, weights=None, minlength=0):
+    """
+    Count occurrences of each value in integer tensor.
+    
+    Args:
+        x: 1D integer NDArray
+        weights: Optional weights NDArray
+        minlength: Minimum length of output
+        
+    Returns:
+        NDArray containing counts
+    """
+    weights_data = weights.data if weights is not None else None
+    result_data = x.device.bincount(x.data, weights_data, minlength)
+    
+    result = NDArray.__new__(NDArray)
+    result._device = x.device
+    result._dtype = weights.dtype if weights is not None else genesis.int64
+    result.data = result_data
+    
+    return result
+
+
+def scatter_add(input_tensor, dim, index, src):
+    """
+    Scatter-add values from src along dimension using indices.
+    
+    Args:
+        input_tensor: Input NDArray
+        dim: Dimension to scatter along
+        index: Index NDArray
+        src: Source values NDArray
+        
+    Returns:
+        NDArray with scattered values added
+    """
+    return input_tensor.scatter_add(dim, index, src)
+
+
+def repeat_interleave(x, repeats, dim=None):
+    """
+    Repeat elements of tensor along specified dimension.
+    
+    Args:
+        x: Input NDArray
+        repeats: Number of repetitions for each element
+        dim: Dimension along which to repeat
+        
+    Returns:
+        NDArray with repeated elements
+    """
+    return x.repeat_interleave(repeats, dim)

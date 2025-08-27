@@ -255,6 +255,52 @@ integer_dtypes = [dt for dt in all_dtypes if is_integer(dt)]
 # [int32, int64, int16, int8, uint8]
 ```
 
+## 🔍 自动类型推断
+
+Genesis提供智能的dtype推断，遵循PyTorch约定：
+
+### `infer_dtype_from_data(array)`
+
+从输入数据自动推断合适的Genesis dtype：
+
+```python
+from genesis.dtypes import infer_dtype_from_data
+
+# Python标量推断
+infer_dtype_from_data(42)        # → genesis.int64
+infer_dtype_from_data(3.14)      # → genesis.float32
+infer_dtype_from_data(True)      # → genesis.bool
+
+# 列表和数组推断
+infer_dtype_from_data([1, 2, 3])           # → genesis.int64
+infer_dtype_from_data([1.0, 2.0, 3.0])     # → genesis.float32
+infer_dtype_from_data(np.array([1, 2]))    # → 保持numpy dtype
+
+# 张量推断  
+existing_tensor = genesis.tensor([1, 2, 3])
+infer_dtype_from_data(existing_tensor)     # → existing_tensor.dtype
+```
+
+### 推断规则
+
+| 输入类型 | 推断的Genesis DType | 说明 |
+|----------|---------------------|------|
+| Python `int` | `genesis.int64` | PyTorch默认值 |
+| Python `float` | `genesis.float32` | PyTorch默认值 |
+| Python `bool` | `genesis.bool` | 保持不变 |
+| `np.int32`, `np.int64`等 | 对应的int类型 | 保持不变 |
+| `np.float16`, `np.float32` | 对应的float类型 | 保持不变 |
+| `np.float64` | `genesis.float32` | ⚠️ 为保持一致性而转换 |
+| `np.bool_` | `genesis.bool` | 保持不变 |
+| Genesis `Tensor` | `tensor.dtype` | 保持不变 |
+| 列表/元组 | 从首次转换为numpy推断 | 取决于内容 |
+
+**关键特性：**
+- **PyTorch兼容性**：遵循PyTorch的默认类型推断规则
+- **性能优化**：自动将`float64`转换为`float32`以匹配PyTorch行为
+- **类型保持**：保持numpy数组的整数和布尔类型
+- **一致行为**：整个框架使用相同的推断逻辑
+
 ## 🔀 混合精度支持
 
 ### 自动类型转换

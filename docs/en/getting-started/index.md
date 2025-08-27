@@ -84,16 +84,30 @@ The fundamental data structure in Genesis, supporting automatic differentiation:
 ```python
 import genesis
 
-# Create tensors
-x = genesis.tensor([1.0, 2.0, 3.0], requires_grad=True)
-y = genesis.tensor([4.0, 5.0, 6.0], requires_grad=True)
+# Create tensors (automatic dtype inference)
+x = genesis.tensor([1.0, 2.0, 3.0], requires_grad=True)  # → float32
+y = genesis.tensor([4, 5, 6])                           # → int64
+z = genesis.tensor([1, 2, 3], dtype=genesis.float32)     # explicit dtype
 
-# Compute operations
-z = x * y + x.sum()
-z.backward(genesis.ones_like(z))
+# Basic operations
+result = x * y.float() + x.sum()  # Broadcasting and type conversion
 
-print(f"x gradients: {x.grad}")  # [5., 6., 7.]
-print(f"y gradients: {y.grad}")  # [1., 2., 3.]
+# PyTorch-style reduction operations
+total = x.sum()                      # Sum all elements
+mean_val = x.mean()                  # Mean of all elements
+max_val = x.max()                    # Maximum element
+
+# Dimension-specific operations
+data = genesis.tensor([[1, 2, 3], [4, 5, 6]])
+row_sums = data.sum(dim=1)                    # Sum along rows
+col_means = data.mean(dim=0, keepdim=True)   # Mean along columns, keep dims
+
+# NumPy-style also supported for compatibility
+numpy_style = data.sum(axis=0, keepdims=True)
+
+# Compute gradients
+result.backward()
+print(f"x gradients: {x.grad}")  # Gradients w.r.t. x
 ```
 
 ### Module

@@ -86,16 +86,30 @@ Genesis中的基础数据结构，支持自动微分：
 ```python
 import genesis
 
-# 创建张量
-x = genesis.tensor([1.0, 2.0, 3.0], requires_grad=True)
-y = genesis.tensor([4.0, 5.0, 6.0], requires_grad=True)
+# 创建张量（自动数据类型推断）
+x = genesis.tensor([1.0, 2.0, 3.0], requires_grad=True)  # → float32
+y = genesis.tensor([4, 5, 6])                           # → int64
+z = genesis.tensor([1, 2, 3], dtype=genesis.float32)     # 显式数据类型
 
-# 执行运算
-z = x * y + x.sum()
-z.backward(genesis.ones_like(z))
+# 基础操作
+result = x * y.float() + x.sum()  # 广播和类型转换
 
-print(f"x的梯度: {x.grad}")  # [5., 6., 7.]
-print(f"y的梯度: {y.grad}")  # [1., 2., 3.]
+# PyTorch风格的归约操作
+total = x.sum()                      # 所有元素求和
+mean_val = x.mean()                  # 所有元素平均值
+max_val = x.max()                    # 最大元素
+
+# 按维度操作
+data = genesis.tensor([[1, 2, 3], [4, 5, 6]])
+row_sums = data.sum(dim=1)                    # 按行求和
+col_means = data.mean(dim=0, keepdim=True)   # 按列求平均值，保持维度
+
+# 也支持NumPy风格（兼容性）
+numpy_style = data.sum(axis=0, keepdims=True)
+
+# 计算梯度
+result.backward()
+print(f"x的梯度: {x.grad}")  # 关于x的梯度
 ```
 
 ### 模块 (Module)

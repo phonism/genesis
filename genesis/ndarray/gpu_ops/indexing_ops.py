@@ -412,9 +412,8 @@ def gather(input_tensor, dim, index):
         CUDAStorage: Gathered values
     """
     if not isinstance(input_tensor, CUDAStorage) or not isinstance(index, CUDAStorage):
-        # Fallback for non-CUDA tensors
-        import torch
-        return torch.gather(input_tensor, dim, index)
+        # For non-CUDA tensors, delegate to CPU implementation
+        raise NotImplementedError("GPU gather operation requires CUDAStorage tensors. Use CPU implementation for non-CUDA tensors.")
     
     # Create output tensor with same shape as index
     output = CUDAStorage(index.shape, dtype=input_tensor.dtype)
@@ -458,9 +457,8 @@ def scatter(input_tensor, dim, index, src):
         CUDAStorage: Scattered values
     """
     if not all(isinstance(t, CUDAStorage) for t in [input_tensor, index, src]):
-        # Fallback for non-CUDA tensors
-        import torch
-        return input_tensor.scatter(dim, index, src)
+        # For non-CUDA tensors, delegate to CPU implementation
+        raise NotImplementedError("GPU scatter operation requires CUDAStorage tensors. Use CPU implementation for non-CUDA tensors.")
     
     # Create output tensor as copy of input
     output = input_tensor.clone()
@@ -488,6 +486,174 @@ def scatter(input_tensor, dim, index, src):
         scatter_dim=dim,
         BLOCK_SIZE=1024
     )
+    
+    return output
+
+
+@triton.jit
+def scatter_add_1d_kernel(
+    src_ptr, index_ptr, out_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Simple 1D scatter add kernel using atomic operations.
+    
+    Args:
+        src_ptr: Source values to scatter
+        index_ptr: Indices where to scatter
+        out_ptr: Output tensor to scatter into
+        n_elements: Number of elements to process
+        BLOCK_SIZE: Block size for processing
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load source data and indices
+    src = tl.load(src_ptr + offsets, mask=mask, other=0.0)
+    idx = tl.load(index_ptr + offsets, mask=mask, other=0)
+    
+    # Convert indices to int64 for pointer arithmetic
+    idx_int64 = idx.to(tl.int64)
+    
+    # Atomic add to output
+    tl.atomic_add(out_ptr + idx_int64, src, mask=mask)
+
+
+@triton.jit
+def scatter_add_2d_kernel(
+    src_ptr, index_ptr, out_ptr,
+    n_elements, src_rows, src_cols, out_cols,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    2D scatter add kernel for dim=0 case.
+    For src[i,j], it goes to out[index[i,j], j]
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Convert linear offset to 2D coordinates in src tensor
+    row = offsets // src_cols
+    col = offsets % src_cols
+    
+    # Load source values and indices
+    src = tl.load(src_ptr + offsets, mask=mask, other=0.0)
+    idx = tl.load(index_ptr + offsets, mask=mask, other=0)
+    
+    # Convert indices to int64 for pointer arithmetic
+    idx_int64 = idx.to(tl.int64)
+    col_int64 = col.to(tl.int64)
+    
+    # Calculate output position: out[index[i,j], j]
+    # idx_int64 is the target row, col_int64 is the column to keep
+    output_offset = idx_int64 * out_cols + col_int64
+    
+    # Atomic add to output
+    tl.atomic_add(out_ptr + output_offset, src, mask=mask)
+
+
+@triton.jit
+def scatter_add_nd_kernel(
+    input_ptr, index_ptr, src_ptr, output_ptr,
+    input_s0, input_s1, input_s2,
+    index_s0, index_s1, index_s2,
+    src_s0, src_s1, src_s2,
+    output_s0, output_s1, output_s2,
+    shape0, shape1, shape2,
+    scatter_dim: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    N-dimensional scatter-add kernel that adds source values to output at specified indices.
+    """
+    pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    n_elements = shape0 * shape1 * shape2
+    mask = offsets < n_elements
+    
+    # Convert linear indices to 3D coordinates for index tensor
+    idx_flat = offsets
+    idx_z = idx_flat // (shape1 * shape2)
+    idx_y = (idx_flat % (shape1 * shape2)) // shape2
+    idx_x = idx_flat % shape2
+    
+    # Load source values
+    src_offset = idx_z * src_s0 + idx_y * src_s1 + idx_x * src_s2
+    src_vals = tl.load(src_ptr + src_offset, mask=mask, other=0.0)
+    
+    # Load indices
+    index_offset = idx_z * index_s0 + idx_y * index_s1 + idx_x * index_s2
+    indices = tl.load(index_ptr + index_offset, mask=mask, other=0)
+    
+    # Calculate output coordinates by replacing the scatter dimension coordinate with the index
+    if scatter_dim == 0:
+        out_z = indices
+        out_y = idx_y
+        out_x = idx_x
+    elif scatter_dim == 1:
+        out_z = idx_z
+        out_y = indices
+        out_x = idx_x
+    else:  # scatter_dim == 2
+        out_z = idx_z
+        out_y = idx_y
+        out_x = indices
+    
+    # Calculate output linear offset - need to convert indices to int64
+    out_z_int64 = out_z.to(tl.int64)
+    out_y_int64 = out_y.to(tl.int64)
+    out_x_int64 = out_x.to(tl.int64)
+    output_offset = out_z_int64 * output_s0 + out_y_int64 * output_s1 + out_x_int64 * output_s2
+    
+    # Atomic add to output - process each element in the block
+    tl.atomic_add(output_ptr + output_offset, src_vals, mask=mask)
+
+
+def scatter_add(input_tensor, dim, index, src):
+    """
+    Scatter-add values from src using indices.
+    """
+    if not all(isinstance(t, CUDAStorage) for t in [input_tensor, index, src]):
+        # For non-CUDA tensors, delegate to CPU implementation
+        raise NotImplementedError("GPU scatter_add operation requires CUDAStorage tensors. Use CPU implementation for non-CUDA tensors.")
+    
+    # Create output tensor as copy of input
+    output = input_tensor.clone()
+    
+    # For multidimensional scatter, we need to correctly calculate target indices
+    # For each element src[i,j,k], it goes to output[index[i,j,k] if dim==0, j if dim!=0, k if dim!=1]
+    
+    # Get shapes and strides
+    src_shape = src.shape
+    index_shape = index.shape
+    output_shape = output.shape
+    
+    # Simple approach: process element by element with proper indexing
+    n_elements = src.size
+    BLOCK_SIZE = 256
+    grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    # For 2D case with dim=0, need special handling
+    if len(src_shape) == 2 and dim == 0:
+        scatter_add_2d_kernel[grid](
+            src, index, output,
+            n_elements, src_shape[0], src_shape[1], output_shape[1],
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
+    else:
+        # Fallback to flattened version for other cases
+        src_flat = src.reshape((-1,))
+        index_flat = index.reshape((-1,))
+        scatter_add_1d_kernel[grid](
+            src_flat, index_flat, output.reshape((-1,)),
+            n_elements,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
     
     return output
 

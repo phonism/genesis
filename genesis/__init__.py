@@ -25,7 +25,10 @@ from .init import (
         empty,
         empty_like,
         zeros_like,
+        ones_like,
         one_hot,
+        eye,
+        from_numpy,
 )
 from .serialization import (
         save, load, 

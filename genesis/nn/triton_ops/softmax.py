@@ -485,13 +485,13 @@ class OnlineSoftmaxFunction(Function):
         out = out_tensor.data.data
         K = inp.numel() // M // N  # post_dim
 
-        with torch.cuda.device(inp.device):
-            if K > 1:
-                grid = lambda meta: (M, triton.cdiv(K, meta["TILE_K"]), 1)
-                _online_softmax_kernel_non_inner[grid](out, inp, M, N, K)
-            else:
-                grid = (M, 1, 1)
-                _online_softmax_kernel_inner[grid](out, inp, M, N)
+        # Execute kernels without torch device context since Genesis manages devices
+        if K > 1:
+            grid = lambda meta: (M, triton.cdiv(K, meta["TILE_K"]), 1)
+            _online_softmax_kernel_non_inner[grid](out, inp, M, N, K)
+        else:
+            grid = (M, 1, 1)
+            _online_softmax_kernel_inner[grid](out, inp, M, N)
         ctx.save_for_backward(out_tensor)
         ctx.dim = dim
         return out_tensor

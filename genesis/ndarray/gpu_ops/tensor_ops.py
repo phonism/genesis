@@ -4,6 +4,7 @@ Additional tensor operations for GPU backend.
 import triton
 import triton.language as tl
 from ..cuda_storage import CUDAStorage
+from .reduction_ops import reduce_max
 
 
 # =============================================================================
@@ -163,5 +164,372 @@ def to_dtype(x, dtype):
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     
     dtype_convert_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+
+
+
+def argsort(x, dim=-1, descending=False):
+    """
+    Sort indices along a dimension using iterative approach like topk.
+    """
+    if dim < 0:
+        dim = len(x.shape) + dim
+    
+    # Handle different dimensions by transposing
+    if dim != len(x.shape) - 1:
+        # Transpose to make target dim the last one
+        perm = list(range(len(x.shape)))
+        perm[dim], perm[-1] = perm[-1], perm[dim]
+        x_transposed = x.permute(perm)
+        
+        # Sort and transpose back
+        sorted_indices = argsort(x_transposed, dim=-1, descending=descending)
+        
+        # Transpose indices back
+        return sorted_indices.permute(perm)
+    
+    # Work with last dimension
+    batch_shape = x.shape[:-1]
+    N = x.shape[-1]
+    M = 1
+    for s in batch_shape:
+        M *= s
+    
+    # Reshape to 2D and ensure contiguous
+    x_2d = x.reshape((M, N)).contiguous()
+    
+    # Define grid and block size
+    BLOCK_SIZE = triton.next_power_of_2(N)
+    grid = (M,)
+    
+    # Handle ascending by negating values (find_max_kernel finds max, so negate for min)
+    if not descending:
+        # Create negation kernel to handle -x_2d
+        negate_kernel[grid](x_2d, M, N, BLOCK_SIZE=BLOCK_SIZE)
+    
+    # Create output tensor for indices
+    indices_shape = list(batch_shape) + [N]
+    indices_output = CUDAStorage(indices_shape, dtype="int64")
+    
+    # Create mask tensor using CUDAStorage
+    mask_shape = [M, N]
+    mask = CUDAStorage(mask_shape, dtype="float32")
+    
+    # Initialize mask to zeros using CUDA kernel
+    mask.fill_(0.0)
+    
+    # Call kernel N times to find all elements iteratively (like topk)
+    for i in range(N):
+        # Create temporary storage for current iteration
+        temp_value = CUDAStorage((M,), dtype=x.dtype)
+        temp_index = CUDAStorage((M,), dtype="int64")
+        
+        find_max_kernel[grid](
+            x_2d,
+            temp_value,
+            temp_index,
+            mask,
+            M, N,
+            BLOCK_SIZE=BLOCK_SIZE
+        )
+        
+        # Copy results to final output manually to avoid slicing issues
+        copy_kernel = get_copy_kernel()
+        copy_grid = (M,)
+        copy_kernel[copy_grid](
+            temp_value,
+            temp_value,  # Not used for argsort, just placeholder
+            temp_index, 
+            indices_output,
+            M, N, i,  # Use N instead of k for argsort
+            BLOCK_SIZE=triton.next_power_of_2(M)
+        )
+    
+    # Handle ascending case by negating back
+    if not descending:
+        # Use kernel to negate the original values back (cleanup)
+        output_M = M
+        output_N = N
+        output_grid = (output_M,)
+        negate_kernel[output_grid](x_2d, output_M, output_N, 
+                                  BLOCK_SIZE=triton.next_power_of_2(output_N))
+    
+    return indices_output
+
+
+@triton.jit
+def find_max_kernel(
+    input_ptr,
+    output_value_ptr,
+    output_index_ptr,
+    mask_ptr,
+    M, N,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Find max value and index in each row, masking already found elements.
+    Pure Triton implementation that avoids complex indexing.
+    """
+    row_id = tl.program_id(0)
+    
+    if row_id >= M:
+        return
+    
+    # Load data and mask
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+    col_mask = col_offsets < N
+    
+    data_ptr = input_ptr + row_id * N
+    mask_row_ptr = mask_ptr + row_id * N
+    
+    values = tl.load(data_ptr + col_offsets, mask=col_mask, other=float('-inf'))
+    mask_vals = tl.load(mask_row_ptr + col_offsets, mask=col_mask, other=0.0)
+    
+    # Set masked positions to negative infinity
+    masked_values = tl.where(mask_vals == 0.0, values, float('-inf'))
+    
+    # Find maximum value
+    max_val = tl.max(masked_values, axis=0)
+    
+    # Find first index equal to max value
+    is_max = (masked_values == max_val) & col_mask
+    # Trick: set non-max positions to BLOCK_SIZE, then take minimum
+    idx_candidates = tl.where(is_max, col_offsets, BLOCK_SIZE)
+    min_idx = tl.min(idx_candidates, axis=0)
+    
+    # Store results
+    tl.store(output_value_ptr + row_id, max_val)
+    tl.store(output_index_ptr + row_id, min_idx)
+    
+    # Update mask: mark found element as used
+    if min_idx < N:
+        tl.store(mask_row_ptr + min_idx, 1.0)
+
+
+@triton.jit
+def negate_kernel(
+    data_ptr,
+    M, N,
+    BLOCK_SIZE: tl.constexpr
+):
+    """Negate all elements in the tensor in-place."""
+    row_id = tl.program_id(0)
+    
+    if row_id >= M:
+        return
+    
+    # Load and negate row data
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+    mask = col_offsets < N
+    
+    row_ptr = data_ptr + row_id * N
+    values = tl.load(row_ptr + col_offsets, mask=mask, other=0.0)
+    negated_values = -values
+    
+    tl.store(row_ptr + col_offsets, negated_values, mask=mask)
+
+
+@triton.jit
+def copy_to_output_kernel(
+    temp_values_ptr,
+    output_values_ptr,
+    temp_indices_ptr,
+    output_indices_ptr,
+    M, k, col_idx,
+    BLOCK_SIZE: tl.constexpr
+):
+    """Copy temporary results to output arrays at specific column."""
+    row_id = tl.program_id(0)
+    
+    if row_id >= M:
+        return
+    
+    # Copy value
+    temp_val = tl.load(temp_values_ptr + row_id)
+    output_val_ptr = output_values_ptr + row_id * k + col_idx
+    tl.store(output_val_ptr, temp_val)
+    
+    # Copy index
+    temp_idx = tl.load(temp_indices_ptr + row_id)
+    output_idx_ptr = output_indices_ptr + row_id * k + col_idx
+    tl.store(output_idx_ptr, temp_idx)
+
+
+def get_copy_kernel():
+    """Return the copy kernel function."""
+    return copy_to_output_kernel
+
+
+def topk(x, k, dim=-1, largest=True, sorted=True):
+    """
+    Top-k values and indices using pure Triton implementation.
+    Uses iterative max-finding approach that avoids Triton limitations.
+    """
+    if dim < 0:
+        dim = len(x.shape) + dim
+    
+    # Handle different dimensions by transposing
+    if dim != len(x.shape) - 1:
+        perm = list(range(len(x.shape)))
+        perm[dim], perm[-1] = perm[-1], perm[dim]
+        x_transposed = x.permute(perm)
+        
+        values, indices = topk(x_transposed, k, dim=-1, largest=largest, sorted=sorted)
+        
+        # Transpose back
+        values = values.permute(perm)
+        indices = indices.permute(perm)
+        return values, indices
+    
+    # Work with last dimension
+    batch_shape = x.shape[:-1]
+    N = x.shape[-1]
+    M = 1
+    for s in batch_shape:
+        M *= s
+    
+    if k > N:
+        k = N
+    
+    # Reshape to 2D and ensure contiguous
+    x_2d = x.reshape((M, N)).contiguous()
+    
+    # Define grid and block size
+    BLOCK_SIZE = triton.next_power_of_2(N)
+    grid = (M,)
+    
+    # Handle smallest values by negating using a kernel
+    if not largest:
+        # Create negation kernel to handle -x_2d
+        negate_kernel[grid](x_2d, M, N, BLOCK_SIZE=BLOCK_SIZE)
+    
+    # Create output tensors using CUDAStorage
+    values_shape = list(batch_shape) + [k]
+    indices_shape = values_shape
+    
+    values_output = CUDAStorage(values_shape, dtype=x.dtype)
+    indices_output = CUDAStorage(indices_shape, dtype="int64")
+    
+    # Create mask tensor using CUDAStorage
+    mask_shape = [M, N]
+    mask = CUDAStorage(mask_shape, dtype="float32")
+    
+    # Initialize mask to zeros using CUDA kernel
+    mask.fill_(0.0)
+    
+    # Call kernel k times to find top-k elements iteratively
+    for i in range(k):
+        # Create temporary storage for current iteration
+        temp_value = CUDAStorage((M,), dtype=x.dtype)
+        temp_index = CUDAStorage((M,), dtype="int64")
+        
+        find_max_kernel[grid](
+            x_2d,
+            temp_value,
+            temp_index,
+            mask,
+            M, N,
+            BLOCK_SIZE=BLOCK_SIZE
+        )
+        
+        # Copy results to final output manually to avoid slicing issues
+        copy_kernel = get_copy_kernel()
+        copy_grid = (M,)
+        copy_kernel[copy_grid](
+            temp_value,
+            values_output,
+            temp_index, 
+            indices_output,
+            M, k, i,
+            BLOCK_SIZE=triton.next_power_of_2(M)
+        )
+    
+    # Handle non-largest case by negating back
+    if not largest:
+        # Use kernel to negate the output values
+        output_M = M
+        output_N = k
+        output_grid = (output_M,)
+        negate_kernel[output_grid](values_output, output_M, output_N, 
+                                  BLOCK_SIZE=triton.next_power_of_2(output_N))
+    
+    return values_output, indices_output
+
+
+@triton.jit
+def bincount_kernel(
+    input_ptr, weights_ptr, output_ptr,
+    N, num_classes, has_weights,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    Simple bincount kernel - each thread processes one element.
+    """
+    # Each thread processes exactly one element  
+    tid = tl.program_id(0) 
+    
+    if tid >= N:
+        return
+    
+    # Load single element
+    bin_idx = tl.load(input_ptr + tid)
+    
+    # Check bounds
+    if bin_idx < 0 or bin_idx >= num_classes:
+        return
+    
+    # Convert to int64 to match output tensor type
+    bin_idx_64 = bin_idx.to(tl.int64)
+    
+    # Atomic add to histogram - output is always int64
+    # For now, only handle unweighted case to get basic functionality working
+    if not has_weights:
+        # Use 1 as int64 (Triton should infer type from pointer)
+        tl.atomic_add(output_ptr + bin_idx_64, 1)
+
+
+def bincount(x, weights=None, minlength=0):
+    """
+    Count occurrences using Triton atomic operations.
+    """
+    if len(x.shape) != 1:
+        raise ValueError("bincount only supports 1D tensors")
+    
+    N = x.shape[0]
+    
+    # Find maximum value to determine output size
+    if x.numel() > 0:
+        max_tensor = reduce_max(x, axis=None, keepdims=False)
+        max_val = int(max_tensor.to_numpy().item())
+    else:
+        max_val = 0
+    num_classes = max(max_val + 1, minlength)
+    
+    # Create output tensor - always int64 like PyTorch
+    output = CUDAStorage((num_classes,), dtype="int64")
+    
+    # Initialize to zero
+    output.fill_(0)
+    
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    has_weights = weights is not None
+    if has_weights:
+        weights_ptr = weights if weights.is_contiguous() else weights.contiguous()
+    else:
+        # Create a dummy tensor for weights_ptr when not using weights
+        weights_ptr = CUDAStorage((1,), dtype="float32")
+    
+    BLOCK_SIZE = 1  # Each thread handles one element
+    grid = (N,)  # Launch N threads, one per element
+    
+    bincount_kernel[grid](
+        x, weights_ptr, output,
+        N, num_classes, has_weights,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
     
     return output

@@ -46,6 +46,30 @@ class Tensor:
 | `requires_grad` | bool | `False` | Whether to compute gradients |
 | `**kwargs` | dict | `{}` | Additional NDArray parameters |
 
+#### Data Type Inference
+
+Genesis automatically infers data types following PyTorch conventions:
+
+```python
+# Scalar type inference
+genesis.tensor(42)        # → genesis.int64 (Python int)
+genesis.tensor(3.14)      # → genesis.float32 (Python float) 
+genesis.tensor(True)      # → genesis.bool (Python bool)
+
+# List/array inference
+genesis.tensor([1, 2, 3])           # → genesis.int64 (integer list)
+genesis.tensor([1.0, 2.0, 3.0])     # → genesis.float32 (float list)
+genesis.tensor(np.array([1, 2]))    # → preserves numpy dtype (with conversions)
+
+# Explicit dtype specification
+genesis.tensor([1, 2, 3], dtype=genesis.float32)  # → genesis.float32
+```
+
+**Dtype Conversion Rules:**
+- `numpy.float64` → `genesis.float32` (for consistency with PyTorch defaults)
+- Integer types are preserved: `np.int32` → `genesis.int32`, etc.
+- Boolean types are preserved: `np.bool_` → `genesis.bool`
+
 #### Properties
 
 ##### Shape and Type Information
@@ -170,11 +194,22 @@ z = x.sin()        # Sine
 z = x.cos()        # Cosine
 z = x.tanh()       # Hyperbolic tangent
 
-# Reduction operations
-z = x.sum()        # Sum all elements
-z = x.mean()       # Mean of all elements
-z = x.max()        # Maximum element
-z = x.min()        # Minimum element
+# Reduction operations (PyTorch-style interface)
+z = x.sum()              # Sum all elements
+z = x.sum(dim=0)         # Sum along dimension 0
+z = x.sum(dim=1, keepdim=True)  # Sum along dim 1, keep dimensions
+
+z = x.mean()             # Mean of all elements  
+z = x.mean(dim=0)        # Mean along dimension 0
+z = x.mean(dim=1, keepdim=True) # Mean along dim 1, keep dimensions
+
+z = x.max()              # Maximum element
+z = x.max(dim=0)         # Maximum along dimension 0
+z = x.max(dim=1, keepdim=True)  # Maximum along dim 1, keep dimensions
+
+# NumPy-style parameters also supported for compatibility
+z = x.sum(axis=0, keepdims=True)    # NumPy-style (axis, keepdims)
+z = x.mean(axis=1, keepdims=False)  # NumPy-style interface
 
 # Shape operations
 z = x.reshape(shape)      # Reshape

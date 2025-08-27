@@ -255,6 +255,52 @@ integer_dtypes = [dt for dt in all_dtypes if is_integer(dt)]
 # [int32, int64, int16, int8, uint8]
 ```
 
+## 🔍 Automatic Type Inference
+
+Genesis provides intelligent dtype inference that follows PyTorch conventions:
+
+### `infer_dtype_from_data(array)`
+
+Automatically infers the appropriate Genesis dtype from input data:
+
+```python
+from genesis.dtypes import infer_dtype_from_data
+
+# Python scalar inference
+infer_dtype_from_data(42)        # → genesis.int64
+infer_dtype_from_data(3.14)      # → genesis.float32
+infer_dtype_from_data(True)      # → genesis.bool
+
+# List and array inference
+infer_dtype_from_data([1, 2, 3])           # → genesis.int64
+infer_dtype_from_data([1.0, 2.0, 3.0])     # → genesis.float32
+infer_dtype_from_data(np.array([1, 2]))    # → preserves numpy dtype
+
+# Tensor inference  
+existing_tensor = genesis.tensor([1, 2, 3])
+infer_dtype_from_data(existing_tensor)     # → existing_tensor.dtype
+```
+
+### Inference Rules
+
+| Input Type | Inferred Genesis DType | Notes |
+|------------|----------------------|-------|
+| Python `int` | `genesis.int64` | PyTorch default |
+| Python `float` | `genesis.float32` | PyTorch default |
+| Python `bool` | `genesis.bool` | Preserved |
+| `np.int32`, `np.int64`, etc. | Corresponding int type | Preserved |
+| `np.float16`, `np.float32` | Corresponding float type | Preserved |
+| `np.float64` | `genesis.float32` | ⚠️ Converted for consistency |
+| `np.bool_` | `genesis.bool` | Preserved |
+| Genesis `Tensor` | `tensor.dtype` | Preserved |
+| Lists/tuples | Inferred from first conversion to numpy | Depends on content |
+
+**Key Features:**
+- **PyTorch Compatibility**: Follows PyTorch's default type inference rules
+- **Performance Optimization**: Automatically converts `float64` to `float32` to match PyTorch behavior
+- **Type Preservation**: Preserves integer and boolean types from numpy arrays
+- **Consistent Behavior**: Same inference logic used across the framework
+
 ## 🔀 Mixed Precision Support
 
 ### Automatic Type Conversion

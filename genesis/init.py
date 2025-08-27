@@ -100,3 +100,85 @@ def kaiming_normal(fan_in, fan_out, nonlinearity="relu", **kwargs):
     gain = math.sqrt(2)
     std = gain / math.sqrt(fan_in)
     return randn(fan_in, fan_out, mean=0, std=std, **kwargs)
+
+def eye(n, m=None, device=None, dtype=genesis.float32, requires_grad=False):
+    """Generate identity matrix.
+    
+    Args:
+        n: Number of rows
+        m: Number of columns (defaults to n for square matrix)
+        device: Target device for tensor
+        dtype: Data type for tensor elements
+        requires_grad: Whether to track gradients
+        
+    Returns:
+        Tensor: Identity matrix of shape (n, m) or (n, n)
+    """
+    if m is None:
+        m = n
+    device = genesis.device('cpu') if device is None else device
+    
+    # Use device-specific eye implementation
+    array = device.eye(n, m, dtype=dtype)
+    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+
+def ones_like(tensor, dtype=None, device=None, requires_grad=None):
+    """Generate ones Tensor with same shape as input tensor.
+    
+    Args:
+        tensor: Input tensor to match shape
+        dtype: Data type (defaults to input tensor's dtype)
+        device: Target device (defaults to input tensor's device)
+        requires_grad: Whether to track gradients (defaults to input tensor's requires_grad)
+        
+    Returns:
+        Tensor: Ones tensor with same shape as input
+    """
+    if dtype is None:
+        dtype = tensor.dtype
+    if device is None:
+        device = tensor.device
+    if requires_grad is None:
+        requires_grad = tensor.requires_grad
+    
+    return ones(*tensor.shape, device=device, dtype=dtype, requires_grad=requires_grad)
+
+def from_numpy(array, device=None, dtype=None, requires_grad=False):
+    """Create Tensor from numpy array.
+    
+    Args:
+        array: NumPy array to convert
+        device: Target device (defaults to CPU)
+        dtype: Target data type (defaults to inferred from numpy array)
+        requires_grad: Whether to track gradients
+        
+    Returns:
+        Tensor: Genesis tensor created from numpy array
+    """
+    import numpy as np
+    
+    if not isinstance(array, np.ndarray):
+        array = np.array(array)
+    
+    device = genesis.device('cpu') if device is None else device
+    
+    # Infer dtype from numpy array if not specified
+    if dtype is None:
+        if array.dtype == np.float32:
+            dtype = genesis.float32
+        elif array.dtype == np.float64:
+            dtype = genesis.float32  # Convert float64 to float32 by default
+        elif array.dtype == np.float16:
+            dtype = genesis.float16
+        elif array.dtype == np.int32:
+            dtype = genesis.int32
+        elif array.dtype == np.int64:
+            dtype = genesis.int64
+        elif array.dtype == np.bool_:
+            dtype = genesis.bool
+        else:
+            dtype = genesis.float32  # Default fallback
+    
+    # Use device-specific from_numpy implementation
+    device_array = device.from_numpy(array, dtype=dtype)
+    return genesis.Tensor(device_array, device=device, dtype=dtype, requires_grad=requires_grad)

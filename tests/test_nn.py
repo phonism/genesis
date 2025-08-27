@@ -41,7 +41,7 @@ def test_softmax(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     C = genesis.nn.Softmax(dim=-1)(A)
@@ -72,7 +72,7 @@ def test_batchnorm1d(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     norm = genesis.nn.BatchNorm1d(shape[1])
@@ -101,7 +101,7 @@ def test_linear(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     T_linear = torch.nn.Linear(shape[1], 10)
@@ -137,7 +137,7 @@ def test_layernorm(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     norm = genesis.nn.LayerNorm(shape[-1])
@@ -200,7 +200,7 @@ def test_relu(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     C = genesis.nn.ReLU()(A)
@@ -231,7 +231,7 @@ def test_onehead_attention(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
 
@@ -278,7 +278,7 @@ def test_multihead_attention(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
 
@@ -501,7 +501,7 @@ def test_rotary_embedding(device):
             rotary_embed.sin_cached.detach().numpy(), atol=1e-5, rtol=1e-5)
 
     _A = np.random.randn(2, 3, 4, 5).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     torch_res = torch_rotary_embed(TA)
@@ -527,7 +527,7 @@ def test_silu(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     C = genesis.nn.SiLU()(A)

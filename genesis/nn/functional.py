@@ -1189,20 +1189,20 @@ def unsqueeze(tensor, dim):
 
 class Split(Function):
     @staticmethod
-    def forward(ctx, x, axis):
+    def forward(ctx, x, dim):
         ctx.save_for_backward(x)
-        if axis < 0:
-            axis = axis + len(x.shape)
-        ctx.axis = axis
+        if dim < 0:
+            dim = dim + len(x.shape)
+        ctx.dim = dim
         results = []
         
-        # Split along the axis dimension - each split should have size 1 in that dimension
-        for i in range(x.shape[axis]):
+        # Split along the dim dimension - each split should have size 1 in that dimension
+        for i in range(x.shape[dim]):
             # Create slice for index i (using slice to preserve dimension)
             indices = [slice(None)] * len(x.shape)
-            indices[axis] = slice(i, i+1)  # Use slice(i, i+1) instead of i to preserve dimension
+            indices[dim] = slice(i, i+1)  # Use slice(i, i+1) instead of i to preserve dimension
             slice_tensor = x.data[tuple(indices)]
-            results.append(Tensor(slice_tensor, device=x.device, dtype=x.dtype))
+            results.append(Tensor(slice_tensor, device=x.device, dtype=x.dtype, requires_grad=x.requires_grad))
         return tuple(results)
 
     @staticmethod
@@ -1210,12 +1210,12 @@ class Split(Function):
         x, = ctx.saved_tensors
         result = genesis.zeros_like(x, requires_grad=False)
         slices = [slice(None)] * len(x.shape)
-        slices[ctx.axis] = slice(idx, idx+1)
+        slices[ctx.dim] = slice(idx, idx+1)
         result.data[tuple(slices)] = out_grad.data
         return (result,)
 
-def split(a, axis):
-    return Split.apply(a, axis=axis)
+def split(a, dim):
+    return Split.apply(a, dim=dim)
 
 class Norm(Function):
     @staticmethod
@@ -1277,3 +1277,80 @@ class Tanh(Function):
 def tanh(a):
     """Apply tanh activation function"""
     return Tanh.apply(a)
+
+
+class ScatterAddFunction(Function):
+    @staticmethod
+    def forward(ctx, input, dim, index, src):
+        ctx.dim = dim
+        ctx.save_for_backward(index, src)
+        result_data = array_api.scatter_add(input.data, dim, index.data, src.data)
+        # Create tensor with proper requires_grad
+        result = Tensor(result_data, device=input.device, requires_grad=input.requires_grad or src.requires_grad)
+        return result
+    
+    @staticmethod  
+    def backward(ctx, out_grad):
+        dim = ctx.dim
+        index, src = ctx.saved_tensors
+        
+        # Gradient w.r.t. input: just pass through the out_grad
+        input_grad = out_grad if out_grad is not None else None
+        
+        # Gradient w.r.t. src: gather the out_grad at the scattered positions
+        src_grad = None
+        if src.requires_grad and out_grad is not None:
+            # Use array_api.gather to get gradients from the scattered positions
+            src_grad_data = array_api.gather(out_grad.data, dim, index.data)
+            src_grad = Tensor(src_grad_data, device=src.device, requires_grad=False)
+            
+        # Return gradients for: input, index, src (dim is not a tensor input)
+        # index doesn't need gradients (integer indices)
+        return input_grad, None, src_grad
+
+
+def scatter_add(input, dim, index, src):
+    """
+    Scatter-add values from src along dimension using indices.
+    
+    Args:
+        input: Input tensor to scatter-add into
+        dim: Dimension to scatter along
+        index: Tensor with indices
+        src: Source tensor with values to add
+        
+    Returns:
+        Tensor with scattered-added values
+    """
+    return ScatterAddFunction.apply(input, dim, index, src)
+
+
+def repeat_interleave(input, repeats, dim=None):
+    """
+    Repeat elements of tensor along specified dimension.
+    
+    Args:
+        input: Input tensor
+        repeats: Number of repetitions for each element
+        dim: Dimension to repeat along (if None, flatten first)
+        
+    Returns:
+        Tensor with repeated elements
+    """
+    return Tensor.make_const(array_api.repeat_interleave(input.data, repeats, dim))
+
+
+def one_hot(indices, num_classes):
+    """
+    One-hot encoding of indices.
+    
+    Args:
+        indices: Integer tensor with class indices
+        num_classes: Number of classes
+        
+    Returns:
+        Tensor with one-hot encoding
+    """
+    # Use the existing one_hot from init module
+    import genesis
+    return genesis.init.one_hot(num_classes, indices)

@@ -93,8 +93,8 @@ def test_ewise_fn(fn, shape, device, dtype):
     else:
         _A = np.random.randn(*shape).astype(np.float32)
         _B = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
-    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     TB = torch.Tensor(_B).to(dtype[1])
@@ -149,7 +149,7 @@ def test_scalar_fn(fn, shape, device, dtype):
     _B = 1.2
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
     np.testing.assert_allclose(fn(TA, _B).detach().numpy(), fn(A, _B).detach().numpy(), atol=atol, rtol=rtol)
 
     fn(TA, _B).sum().backward()
@@ -187,8 +187,8 @@ def test_matmul(m, n, p, device, dtype):
     """
     _A = np.random.randn(m, n).astype(np.float32)
     _B = np.random.randn(n, p).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
-    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad=True
     TB = torch.Tensor(_B).to(dtype[1])
@@ -224,8 +224,8 @@ def test_batch_matmul(b, m, n, p, device, dtype):
     """
     _A = np.random.randn(b, m, n).astype(np.float32)
     _B = np.random.randn(b, n, p).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
-    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad=True
     TB = torch.Tensor(_B).to(dtype[1])
@@ -255,8 +255,8 @@ def test_batch_matmul_2(b, m, n, p, device, dtype):
     """
     _A = np.random.randn(b, m, n).astype(np.float32)
     _B = np.random.randn(n, p).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
-    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad=True
     TB = torch.Tensor(_B).to(dtype[1])
@@ -286,8 +286,8 @@ def test_batch_matmul_3(b, m, n, p, device, dtype):
     """
     _A = np.random.randn(m, n).astype(np.float32)
     _B = np.random.randn(b, n, p).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
-    B = genesis.Tensor(_B, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
+    B = genesis.Tensor(_B, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     TB = torch.Tensor(_B).to(dtype[1])
@@ -375,7 +375,7 @@ def test_summation(shape, axes, device, dtype):
         - Tests reduction along different axes including large dimensions
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -405,7 +405,7 @@ def test_max(shape, axes, device, dtype):
     """
     #TODO float16 need to be fix
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     if axes is None:
@@ -442,7 +442,7 @@ def test_mean(shape, axes, device, dtype):
         - Tests reduction along different axes including large dimensions
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     
@@ -472,7 +472,7 @@ def test_log(shape, device, dtype):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32) + 5.
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -499,7 +499,7 @@ def test_exp(shape, device, dtype):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32) + 5.
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -526,7 +526,7 @@ def test_relu(shape, device, dtype):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32) + 5.
-    A = genesis.Tensor(_A, device=device, dtype=dtype[0])
+    A = genesis.Tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
     TA = torch.Tensor(_A).to(dtype[1])
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -551,7 +551,7 @@ def test_sqrt(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32) + 5.
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -582,7 +582,7 @@ def test_stack(shape, dim, l, device):
         - Backward gradients distributed correctly to input tensors
     """
     _A = [np.random.randn(*shape).astype(np.float32) for i in range(l)]
-    A = [genesis.Tensor(_A[i], device=device) for i in range(l)]
+    A = [genesis.Tensor(_A[i], device=device, requires_grad=True) for i in range(l)]
     TA = [torch.Tensor(_A[i]) for i in range(l)]
     for torch_a in TA:
         torch_a.requires_grad = True
@@ -615,7 +615,7 @@ def test_cat(shape, dim, l, device):
         - Backward gradients distributed correctly to input tensors
     """
     _A = [np.random.randn(*shape).astype(np.float32) for i in range(l)]
-    A = [genesis.Tensor(_A[i], device=device) for i in range(l)]
+    A = [genesis.Tensor(_A[i], device=device, requires_grad=True) for i in range(l)]
     TA = [torch.Tensor(_A[i]) for i in range(l)]
     for torch_a in TA:
         torch_a.requires_grad = True
@@ -651,12 +651,12 @@ def test_split(shape, dim, sections, device):
     """
     # Generate random input data
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
 
     # Test equality using numpy
-    result_genesis = F.split(A, axis=dim)
+    result_genesis = F.split(A, dim=dim)
     result_torch = torch.split(TA, 1, dim=dim)
     assert len(result_genesis) == len(result_torch), "Split result count mismatch"
 
@@ -690,7 +690,7 @@ def test_broadcast_to(shape, shape_to, device):
         - Backward gradients correctly sum over broadcast dimensions
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -719,7 +719,7 @@ def test_reshape(shape, shape_to, device):
         - Backward gradients preserved through reshape
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -745,7 +745,7 @@ def test_view(shape, shape_to, device):
         - Backward gradients preserved through view
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -773,7 +773,7 @@ def test_expand(shape, shape_to, device):
         - Backward gradients correctly sum over expanded dimensions
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     np.testing.assert_allclose(
@@ -802,7 +802,7 @@ def test_transpose(shape, axes, device):
         - Backward gradients correctly transposed back
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     if axes is None:
@@ -831,7 +831,7 @@ def test_logsumexp(shape, axes, device):
         - Numerical stability for large values
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     if axes is None:
@@ -862,7 +862,7 @@ def test_equal(shape, device):
     """
     _A = np.random.randn(*shape).astype(np.float32)
     _B = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     B = genesis.Tensor(_B, device=device)
     C = genesis.Tensor(_A, device=device)
     TA = torch.Tensor(_A)
@@ -888,7 +888,7 @@ def test_sin(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     B = A.sin()
@@ -913,7 +913,7 @@ def test_cos(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     B = A.cos()
@@ -944,7 +944,7 @@ def test_getitem_basic(shape, device):
         - Backward gradients through indexing operations
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     
@@ -999,7 +999,7 @@ def test_getitem_advanced(shape, device):
         - Backward gradients through gather operations
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     
@@ -1040,7 +1040,7 @@ def test_getitem_mixed(shape, device):
     # TODO: implement
     pytest.skip("Not implemented")
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     
@@ -1202,7 +1202,7 @@ def test_unsqueeze(shape, dim, device):
         - Backward gradients preserved through unsqueeze
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     B = A.unsqueeze(dim=dim)
@@ -1229,7 +1229,7 @@ def test_squeeze(shape, dim, device):
         - Backward gradients preserved through squeeze
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     B = A.squeeze(dim=dim)
@@ -1433,7 +1433,7 @@ def test_reduce_sum_precision_issue(device):
     torch_sum.sum().backward()
     
     # Genesis
-    A = genesis.Tensor(_A, device=device)
+    A = genesis.Tensor(_A, device=device, requires_grad=True)
     genesis_sum = F.summation(A, axis=0)
     genesis_sum.sum().backward()
     
@@ -1493,7 +1493,7 @@ def test_reduce_sum_keepdims(device):
         torch_sum.sum().backward()
         
         # Genesis  
-        A = genesis.Tensor(_A, device=device)
+        A = genesis.Tensor(_A, device=device, requires_grad=True)
         genesis_sum = F.summation(A, axis=axes, keepdims=True)
         genesis_sum.sum().backward()
         
@@ -2228,6 +2228,200 @@ def test_gather_scatter():
     src_3d = genesis.tensor([[[10.0], [20.0]], [[30.0], [40.0]]], dtype=genesis.float32)
     scattered_3d = x_3d.scatter(2, indices_3d, src_3d)
     assert scattered_3d.shape == (2, 2, 2), f"3D scatter shape mismatch: {scattered_3d.shape}"
+
+
+# =============================================
+# Tests for newly implemented MoE functions
+# =============================================
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_topk(device):
+    """Test topk function for top-k values and indices."""
+    # Test basic functionality
+    x = genesis.tensor([[3.0, 1.0, 4.0, 1.0, 5.0], [2.0, 7.0, 1.0, 8.0, 3.0]], device=device)
+    values, indices = genesis.topk(x, k=3, dim=1, largest=True)
+    
+    # Check shapes
+    assert values.shape == (2, 3), f"Expected values shape (2, 3), got {values.shape}"
+    assert indices.shape == (2, 3), f"Expected indices shape (2, 3), got {indices.shape}"
+    
+    # Check first row: should be [5.0, 4.0, 3.0] with indices [4, 2, 0]
+    assert values[0, 0].item() == 5.0, "First top value should be 5.0"
+    assert indices[0, 0].item() == 4, "Index of first top value should be 4"
+    
+    # Test smallest values
+    values_small, indices_small = genesis.topk(x, k=2, dim=1, largest=False)
+    assert values_small.shape == (2, 2)
+    assert indices_small.shape == (2, 2)
+    
+    # Test edge case: k larger than tensor size
+    y = genesis.tensor([3.0, 1.0], device=device)
+    values_edge, indices_edge = genesis.topk(y, k=5, dim=0, largest=True)
+    assert values_edge.shape[0] <= 2, "Should not return more elements than exist"
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])  
+def test_argsort(device):
+    """Test argsort function for sorting indices."""
+    x = genesis.tensor([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]], device=device)
+    indices = genesis.argsort(x, dim=1, descending=False)
+    
+    # For first row [3, 1, 2], sorted indices should be [1, 2, 0] (1 < 2 < 3)
+    assert indices[0, 0].item() == 1, "First sorted index should be 1"
+    assert indices[0, 1].item() == 2, "Second sorted index should be 2"  
+    assert indices[0, 2].item() == 0, "Third sorted index should be 0"
+    
+    # Test descending order
+    indices_desc = genesis.argsort(x, dim=1, descending=True)
+    assert indices_desc[0, 0].item() == 0, "First index in descending should be 0"
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_bincount(device):
+    """Test bincount function for counting occurrences."""
+    x = genesis.tensor([0, 1, 1, 2, 2, 2], dtype=genesis.int64, device=device)
+    result = genesis.bincount(x)
+    
+    expected = genesis.tensor([1, 2, 3], device=device)  # 0:1time, 1:2times, 2:3times  
+    assert result.shape == expected.shape, f"Shape mismatch: {result.shape} vs {expected.shape}"
+    assert genesis.allclose(result.float(), expected.float()), "Bincount values mismatch"
+    
+    # Test with weights
+    weights = genesis.tensor([0.5, 1.0, 1.5, 2.0, 0.5, 1.5], device=device)
+    result_weighted = genesis.bincount(x, weights=weights)
+    expected_weighted = genesis.tensor([0.5, 2.5, 4.0], device=device)  # 0:0.5, 1:1.0+1.5, 2:2.0+0.5+1.5
+    assert genesis.allclose(result_weighted, expected_weighted), "Weighted bincount mismatch"
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_scatter_add(device):
+    """Test scatter_add function for scatter addition."""
+    # Test case 1
+    _input = np.zeros((3, 5)).astype(np.float32)
+    _index = np.array([[0, 1, 2, 0]], dtype=np.int64)
+    _src = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+    
+    input_tensor = genesis.Tensor(_input, device=device, requires_grad=True)
+    index = genesis.Tensor(_index, device=device)
+    src = genesis.Tensor(_src, device=device, requires_grad=True)
+    
+    # PyTorch reference
+    torch_input = torch.tensor(_input, requires_grad=True)
+    torch_index = torch.tensor(_index)
+    torch_src = torch.tensor(_src, requires_grad=True)
+    torch_result = torch_input.scatter_add(0, torch_index, torch_src)
+    
+    # Genesis result
+    genesis_result = input_tensor.scatter_add(0, index, src)
+    
+    # Compare forward pass
+    np.testing.assert_allclose(
+        torch_result.detach().numpy(), 
+        genesis_result.detach().numpy(), 
+        atol=atol, rtol=rtol
+    )
+    
+    # Test backward pass
+    torch_result.sum().backward()
+    genesis_result.sum().backward()
+    
+    np.testing.assert_allclose(
+        torch_src.grad.numpy(), 
+        src.grad.numpy(), 
+        atol=atol, rtol=rtol
+    )
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_repeat_interleave(device):
+    """Test repeat_interleave function."""
+    x = genesis.tensor([1.0, 2.0, 3.0], device=device)
+    result = x.repeat_interleave(2, dim=0)
+    
+    expected = genesis.tensor([1.0, 1.0, 2.0, 2.0, 3.0, 3.0], device=device)
+    assert result.shape == expected.shape, f"Shape mismatch: {result.shape} vs {expected.shape}"
+    assert genesis.allclose(result, expected), "repeat_interleave values mismatch"
+    
+    # Test with 2D tensor  
+    x_2d = genesis.tensor([[1.0, 2.0], [3.0, 4.0]], device=device)
+    result_2d = x_2d.repeat_interleave(3, dim=0)
+    
+    expected_2d = genesis.tensor([[1.0, 2.0], [1.0, 2.0], [1.0, 2.0], 
+                                  [3.0, 4.0], [3.0, 4.0], [3.0, 4.0]], device=device)
+    assert result_2d.shape == expected_2d.shape
+    assert genesis.allclose(result_2d, expected_2d), "2D repeat_interleave mismatch"
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])  
+def test_allclose(device):
+    """Test allclose function for approximate equality."""
+    x = genesis.tensor([1.0, 2.0, 3.0], device=device)
+    y = genesis.tensor([1.0001, 2.0001, 3.0001], device=device)
+    
+    # Should be close with default tolerance
+    assert genesis.allclose(x, y, rtol=1e-3, atol=1e-3) == True, "Should be close with loose tolerance"
+    
+    # Should not be close with very tight tolerance
+    assert genesis.allclose(x, y, rtol=1e-6, atol=1e-6) == False, "Should not be close with tight tolerance"
+    
+    # Test identical tensors
+    assert genesis.allclose(x, x) == True, "Identical tensors should be close"
+    
+    # Test different shapes (should handle gracefully)
+    z = genesis.tensor([1.0, 2.0], device=device)
+    try:
+        result = genesis.allclose(x, z)
+        # If it doesn't raise an error, result should be False
+        assert result == False, "Different shaped tensors should not be close"
+    except (RuntimeError, ValueError):
+        # It's also acceptable to raise an error for different shapes
+        pass
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_comparison_operators(device):
+    """Test new comparison operators <= and >=."""
+    x = genesis.tensor([1.0, 2.0, 3.0], device=device)
+    y = genesis.tensor([2.0, 2.0, 2.0], device=device)
+    
+    # Test <=
+    result_le = x <= y
+    expected_le = genesis.tensor([1.0, 1.0, 0.0], device=device)
+    assert genesis.allclose(result_le.float(), expected_le), "Less-equal operator mismatch"
+    
+    # Test >=  
+    result_ge = x >= y
+    expected_ge = genesis.tensor([0.0, 1.0, 1.0], device=device)
+    assert genesis.allclose(result_ge.float(), expected_ge), "Greater-equal operator mismatch"
+    
+    # Test with scalars
+    result_le_scalar = x <= 2.0
+    expected_le_scalar = genesis.tensor([1.0, 1.0, 0.0], device=device)
+    assert genesis.allclose(result_le_scalar.float(), expected_le_scalar), "Scalar less-equal mismatch"
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_tensor_all_method(device):
+    """Test tensor.all() method."""
+    # All non-zero (should be True)
+    x = genesis.tensor([1.0, 2.0, 3.0], device=device)
+    assert x.all() == True, "All non-zero elements should return True"
+    
+    # Contains zero (should be False)
+    y = genesis.tensor([1.0, 0.0, 3.0], device=device) 
+    assert y.all() == False, "Contains zero should return False"
+    
+    # All zeros (should be False)
+    z = genesis.zeros((3,), device=device)
+    assert z.all() == False, "All zeros should return False"
+    
+    # 2D tensor test
+    w = genesis.tensor([[1.0, 2.0], [3.0, 4.0]], device=device)
+    assert w.all() == True, "2D all non-zero should return True"
+    
+    # 2D tensor with zero
+    u = genesis.tensor([[1.0, 0.0], [3.0, 4.0]], device=device)
+    assert u.all() == False, "2D with zero should return False"
 
 
 if __name__ == "__main__":

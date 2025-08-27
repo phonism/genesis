@@ -7,3 +7,4 @@ and utilities for building deep learning models with automatic differentiation s
 from . import functional
 from .modules import *
 from . import utils
+from .moe import *

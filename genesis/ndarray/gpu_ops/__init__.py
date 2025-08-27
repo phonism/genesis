@@ -10,9 +10,9 @@ from .basic_ops import (
 )
 from .comparison_ops import eq, ge, gt, le, lt
 from .reduction_ops import reduce_sum, reduce_max
-from .shape_ops import reshape, view, expand, permute, broadcast_to
-from .indexing_ops import getitem, setitem, fill, fill_tensor, cat, gather, scatter
+from .shape_ops import reshape, view, expand, permute, broadcast_to, repeat_interleave
+from .indexing_ops import getitem, setitem, fill, fill_tensor, cat, gather, scatter, scatter_add
 from .matrix_ops import matmul
 from .utils import prod, broadcast_shapes, from_numpy, from_tensor, array, clone
 from .random_ops import randn, rand
-from .tensor_ops import triu, split, to_dtype, squeeze, unsqueeze
+from .tensor_ops import triu, split, to_dtype, squeeze, unsqueeze, topk, argsort, bincount
