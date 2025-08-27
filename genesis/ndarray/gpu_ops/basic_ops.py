@@ -50,6 +50,7 @@ def add_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.cons
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
+    # Simply add scalar directly - Triton should handle type compatibility
     output = x + scalar
     tl.store(output_ptr + offsets, output, mask=mask)
 

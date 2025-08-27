@@ -46,6 +46,30 @@ class Tensor:
 | `requires_grad` | bool | `False` | 是否计算梯度 |
 | `**kwargs` | dict | `{}` | 额外的NDArray参数 |
 
+#### 数据类型推断
+
+Genesis自动推断数据类型，遵循PyTorch约定：
+
+```python
+# 标量类型推断
+genesis.tensor(42)        # → genesis.int64 (Python整数)
+genesis.tensor(3.14)      # → genesis.float32 (Python浮点数) 
+genesis.tensor(True)      # → genesis.bool (Python布尔值)
+
+# 列表/数组推断
+genesis.tensor([1, 2, 3])           # → genesis.int64 (整数列表)
+genesis.tensor([1.0, 2.0, 3.0])     # → genesis.float32 (浮点数列表)
+genesis.tensor(np.array([1, 2]))    # → 保持numpy数据类型（带转换）
+
+# 显式数据类型指定
+genesis.tensor([1, 2, 3], dtype=genesis.float32)  # → genesis.float32
+```
+
+**数据类型转换规则：**
+- `numpy.float64` → `genesis.float32` （与PyTorch默认值保持一致）
+- 整数类型被保留：`np.int32` → `genesis.int32`等
+- 布尔类型被保留：`np.bool_` → `genesis.bool`
+
 #### 属性
 
 ##### 形状和类型信息
@@ -170,11 +194,22 @@ z = x.sin()        # 正弦
 z = x.cos()        # 余弦
 z = x.tanh()       # 双曲正切
 
-# 归约操作
-z = x.sum()        # 求和
-z = x.mean()       # 平均值
-z = x.max()        # 最大值
-z = x.min()        # 最小值
+# 归约操作（PyTorch风格接口）
+z = x.sum()              # 对所有元素求和
+z = x.sum(dim=0)         # 沿第0维求和
+z = x.sum(dim=1, keepdim=True)  # 沿第1维求和，保持维度
+
+z = x.mean()             # 所有元素的平均值
+z = x.mean(dim=0)        # 沿第0维求平均值
+z = x.mean(dim=1, keepdim=True) # 沿第1维求平均值，保持维度
+
+z = x.max()              # 最大元素
+z = x.max(dim=0)         # 沿第0维求最大值
+z = x.max(dim=1, keepdim=True)  # 沿第1维求最大值，保持维度
+
+# 也支持NumPy风格参数（兼容性）
+z = x.sum(axis=0, keepdims=True)    # NumPy风格（axis, keepdims）
+z = x.mean(axis=1, keepdims=False)  # NumPy风格接口
 
 # 形状操作
 z = x.reshape(shape)      # 重塑

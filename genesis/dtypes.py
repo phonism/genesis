@@ -109,6 +109,14 @@ def get_dtype(obj):
         if dtype is None:
             raise ValueError(f"Unsupported numpy type: {obj}")
         return dtype
+    elif str(type(obj)) == "<class 'torch.dtype'>":
+        # Handle PyTorch dtype objects (torch.float32, etc.)
+        torch_name = str(obj).split('.')[-1]  # Extract 'float32' from 'torch.float32'
+        dtype = _name_to_dtype.get(torch_name)
+        if dtype is not None:
+            return dtype
+        # Fallback to string representation
+        return get_dtype(torch_name)
     else:
         raise ValueError(f"Cannot convert {type(obj)} to Genesis DType: {obj}")
 
@@ -123,6 +131,51 @@ def is_integer(dtype):
     """Check if dtype is integer"""
     dtype = get_dtype(dtype)
     return not dtype.is_floating_point and dtype != bool
+
+
+def infer_dtype_from_data(array):
+    """Infer Genesis dtype from input data with PyTorch-like behavior.
+    
+    Args:
+        array: Input data (scalar, list, numpy array, Tensor, etc.)
+        
+    Returns:
+        DType: Inferred Genesis dtype
+    """
+    # Handle Tensor and NDArray objects (avoid circular imports)
+    if hasattr(array, 'dtype') and hasattr(array, '__class__'):
+        if array.__class__.__name__ == 'Tensor':
+            return array.dtype
+        elif hasattr(array, 'device'):
+            return get_dtype(array.dtype)
+    
+    if isinstance(array, type(1)) or isinstance(array, type(1.0)) or isinstance(array, type(True)):
+        # Handle scalar values (follow PyTorch defaults)
+        if isinstance(array, type(True)):
+            return globals()['bool']  # Genesis bool dtype
+        elif isinstance(array, type(1)):
+            return int64  # PyTorch default for Python int
+        else:  # float
+            return float32  # PyTorch default for Python float
+    else:
+        # Handle arrays and lists
+        import numpy as np
+        if not hasattr(array, 'dtype'):
+            array = np.array(array)
+        
+        # Map numpy dtypes to Genesis dtypes
+        dtype_map = {
+            np.bool_: globals()['bool'],
+            np.int8: int8,
+            np.int16: int16, 
+            np.int32: int32,
+            np.int64: int64,
+            np.uint8: uint8,
+            np.float16: float16,
+            np.float32: float32,
+            np.float64: float32,  # Convert float64 to float32 by default like PyTorch
+        }
+        return dtype_map.get(array.dtype.type, float32)
 
 
 # Common dtype list

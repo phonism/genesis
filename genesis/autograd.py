@@ -150,7 +150,7 @@ class Tensor:
     data: NDArray
     requires_grad: bool
 
-    def __init__(self, array, *, device: Optional[Device] = None, dtype=None, requires_grad=True, **kwargs):
+    def __init__(self, array, *, device: Optional[Device] = None, dtype=None, requires_grad=False, **kwargs):
         """Initialize tensor from array-like data.
         
         Args:
@@ -159,46 +159,10 @@ class Tensor:
             dtype: Data type for tensor elements
             requires_grad: Whether to track gradients for this tensor
         """
-        # Auto-infer dtype from input if not specified (PyTorch-like behavior)
+        # Simplified dtype inference (PyTorch-like behavior)
         if dtype is None:
-            if isinstance(array, Tensor):
-                dtype = array.dtype
-            elif isinstance(array, NDArray):
-                dtype = array.dtype
-            else:
-                # Auto-infer from numpy array or Python types
-                import numpy as np
-                if isinstance(array, (list, tuple)):
-                    # Convert to numpy to infer dtype
-                    np_array = np.array(array)
-                elif isinstance(array, (int, float, bool)):
-                    # Handle scalar values
-                    if isinstance(array, bool):
-                        dtype = genesis.float32  # Convert bool to float32 by default
-                    elif isinstance(array, int):
-                        dtype = genesis.float32  # Convert int to float32 by default
-                    else:  # float
-                        dtype = genesis.float32
-                elif hasattr(array, 'dtype'):
-                    # numpy array or similar
-                    np_array = array
-                else:
-                    np_array = np.array(array)
-                
-                # Map numpy dtypes to Genesis dtypes
-                if 'np_array' in locals():
-                    if np_array.dtype == np.bool_:
-                        dtype = genesis.float32  # Convert bool to float32
-                    elif np_array.dtype in [np.int8, np.int16, np.int32, np.int64]:
-                        dtype = genesis.float32  # Convert int to float32
-                    elif np_array.dtype == np.float16:
-                        dtype = genesis.float16
-                    elif np_array.dtype == np.float32:
-                        dtype = genesis.float32
-                    elif np_array.dtype == np.float64:
-                        dtype = genesis.float32  # Convert float64 to float32 by default
-                    else:
-                        dtype = genesis.float32  # Default fallback
+            from .dtypes import infer_dtype_from_data
+            dtype = infer_dtype_from_data(array)
         
         # Convert dtype to DType object for consistency
         if dtype is not None:
@@ -226,6 +190,7 @@ class Tensor:
             data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
 
         self.init([], data=data, requires_grad=requires_grad)
+    
 
     def init(self, inputs: List["Tensor"], *, data: List[object] = None, requires_grad: Optional[bool] = None):
         """
@@ -271,7 +236,27 @@ class Tensor:
         return detached
     
     def cpu(self):
-        return Tensor(self.data.cpu(), device=genesis.device('cpu'))
+        return Tensor(self.data.cpu(), device=genesis.device('cpu'), requires_grad=self.requires_grad)
+    
+    def cuda(self, device=None):
+        """Move tensor to CUDA device (PyTorch-compatible interface).
+        
+        Args:
+            device: CUDA device index or None for default CUDA device
+            
+        Returns:
+            Tensor: Tensor on CUDA device
+        """
+        # Determine target device
+        target_device = genesis.device('cuda') if device is None else genesis.device(f'cuda:{device}')
+        
+        # Return self if already on target device
+        if self.device == target_device:
+            return self
+        
+        # Move to target device
+        new_data = target_device.array(self.data.numpy(), dtype=self.dtype)
+        return Tensor(new_data, device=target_device, requires_grad=self.requires_grad)
 
     @staticmethod
     def _array_from_numpy(numpy_array, device, dtype):
@@ -578,6 +563,18 @@ class Tensor:
         else:
             return Tensor(self.data > other, device=self.device, requires_grad=False)
 
+    def __le__(self, other):
+        if isinstance(other, Tensor):
+            return Tensor(self.data <= other.data, device=self.device, requires_grad=False)
+        else:
+            return Tensor(self.data <= other, device=self.device, requires_grad=False)
+
+    def __ge__(self, other):
+        if isinstance(other, Tensor):
+            return Tensor(self.data >= other.data, device=self.device, requires_grad=False)
+        else:
+            return Tensor(self.data >= other, device=self.device, requires_grad=False)
+
     def sin(self):
         return genesis.nn.functional.sin(self)
 
@@ -605,25 +602,97 @@ class Tensor:
     def summation(self, axis=None, keepdims=False):
         return genesis.nn.functional.summation(self, axis=axis, keepdims=keepdims)
 
-    def sum(self, axis=None, keepdims=False):
-        return genesis.nn.functional.summation(self, axis=axis, keepdims=keepdims)
-
-    def max(self, axis=None, keepdims=False):
-        """Find maximum values along specified axis"""
-        return genesis.nn.functional.max(self, axis=axis, keepdims=keepdims)
-
-    def mean(self, axis=None, keepdims=False):
-        """
-        Compute the arithmetic mean along the specified axis.
+    def sum(self, dim=None, keepdim=False, axis=None, keepdims=None):
+        """Sum tensor along specified dimensions (PyTorch-style interface).
         
         Args:
-            axis: Axis or axes along which to compute mean. None means reduce all axes.
+            dim: Dimension(s) to sum along (PyTorch style)
+            keepdim: Whether to keep reduced dimensions (PyTorch style)
+            axis: Alias for dim (NumPy compatibility, ignored if dim is provided)
+            keepdims: Alias for keepdim (NumPy compatibility, ignored if keepdim is provided)
+            
+        Returns:
+            Tensor: Summed tensor
+        """
+        # PyTorch-style parameters take precedence over NumPy-style
+        final_dim = dim if dim is not None else axis
+        # For keepdim: if any PyTorch-style param is provided, use it; otherwise use NumPy-style
+        if dim is not None or keepdim != False:  # keepdim was explicitly set
+            final_keepdim = keepdim
+        else:
+            final_keepdim = keepdims if keepdims is not None else False
+        return genesis.nn.functional.summation(self, axis=final_dim, keepdims=final_keepdim)
+
+    def max(self, dim=None, keepdim=False, axis=None, keepdims=None):
+        """Find maximum values along specified dimension (PyTorch-style interface).
+        
+        Args:
+            dim: Dimension to find max along (PyTorch style)
+            keepdim: Whether to keep reduced dimensions (PyTorch style)  
+            axis: Alias for dim (NumPy compatibility, ignored if dim is provided)
+            keepdims: Alias for keepdim (NumPy compatibility, ignored if keepdim is provided)
+            
+        Returns:
+            Tensor: Maximum values tensor
+        """
+        # PyTorch-style parameters take precedence over NumPy-style
+        final_dim = dim if dim is not None else axis
+        # For keepdim: if any PyTorch-style param is provided, use it; otherwise use NumPy-style
+        if dim is not None or keepdim != False:  # keepdim was explicitly set
+            final_keepdim = keepdim
+        else:
+            final_keepdim = keepdims if keepdims is not None else False
+        return genesis.nn.functional.max(self, axis=final_dim, keepdims=final_keepdim)
+
+    def mean(self, dim=None, keepdim=False, axis=None, keepdims=None):
+        """Compute arithmetic mean along specified dimension (PyTorch-style interface).
+        
+        Args:
+            dim: Dimension(s) to compute mean along (PyTorch style)
+            keepdim: Whether to keep reduced dimensions (PyTorch style)
+            axis: Alias for dim (NumPy compatibility, ignored if dim is provided)
+            keepdims: Alias for keepdim (NumPy compatibility, ignored if keepdim is provided)
+            
+        Returns:
+            Tensor: Mean values tensor
+        """
+        # PyTorch-style parameters take precedence over NumPy-style
+        final_dim = dim if dim is not None else axis
+        # For keepdim: if any PyTorch-style param is provided, use it; otherwise use NumPy-style
+        if dim is not None or keepdim != False:  # keepdim was explicitly set
+            final_keepdim = keepdim
+        else:
+            final_keepdim = keepdims if keepdims is not None else False
+        return genesis.nn.functional.mean(self, axis=final_dim, keepdims=final_keepdim)
+
+    def all(self, axis=None, keepdims=False):
+        """
+        Test whether all tensor elements evaluate to True.
+        
+        Args:
+            axis: Axis or axes along which to check. None means check all axes.
             keepdims: Whether to keep reduced dimensions as size 1
             
         Returns:
-            Tensor containing the mean values
+            Boolean tensor indicating if all elements are True
         """
-        return genesis.nn.functional.mean(self, axis=axis, keepdims=keepdims)
+        # Convert to boolean tensor, then check if all are non-zero
+        bool_tensor = self != 0  # Convert to boolean (non-zero is True)
+        
+        if axis is None:
+            # Reduce all dimensions - check if all elements are true
+            return bool_tensor.sum() == self.numel()
+        else:
+            # Reduce along specific axis
+            total_along_axis = bool_tensor.sum(axis=axis, keepdims=keepdims)
+            expected_count = 1
+            if isinstance(axis, int):
+                expected_count = self.shape[axis]
+            elif isinstance(axis, (tuple, list)):
+                for ax in axis:
+                    expected_count *= self.shape[ax]
+                    
+            return total_along_axis == expected_count
 
     def broadcast_to(self, shape):
         return genesis.nn.functional.broadcast_to(self, shape)
@@ -651,6 +720,14 @@ class Tensor:
         """Scatter values from src along specified dimension using indices."""
         return genesis.nn.functional.scatter(self, dim, index, src)
 
+    def scatter_add(self, dim, index, src):
+        """Scatter-add values from src along specified dimension using indices."""
+        return genesis.nn.functional.scatter_add(self, dim, index, src)
+
+    def repeat_interleave(self, repeats, dim=None):
+        """Repeat elements along specified dimension."""
+        return genesis.nn.functional.repeat_interleave(self, repeats, dim)
+
     def __matmul__(self, other):
         return genesis.nn.functional.matmul(self, other)
 
@@ -662,6 +739,18 @@ class Tensor:
 
     def squeeze(self, dim):
         return genesis.nn.functional.squeeze(self, dim)
+    
+    def to_device(self, device):
+        """Move tensor to specified device.
+        
+        Args:
+            device: Target device object or device name
+            
+        Returns:
+            Tensor: New tensor on target device
+        """
+        new_data = self.data.to_device(device)
+        return Tensor(new_data, device=device, dtype=self.dtype, requires_grad=self.requires_grad)
 
     def sqrt(self):
         return genesis.nn.functional.sqrt(self)
@@ -685,6 +774,17 @@ class Tensor:
     def tanh(self):
         """Apply tanh activation function"""
         return genesis.nn.functional.tanh(self)
+    
+    def any(self):
+        """Return True if any element is True, False otherwise."""
+        # Convert to boolean tensor and check if any element is non-zero
+        bool_tensor = (self != 0)
+        # Sum all elements and check if result > 0
+        return bool_tensor.sum().item() > 0
+    
+    def argsort(self, dim=-1, descending=False):
+        """Return the indices that would sort the tensor along the given dimension."""
+        return genesis.argsort(self, dim=dim, descending=descending)
 
     def view(self, *new_shape):
         if len(new_shape) == 1 and isinstance(new_shape[0], (tuple, list)):

@@ -525,3 +525,4 @@ def scaled_dot_product_attention(q, k, v, is_causal=True):
     else:
         y = FusedAttention.apply(q, k, v)
     return y
+

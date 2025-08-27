@@ -3,6 +3,25 @@ import genesis
 import operator
 from functools import reduce
 
+
+class CPUStorage(torch.Tensor):
+    """Storage class for CPU tensors, extending torch.Tensor with to_numpy method."""
+    
+    def __new__(cls, data):
+        """Create a new CPUStorage from a torch.Tensor."""
+        if isinstance(data, torch.Tensor):
+            # Create a subclass instance from the tensor
+            instance = data.as_subclass(cls)
+            return instance
+        else:
+            raise TypeError(f"Expected torch.Tensor, got {type(data)}")
+    
+    def to_numpy(self):
+        """Convert to numpy array."""
+        return self.detach().cpu().numpy()
+
+
+# Since CPUStorage IS a torch.Tensor, all operations work directly!
 def add(x, y):
     return x + y
 
@@ -147,10 +166,19 @@ def from_numpy(data, device_id=None, dtype=None):
         torch_dtype = torch.bool
     elif dtype == genesis.int64:
         torch_dtype = torch.int64
-    return torch.from_numpy(data).to(torch_dtype)
+    tensor = torch.from_numpy(data).to(torch_dtype)
+    return CPUStorage(tensor)
 
 def from_tensor(data, device_id=None):
-    return data
+    # If data is already a CPUStorage, return it
+    if isinstance(data, CPUStorage):
+        return data
+    # If it's a torch.Tensor, wrap it
+    elif isinstance(data, torch.Tensor):
+        return CPUStorage(data)
+    # Otherwise return as-is (might be CUDAStorage)
+    else:
+        return data
 
 def clone(data, device_id=None, dtype=None):
     """Create a deep copy of the tensor data."""
@@ -413,3 +441,34 @@ def broadcast_shapes(shape1, shape2):
                 raise ValueError(f"Cannot broadcast shapes {tuple(reversed(shape1_rev))} and {tuple(reversed(shape2_rev))}")
         
         return tuple(reversed(result_shape_rev))
+
+
+def topk(x, k, dim=-1, largest=True, sorted=True):
+    """CPU implementation of topk using PyTorch."""
+    # Handle case where k is larger than tensor size in the specified dimension
+    if dim < 0:
+        dim = len(x.shape) + dim
+    if k > x.shape[dim]:
+        k = x.shape[dim]
+    values, indices = torch.topk(x, k, dim=dim, largest=largest, sorted=sorted)
+    return values, indices
+
+
+def argsort(x, dim=-1, descending=False):
+    """CPU implementation of argsort using PyTorch."""
+    return torch.argsort(x, dim=dim, descending=descending)
+
+
+def bincount(x, weights=None, minlength=0):
+    """CPU implementation of bincount using PyTorch."""
+    return torch.bincount(x, weights=weights, minlength=minlength)
+
+
+def scatter_add(input_tensor, dim, index, src):
+    """CPU implementation of scatter_add using PyTorch."""
+    return input_tensor.scatter_add(dim, index, src)
+
+
+def repeat_interleave(x, repeats, dim=None):
+    """CPU implementation of repeat_interleave using PyTorch."""
+    return torch.repeat_interleave(x, repeats, dim=dim)
