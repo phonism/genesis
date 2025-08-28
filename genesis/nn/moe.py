@@ -15,7 +15,9 @@ import genesis
 from genesis import Tensor
 import genesis.nn as nn
 import genesis.nn.functional as F
-from .modules import Module, Parameter, MultiheadAttention, RMSNorm
+from .modules import Module, Parameter
+from .modules.transformer import MultiheadAttention  
+from .modules.normalization import RMSNorm
 
 
 class MoEGate(Module):

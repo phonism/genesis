@@ -602,5 +602,5 @@ def check_tensor(tensor, name):
 
 **Ready to learn more?**
 
-[Next: Tensor Operation Optimization](tensor-operations.md){ .md-button .md-button--primary }
+[Next: Tensor Operations Guide](tensor.md){ .md-button .md-button--primary }
 [Back to Core Components](index.md){ .md-button }

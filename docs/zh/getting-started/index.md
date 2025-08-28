@@ -189,7 +189,7 @@ wandb >= 0.13.0     # 实验跟踪
 ### 🚀 高级特性
 - [**自定义算子**](../tutorials/custom-ops.md) - 实现自定义操作
 - [**性能优化**](../tutorials/performance-tuning.md) - 训练性能调优
-- [**分布式训练**](../neural-networks/distributed.md) - 多GPU训练
+- [**分布式训练**](../tutorials/distributed-training.md) - 多GPU训练
 
 ## ❓ 常见问题
 

@@ -489,5 +489,5 @@ print(y.grad_fn.next_functions)  # 连接的操作
 
 - [神经网络模块](nn/modules.md) - 使用Genesis构建模型
 - [优化器](optim/optimizers.md) - 使用梯度下降训练
-- [张量操作](../ndarray/index.md) - 低级张量操作
+- [张量操作](ndarray/index.md) - 低级张量操作
 - [示例](../../../samples/) - 完整工作示例

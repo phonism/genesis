@@ -129,4 +129,4 @@ topo_sort(z) ->
 - [自动微分系统](autograd.md) - 深入理解计算图和梯度计算
 - [张量操作](tensor.md) - 全面的张量操作指南  
 - [数据类型](dtypes.md) - 类型系统和精度管理
-- [函数式接口](functional.md) - 函数式编程风格的操作
+- [函数式接口](../api-reference/functional.md) - 函数式编程风格的操作

@@ -490,5 +490,5 @@ print(y.grad_fn.next_functions)  # Connected operations
 
 - [Neural Network Modules](nn/modules.md) - Building models with Genesis
 - [Optimizers](optim/optimizers.md) - Training with gradient descent
-- [Tensor Operations](../ndarray/index.md) - Low-level tensor operations
+- [Tensor Operations](ndarray/index.md) - Low-level tensor operations
 - [Examples](../../../samples/) - Complete working examples

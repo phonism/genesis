@@ -137,9 +137,27 @@ class CUDATensor:
         self._data_ptr = check_cuda_error(result)
 ```
 
-### Neural Network Modules (`nn/modules.py`)
+### Neural Network Modules (`nn/modules/`)
+
+Genesis adopts a modular architecture similar to PyTorch for better code organization:
+
+```
+nn/modules/
+├── module.py          # Base Module and Parameter classes
+├── linear.py          # Linear, Flatten layers
+├── activation.py      # ReLU, Softmax, SiLU activation functions
+├── normalization.py   # BatchNorm, LayerNorm, RMSNorm
+├── loss.py           # CrossEntropyLoss, MSELoss, BCELoss
+├── container.py      # Sequential, ModuleList containers
+├── dropout.py        # Dropout regularization
+├── sparse.py         # Embedding, RotaryEmbedding
+└── transformer.py    # MultiheadAttention, FeedForwardSwiGLU
+```
+
+**Core Implementation**:
 
 ```python
+# modules/module.py
 class Module:
     """Base class for neural network modules"""
     def parameters(self) -> List[Tensor]:
@@ -150,11 +168,19 @@ class Module:
         # Subclasses implement specific forward propagation logic
         raise NotImplementedError
 
+# modules/linear.py  
 class Linear(Module):
     """Fully connected layer implementation"""
     def __init__(self, in_features, out_features):
         self.weight = Parameter(genesis.randn(out_features, in_features))
         self.bias = Parameter(genesis.zeros(out_features))
+
+# modules/loss.py
+class CrossEntropyLoss(Module):
+    """Cross-entropy loss for classification"""
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        log_prob = F.log_softmax(input, dim=1)
+        # ... implementation details
 ```
 
 ## 🔧 Key Technical Implementations

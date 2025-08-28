@@ -143,6 +143,31 @@ def ones_like(tensor, dtype=None, device=None, requires_grad=None):
     
     return ones(*tensor.shape, device=device, dtype=dtype, requires_grad=requires_grad)
 
+def randint(low, high, shape, device=None, dtype=genesis.int64, requires_grad=False):
+    """Generate random integers in range [low, high).
+    
+    Args:
+        low: Lowest integer (inclusive)
+        high: Highest integer (exclusive)
+        shape: Shape of output tensor (tuple or int)
+        device: Target device (defaults to CPU)
+        dtype: Integer data type (defaults to int64)
+        requires_grad: Whether to track gradients
+        
+    Returns:
+        Tensor: Random integer tensor
+    """
+    if isinstance(shape, int):
+        shape = (shape,)
+    elif not isinstance(shape, tuple):
+        shape = tuple(shape)
+        
+    device = genesis.device('cpu') if device is None else device
+    
+    # Use device-specific randint implementation
+    array = device.randint(low, high, shape, dtype=dtype)
+    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+
 def from_numpy(array, device=None, dtype=None, requires_grad=False):
     """Create Tensor from numpy array.
     
