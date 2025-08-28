@@ -49,6 +49,48 @@ def topk(input: Tensor, k: int, dim: int = -1, largest: bool = True, sorted: boo
     return values, indices
 
 
+def isinf(input: Tensor):
+    """
+    Tests each element of input to see if it is infinite (positive or negative infinity).
+    
+    Args:
+        input: Input tensor
+        
+    Returns:
+        A tensor of the same shape as input with boolean values
+    """
+    result_data = input.data.isinf()
+    return genesis.Tensor(result_data, device=input.device, dtype=genesis.bool, requires_grad=False)
+
+
+def isnan(input: Tensor):
+    """
+    Tests each element of input to see if it is NaN (Not a Number).
+    
+    Args:
+        input: Input tensor
+        
+    Returns:
+        A tensor of the same shape as input with boolean values
+    """
+    result_data = input.data.isnan()
+    return genesis.Tensor(result_data, device=input.device, dtype=genesis.bool, requires_grad=False)
+
+
+def isfinite(input: Tensor):
+    """
+    Tests each element of input to see if it is finite (not infinite and not NaN).
+    
+    Args:
+        input: Input tensor
+        
+    Returns:
+        A tensor of the same shape as input with boolean values
+    """
+    result_data = input.data.isfinite()
+    return genesis.Tensor(result_data, device=input.device, dtype=genesis.bool, requires_grad=False)
+
+
 def argsort(input: Tensor, dim: int = -1, descending: bool = False):
     """
     Returns indices that sort a tensor along a dimension.

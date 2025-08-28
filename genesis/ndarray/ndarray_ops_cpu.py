@@ -97,6 +97,18 @@ def reduce_max(x, axis=None, keepdims=False):
         axis = axis[0]
     return torch.max(x, dim=axis, keepdim=keepdims).values
 
+def isinf(x):
+    """Tests each element to see if it is infinite."""
+    return torch.isinf(x)
+
+def isnan(x):
+    """Tests each element to see if it is NaN."""
+    return torch.isnan(x)
+
+def isfinite(x):
+    """Tests each element to see if it is finite."""
+    return torch.isfinite(x)
+
 
 def reshape(x, new_shape):
     return x.reshape(new_shape)
@@ -217,7 +229,7 @@ def array(shape, device_id=None, dtype=None):
         else:
             # Default to float32
             arr = torch.empty(*shape, dtype=torch.float32, device=torch.device("cpu"))
-    return arr
+    return CPUStorage(arr)
 
 def cat(arrays, dim=0):
     """

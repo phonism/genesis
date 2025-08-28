@@ -40,6 +40,8 @@ from . import nn
 from . import init
 from . import optim
 from . import utils
+from . import amp  # Automatic mixed precision training
+from . import distributed  # Distributed training
 from .backend import *
 from .functional import *
 from . import cuda  # CUDA memory management utilities

@@ -1,6 +1,5 @@
 import genesis
 import os
-import torch
 
 class autocast:
     def __enter__(self):
@@ -37,7 +36,8 @@ class GradScaler:
         found_inf = False 
         for param in optimizer.params:
             if param.grad is not None:
-                if torch.isinf(param.grad.data.data).any() or torch.isnan(param.grad.data.data).any():
+                # Use genesis operations on the Tensor directly
+                if genesis.isinf(param.grad).any() or genesis.isnan(param.grad).any():
                     found_inf = True
                     break 
         self.is_inf = found_inf

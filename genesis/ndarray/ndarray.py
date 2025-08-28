@@ -12,6 +12,11 @@ import numpy as np
 import genesis
 from typing import Optional, Any
 import torch
+from . import ndarray_ops_cpu
+try:
+    from . import ndarray_ops_gpu
+except ImportError:
+    ndarray_ops_gpu = None
 
 def prod(x):
     """Return the product of all elements in a list."""
@@ -40,6 +45,16 @@ class Device:
         self.name = name
         self.mod = mod
         self.device_id = device_id
+    
+    @property
+    def index(self) -> Optional[int]:
+        """Device index (PyTorch compatibility)."""
+        return self.device_id
+    
+    @property 
+    def type(self) -> str:
+        """Device type (PyTorch compatibility)."""
+        return self.name
 
     def __eq__(self, other) -> bool:
         if isinstance(other, Device):
@@ -103,17 +118,14 @@ def device(device_name):
         return cuda(device_id)
 
 def cpu():
-    """Return cuda device"""
-    from . import ndarray_ops_cpu
+    """Return CPU device"""
     return Device("cpu", ndarray_ops_cpu)
 
 def cuda(index=0):
-    """Return cuda device"""
-    try:
-        from . import ndarray_ops_gpu
+    """Return CUDA device"""
+    if ndarray_ops_gpu is not None:
         return Device("cuda", ndarray_ops_gpu, index)
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    else:
         return Device("cuda", None)
 
 def default_device():
@@ -126,9 +138,9 @@ def all_devices():
 class NDArray:
     def __init__(self, data, device=None, dtype=None):
         self._dtype = dtype
-        # Check if it's a genesis Tensor (imported from autograd)
-        from genesis.autograd import Tensor
-        if isinstance(data, Tensor):
+        
+        # Check if it's a genesis Tensor (using type name to avoid circular import)
+        if hasattr(data, '__class__') and data.__class__.__name__ == 'Tensor' and hasattr(data, 'data'):
             # Use the Tensor's underlying NDArray
             if isinstance(data.data, NDArray):
                 self._device = device if device is not None else data.data.device
@@ -144,13 +156,13 @@ class NDArray:
             self._device = device
             self.data = self._device.from_numpy(data, device_id=self._device.device_id, dtype=dtype)
         elif isinstance(data, NDArray):
-            self._device = device
+            self._device = device if device is not None else data.device
             self.data = self._device.from_tensor(data.data, device_id=self._device.device_id)
         elif isinstance(data, torch.Tensor):
-            self._device = device
+            self._device = device if device is not None else default_device()
             self.data = self._device.from_tensor(data, device_id=self._device.device_id)
         elif data.__class__.__name__ == 'CUDAStorage':  # CUDAStorage
-            self._device = device
+            self._device = device if device is not None else default_device()
             self.data = data  # Use directly
         else:
             device = device if device is not None else default_device()
@@ -682,6 +694,23 @@ class NDArray:
         out.data = self.device.reduce_max(self.data, axis=axis, keepdims=keepdims)
         return out
 
+    def isinf(self):
+        """Tests each element to see if it is infinite."""
+        out = NDArray.make(self.shape, device=self.device, dtype=genesis.bool)
+        out.data = self.device.isinf(self.data)
+        return out
+
+    def isnan(self):
+        """Tests each element to see if it is NaN."""
+        out = NDArray.make(self.shape, device=self.device, dtype=genesis.bool)
+        out.data = self.device.isnan(self.data)
+        return out
+
+    def isfinite(self):
+        """Tests each element to see if it is finite."""
+        out = NDArray.make(self.shape, device=self.device, dtype=genesis.bool)
+        out.data = self.device.isfinite(self.data)
+        return out
 
     def is_floating_point(self):
         return self.data.is_floating_point()

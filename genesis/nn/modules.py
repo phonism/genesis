@@ -121,12 +121,13 @@ class Module:
             num_parameters += cur
         return num_parameters
 
-    def named_parameters(self, prefix: str = "") -> Iterator[Tuple[str, Tensor]]:
+    def named_parameters(self, prefix: str = "", recurse: bool = True) -> Iterator[Tuple[str, Tensor]]:
         """
         Return an iterator over module parameters with their names.
         
         Args:
             prefix: prefix to prepend to all parameter names
+            recurse: whether to include parameters of submodules
             
         Yields:
             (string, Parameter): Tuple containing name and parameter
@@ -134,14 +135,40 @@ class Module:
         for name, param in self.__dict__.items():
             if isinstance(param, Parameter):
                 yield prefix + name, param
-            elif isinstance(param, Module):
-                for sub_name, sub_param in param.named_parameters(prefix + name + "."):
+            elif recurse and isinstance(param, Module):
+                for sub_name, sub_param in param.named_parameters(prefix + name + ".", recurse):
                     yield sub_name, sub_param
-            elif isinstance(param, (list, tuple)):
+            elif recurse and isinstance(param, (list, tuple)):
                 for idx, v in enumerate(param):
                     if isinstance(v, Module):
-                        for sub_name, sub_param in v.named_parameters(prefix + name + "." + str(idx) + "."):
+                        for sub_name, sub_param in v.named_parameters(prefix + name + "." + str(idx) + ".", recurse):
                             yield sub_name, sub_param
+
+    def buffers(self) -> Iterator[Tensor]:
+        """Return iterator over module buffers."""
+        for name, value in self.__dict__.items():
+            if isinstance(value, Tensor) and not isinstance(value, Parameter):
+                yield value
+            elif isinstance(value, Module):
+                for buffer in value.buffers():
+                    yield buffer
+                    
+    def named_buffers(self, prefix: str = "", recurse: bool = True) -> Iterator[Tuple[str, Tensor]]:
+        """
+        Return an iterator over module buffers with their names.
+        
+        Args:
+            prefix: prefix to prepend to all buffer names
+            
+        Yields:
+            (string, Tensor): Tuple containing name and buffer
+        """
+        for name, value in self.__dict__.items():
+            if isinstance(value, Tensor) and not isinstance(value, Parameter):
+                yield prefix + name, value
+            elif recurse and isinstance(value, Module):
+                for sub_name, sub_buffer in value.named_buffers(prefix + name + ".", recurse):
+                    yield sub_name, sub_buffer
 
     def vars(self) -> List[Tensor]:
         """
@@ -149,27 +176,59 @@ class Module:
         """
         return _unpack_vars(self.__dict__)
 
+    def modules(self) -> Iterator["Module"]:
+        """Return iterator over all modules in this module."""
+        yield self
+        for name, value in self.__dict__.items():
+            if isinstance(value, Module):
+                for module in value.modules():
+                    yield module
+                    
+    def named_modules(self, memo=None, prefix="") -> Iterator[Tuple[str, "Module"]]:
+        """
+        Return an iterator over all modules with their names.
+        
+        Args:
+            memo: a memo to store the set of modules already added to the result
+            prefix: a prefix that will be added to the name of the module
+            
+        Yields:
+            (string, Module): Tuple containing name and module
+        """
+        if memo is None:
+            memo = set()
+        if self not in memo:
+            memo.add(self)
+            yield prefix, self
+            for name, module in self.__dict__.items():
+                if isinstance(module, Module):
+                    submodule_prefix = prefix + ('.' if prefix else '') + name
+                    for m in module.named_modules(memo, submodule_prefix):
+                        yield m
+
     def _children(self) -> List["Module"]:
         """
         Return the list of child modules in the module.
         """
         return _child_modules(self.__dict__)
 
-    def state_dict(self, prefix="") -> Dict[str, Tensor]:
+    def state_dict(self, destination=None, prefix="") -> Dict[str, Tensor]:
         """
         Return the state dictionary of the module.
         """
-        state_dict = {}
+        if destination is None:
+            destination = {}
+        state_dict = destination
         for name, param in self.__dict__.items():
             if isinstance(param, genesis.Tensor):
                 # TODO: we need to dump genesis.Tensor
                 state_dict[prefix + name] = param.data.data
             elif isinstance(param, Module):
-                state_dict.update(param.state_dict(prefix + name + "."))
+                param.state_dict(state_dict, prefix + name + ".")
             elif isinstance(param, (list, tuple)):
                 for idx, v in enumerate(param):
                     if isinstance(v, Module):
-                        state_dict.update(v.state_dict(prefix + str(idx) + "."))
+                        v.state_dict(state_dict, prefix + str(idx) + ".")
         return state_dict
 
     def load_state_dict(self, state_dict, strict=True) -> None:
@@ -205,21 +264,29 @@ class Module:
             if len(unexpected_keys) > 0:
                 raise KeyError(f"Unexpected keys in state_dict: {unexpected_keys}")
 
-    def train(self) -> None:
+    def train(self, mode: bool = True) -> "Module":
         """
         Set the module in training mode.
+        
+        Args:
+            mode: If True, sets to training mode. If False, sets to evaluation mode.
+            
+        Returns:
+            Self for method chaining
         """
-        self.training = True
+        self.training = mode
         for m in self._children():
-            m.training = True
+            m.train(mode)
+        return self
 
-    def eval(self) -> None:
+    def eval(self) -> "Module":
         """
         Set the module in evaluation mode.
+        
+        Returns:
+            Self for method chaining
         """
-        self.training = False
-        for m in self._children():
-            m.training = False
+        return self.train(False)
 
     def to(self, device) -> "Module":
         """
@@ -231,33 +298,11 @@ class Module:
         Returns:
             Self for method chaining
         """
-        # Handle Genesis Device objects
-        if hasattr(device, 'name'):
-            device_name = device.name
-        else:
-            device_name = str(device)
-        
-        # Move all parameters and buffers to the device
-        for i, param in enumerate(self.parameters()):
-            # Parameters are Tensors, so we need to replace them entirely
-            new_param = param.to_device(device)
-            # Find and replace the parameter in the module
-            for name, value in self.__dict__.items():
-                if isinstance(value, Parameter) and value is param:
-                    self.__dict__[name] = new_param
-                    break
-        
-        for i, var in enumerate(self.vars()):
-            # Variables are also Tensors, replace them
-            new_var = var.to_device(device)
-            for name, value in self.__dict__.items():
-                if value is var:
-                    self.__dict__[name] = new_var
-                    break
-        
-        # Move registered buffers  
+        # Move parameters and buffers in this module (not recursively)
         for name, value in self.__dict__.items():
-            if isinstance(value, Tensor) and not isinstance(value, Parameter):
+            if isinstance(value, Parameter):
+                self.__dict__[name] = value.to_device(device)
+            elif isinstance(value, Tensor) and not isinstance(value, Parameter):
                 self.__dict__[name] = value.to_device(device)
         
         # Recursively move child modules
@@ -308,13 +353,20 @@ class Sequential(Module):
     """
     def __init__(self, *modules) -> None:
         super().__init__()
-        self.modules = modules
+        # Handle both Sequential(mod1, mod2) and Sequential([mod1, mod2]) patterns
+        if len(modules) == 1 and isinstance(modules[0], (list, tuple)):
+            self._modules_list = modules[0]
+        else:
+            self._modules_list = modules
+        # Register modules as attributes for proper parameter discovery
+        for i, module in enumerate(self._modules_list):
+            setattr(self, f'_{i}', module)
 
     def forward(self, x: Tensor) -> Tensor:
         """
         Forward pass of the module.
         """
-        for module in self.modules:
+        for module in self._modules_list:
             x = module(x)
         return x
 
@@ -369,14 +421,15 @@ class ModuleList(Module):
         """
         return iter(self._modules)
     
-    def named_parameters(self, prefix: str = "") -> Iterator[Tuple[str, Tensor]]:
+    def named_parameters(self, prefix: str = "", recurse: bool = True) -> Iterator[Tuple[str, Tensor]]:
         """
         Return an iterator over module parameters with their names.
         For ModuleList, use numeric indices directly without '_modules' prefix.
         """
-        for idx, module in enumerate(self._modules):
-            for name, param in module.named_parameters(prefix + str(idx) + "."):
-                yield name, param 
+        if recurse:
+            for idx, module in enumerate(self._modules):
+                for name, param in module.named_parameters(prefix + str(idx) + ".", recurse):
+                    yield name, param 
 
 
 class Linear(Module):

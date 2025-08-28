@@ -7,9 +7,10 @@ for CUDA acceleration and mixed precision training.
 import genesis
 from typing import List, Optional, NamedTuple, Tuple, Union
 import numpy
+import numpy as np
 from genesis import init
 from .backend import Device, array_api, NDArray, default_device
-from .dtypes import get_dtype, DType
+from .dtypes import get_dtype, DType, infer_dtype_from_data, is_integer
 import operator
 from functools import reduce
 
@@ -161,7 +162,6 @@ class Tensor:
         """
         # Simplified dtype inference (PyTorch-like behavior)
         if dtype is None:
-            from .dtypes import infer_dtype_from_data
             dtype = infer_dtype_from_data(array)
         
         # Convert dtype to DType object for consistency
@@ -184,7 +184,7 @@ class Tensor:
                 data = array
             else:
                 # Need type conversion, reallocate
-                data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
+                data = Tensor._array_from_numpy(array.numpy(), device=device, dtype=dtype)
         else:
             device = device if device else default_device()
             data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
@@ -307,7 +307,6 @@ class Tensor:
             return self.data.cpu().numpy().item()
         else:
             # Try direct conversion
-            import numpy as np
             return np.array(self.data).item()
 
     def backward(self, out_grad=None):
@@ -319,29 +318,18 @@ class Tensor:
         This method implements topological sorting and backward pass computation
         for the computational graph rooted at this tensor.
         """
-        import time
-        start_total = time.time()
-        
         out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)
         self.apply_hooks(self.grad)
         node_to_output_grads_list: Dict[Tensor, List[Tensor]] = {}
         node_to_output_grads_list[self] = [out_grad]
 
         # Topological sort to determine computation order
-        topo_start = time.time()
         topo_order = topo_sort(self)
-        topo_time = time.time() - topo_start
         
         # Reverse pass through computation graph
-        node_count = 0
-        total_backward_call_time = 0
-        
         for node in reversed(topo_order):
             if node.requires_grad is False:
                 continue
-                
-            node_count += 1
-            node_start = time.time()
             
             # Accumulate gradients for current node
             if node.grad is None:
@@ -357,8 +345,6 @@ class Tensor:
             
             # Propagate gradients to input nodes
             if node.creator is not None:
-                creator_name = type(node.creator).__name__
-                
                 for nd in node.creator.inputs:
                     if nd not in node_to_output_grads_list:
                         node_to_output_grads_list[nd] = []
@@ -370,23 +356,16 @@ class Tensor:
                     grad = node.grad
                 
                 # Compute backward gradients
-                backward_start = time.time()
                 if node.creator.is_tuple_result is False:
                     backward_grad = node.creator.backward(node.creator.ctx, grad)
                 else:
                     backward_grad = node.creator.backward(node.creator.ctx, grad, node.idx)
-                backward_time = time.time() - backward_start
-                total_backward_call_time += backward_time
                 
                 # Distribute gradients to input tensors
                 for i, nd in enumerate(node.creator.inputs):
                     if nd.requires_grad is False:
                         continue
                     node_to_output_grads_list[nd].append(backward_grad[i].float())
-            
-            node_time = time.time() - node_start
-        
-        total_time = time.time() - start_total
 
     @property
     def shape(self):
@@ -440,7 +419,6 @@ class Tensor:
     
     def is_integer(self):
         """Check if tensor dtype is integer"""
-        from .dtypes import is_integer
         return is_integer(self.dtype)
 
     def to(self, device):
@@ -750,7 +728,7 @@ class Tensor:
             Tensor: New tensor on target device
         """
         new_data = self.data.to_device(device)
-        return Tensor(new_data, device=device, dtype=self.dtype, requires_grad=self.requires_grad)
+        return self.__class__(new_data, device=device, dtype=self.dtype, requires_grad=self.requires_grad)
 
     def sqrt(self):
         return genesis.nn.functional.sqrt(self)
@@ -777,10 +755,13 @@ class Tensor:
     
     def any(self):
         """Return True if any element is True, False otherwise."""
-        # Convert to boolean tensor and check if any element is non-zero
-        bool_tensor = (self != 0)
-        # Sum all elements and check if result > 0
-        return bool_tensor.sum().item() > 0
+        # For bool tensors, we can directly sum and check > 0
+        if self.dtype == genesis.bool:
+            return self.sum().item() > 0
+        else:
+            # For non-bool tensors, convert to boolean first
+            bool_tensor = (self != 0)
+            return bool_tensor.sum().item() > 0
     
     def argsort(self, dim=-1, descending=False):
         """Return the indices that would sort the tensor along the given dimension."""
@@ -867,7 +848,6 @@ class Tensor:
         Returns:
             int: Total number of elements
         """
-        import numpy as np
         return int(np.prod(self.shape))
 
 def topo_sort(node):
