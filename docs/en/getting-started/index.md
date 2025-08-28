@@ -187,7 +187,7 @@ Now that you understand the basics of Genesis, you can continue exploring:
 ### 🚀 Advanced Features
 - [**Custom Operators**](../tutorials/custom-ops.md) - Implement custom operations
 - [**Performance Optimization**](../tutorials/performance-tuning.md) - Training performance tuning
-- [**Distributed Training**](../neural-networks/distributed.md) - Multi-GPU training
+- [**Distributed Training**](../tutorials/distributed-training.md) - Multi-GPU training
 
 ## ❓ Frequently Asked Questions
 

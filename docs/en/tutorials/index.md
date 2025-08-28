@@ -22,9 +22,8 @@ Deep dive into Genesis advanced features and optimization techniques.
 ### 🛠️ Practical Projects
 Learn Genesis practical applications through complete projects.
 
-- **[Qwen Large Model Training](qwen-training.md)** - Use Genesis to train Qwen language models
-- **[Image Classification Project](image-classification.md)** - Build a complete image classification system
-- **[Language Model Fine-tuning](llm-finetuning.md)** - Large language model fine-tuning in practice
+- **[LLM Training Hands-on](llm-training.md)** - Use Genesis to train large language models
+- **[Mixed Precision Training](mixed-precision.md)** - AMP techniques in deep learning
 
 ## 🎓 Learning Path
 
@@ -45,7 +44,7 @@ Learn Genesis practical applications through complete projects.
 1. Complete advanced user path
 2. [Deep Architecture Understanding](../architecture/index.md)
 3. [Core Component Source Analysis](../core-components/index.md)
-4. [Qwen Large Model Training](qwen-training.md)
+4. [LLM Training Hands-on](llm-training.md)
 5. [Contributing Code](../contributing/index.md)
 
 ## 💡 Tutorial Features

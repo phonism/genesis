@@ -1326,5 +1326,63 @@ def one_hot(indices, num_classes):
         Tensor with one-hot encoding
     """
     # Use the existing one_hot from init module
-    import genesis
     return genesis.init.one_hot(num_classes, indices)
+
+
+def log_softmax(input, dim=-1):
+    """
+    Log softmax function for numerical stability.
+    
+    Args:
+        input: Input tensor
+        dim: Dimension to apply log_softmax along
+        
+    Returns:
+        Log softmax of input
+    """
+    # Use log-sum-exp trick for numerical stability
+    max_vals = max(input, dim, keepdims=True)
+    shifted = input - max_vals
+    log_sum_exp = log(summation(exp(shifted), axis=dim, keepdims=True))
+    return shifted - log_sum_exp
+
+
+def maximum(input, other):
+    """
+    Element-wise maximum of tensors.
+    
+    Args:
+        input: First tensor
+        other: Second tensor or scalar
+        
+    Returns:
+        Element-wise maximum
+    """
+    if isinstance(other, (int, float)):
+        # Create a tensor filled with the scalar value
+        other = genesis.tensor([other]).broadcast_to(input.shape)
+    return Maximum.apply(input, other)
+
+
+class Maximum(Function):
+    @staticmethod
+    def forward(ctx, a, b):
+        ctx.save_for_backward(a, b)
+        result_data = array_api.maximum(a.data, b.data)
+        requires_grad = a.requires_grad or b.requires_grad
+        return Tensor(result_data, requires_grad=requires_grad, dtype=a.dtype)
+    
+    @staticmethod
+    def backward(ctx, out_grad):
+        a, b = ctx.saved_tensors
+        # Gradient flows to the larger input
+        a_mask = (a.data >= b.data).astype(out_grad.dtype)
+        b_mask = (b.data >= a.data).astype(out_grad.dtype)
+        
+        grad_a = out_grad.data * a_mask
+        grad_b = out_grad.data * b_mask
+        
+        return (
+            Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype),
+            Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype)
+        )

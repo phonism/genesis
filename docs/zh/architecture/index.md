@@ -341,9 +341,27 @@ class CUDAStorage:
         self._data_ptr = check_cuda_error(result)
 ```
 
-### 神经网络模块 (`nn/modules.py`)
+### 神经网络模块 (`nn/modules/`)
+
+Genesis采用与PyTorch类似的模块化架构，便于代码组织：
+
+```
+nn/modules/
+├── module.py          # Module基类和Parameter类
+├── linear.py          # Linear、Flatten层
+├── activation.py      # ReLU、Softmax、SiLU激活函数
+├── normalization.py   # BatchNorm、LayerNorm、RMSNorm
+├── loss.py           # CrossEntropyLoss、MSELoss、BCELoss
+├── container.py      # Sequential、ModuleList容器
+├── dropout.py        # Dropout正则化
+├── sparse.py         # Embedding、RotaryEmbedding
+└── transformer.py    # MultiheadAttention、FeedForwardSwiGLU
+```
+
+**核心实现**：
 
 ```python
+# modules/module.py
 class Module:
     """神经网络模块基类"""
     def parameters(self) -> List[Tensor]:
@@ -354,11 +372,19 @@ class Module:
         # 子类实现具体的前向传播逻辑
         raise NotImplementedError
 
+# modules/linear.py  
 class Linear(Module):
     """全连接层实现"""
     def __init__(self, in_features, out_features):
         self.weight = Parameter(genesis.randn(out_features, in_features))
         self.bias = Parameter(genesis.zeros(out_features))
+
+# modules/loss.py
+class CrossEntropyLoss(Module):
+    """分类任务的交叉熵损失"""
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        log_prob = F.log_softmax(input, dim=1)
+        # ... 实现细节
 ```
 
 ## 🔧 关键技术实现

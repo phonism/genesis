@@ -602,7 +602,7 @@ for i, batch in enumerate(train_loader):
 
 ## 另请参阅
 
-- [学习率调度器](schedulers.md) - 动态学习率调整
+- [学习率调度器](lr_scheduler.md) - 动态学习率调整
 - [神经网络模块](../nn/modules.md) - 构建模型
 - [自动微分](../autograd.md) - 自动微分
 - [示例](../../../samples/) - 完整训练示例

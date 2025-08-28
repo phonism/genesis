@@ -129,4 +129,4 @@ For detailed documentation of each component, please check the corresponding ded
 - [Automatic Differentiation System](autograd.md) - Deep understanding of computation graphs and gradient computation
 - [Tensor Operations](tensor.md) - Comprehensive tensor operation guide  
 - [Data Types](dtypes.md) - Type system and precision management
-- [Functional Interface](functional.md) - Functional programming style operations
+- [Functional Interface](../api-reference/functional.md) - Functional programming style operations

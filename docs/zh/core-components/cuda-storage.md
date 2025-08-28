@@ -602,5 +602,5 @@ def check_tensor(tensor, name):
 
 **准备深入了解更多吗？**
 
-[下一步：张量操作优化](tensor-operations.md){ .md-button .md-button--primary }
+[下一步：张量操作指南](tensor.md){ .md-button .md-button--primary }
 [返回核心组件](index.md){ .md-button }

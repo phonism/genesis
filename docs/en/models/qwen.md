@@ -151,5 +151,5 @@ Refer to `apps/llm/train_sft_qwen.py` for complete SFT (Supervised Fine-tuning) 
 ## Related Resources
 
 - [Qwen Official Paper](https://arxiv.org/abs/2309.16609)
-- [RoPE Position Encoding Explained](../tutorials/rope-attention.md)
-- [LLM Training Best Practices](../training/llm-training.md)
+- [Mixed Precision Training Guide](../tutorials/mixed-precision.md)
+- [LLM Training Hands-on](../tutorials/llm-training.md)
