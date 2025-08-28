@@ -2424,5 +2424,86 @@ def test_tensor_all_method(device):
     assert u.all() == False, "2D with zero should return False"
 
 
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_isinf_isnan_isfinite(device):
+    """Test isinf, isnan, and isfinite functions."""
+    # Test with regular finite numbers
+    x = genesis.tensor([1.0, 2.0, -3.0, 0.0], device=device)
+    
+    # All should be finite
+    finite_result = genesis.isfinite(x)
+    assert finite_result.all() == True, "Regular numbers should all be finite"
+    
+    # None should be infinite
+    inf_result = genesis.isinf(x)
+    assert inf_result.any() == False, "Regular numbers should not be infinite"
+    
+    # None should be NaN
+    nan_result = genesis.isnan(x)
+    assert nan_result.any() == False, "Regular numbers should not be NaN"
+    
+    # Test with infinity
+    y = genesis.tensor([float('inf'), 1.0, float('-inf'), 2.0], device=device)
+    
+    inf_result = genesis.isinf(y)
+    expected_inf = genesis.tensor([True, False, True, False], device=device)
+    np.testing.assert_allclose(inf_result.float().numpy(), expected_inf.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="Infinity detection failed")
+    
+    finite_result = genesis.isfinite(y)
+    expected_finite = genesis.tensor([False, True, False, True], device=device)
+    np.testing.assert_allclose(finite_result.float().numpy(), expected_finite.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="Finite detection with infinity failed")
+    
+    # Test with NaN
+    z = genesis.tensor([float('nan'), 1.0, float('nan'), 2.0], device=device)
+    
+    nan_result = genesis.isnan(z)
+    expected_nan = genesis.tensor([True, False, True, False], device=device)
+    np.testing.assert_allclose(nan_result.float().numpy(), expected_nan.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="NaN detection failed")
+    
+    finite_result = genesis.isfinite(z)
+    expected_finite = genesis.tensor([False, True, False, True], device=device)
+    np.testing.assert_allclose(finite_result.float().numpy(), expected_finite.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="Finite detection with NaN failed")
+    
+    # Test mixed case
+    w = genesis.tensor([float('inf'), float('nan'), 1.0, float('-inf'), 0.0], device=device)
+    
+    inf_result = genesis.isinf(w)
+    expected_inf = genesis.tensor([True, False, False, True, False], device=device)
+    np.testing.assert_allclose(inf_result.float().numpy(), expected_inf.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="Mixed infinity detection failed")
+    
+    nan_result = genesis.isnan(w)
+    expected_nan = genesis.tensor([False, True, False, False, False], device=device)
+    np.testing.assert_allclose(nan_result.float().numpy(), expected_nan.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="Mixed NaN detection failed")
+    
+    finite_result = genesis.isfinite(w)
+    expected_finite = genesis.tensor([False, False, True, False, True], device=device)
+    np.testing.assert_allclose(finite_result.float().numpy(), expected_finite.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="Mixed finite detection failed")
+    
+    # Test 2D case
+    mat = genesis.tensor([[1.0, float('inf')], [float('nan'), -2.0]], device=device)
+    
+    inf_result = genesis.isinf(mat)
+    expected_inf = genesis.tensor([[False, True], [False, False]], device=device)
+    np.testing.assert_allclose(inf_result.float().numpy(), expected_inf.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="2D infinity detection failed")
+    
+    nan_result = genesis.isnan(mat)
+    expected_nan = genesis.tensor([[False, False], [True, False]], device=device)
+    np.testing.assert_allclose(nan_result.float().numpy(), expected_nan.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="2D NaN detection failed")
+    
+    finite_result = genesis.isfinite(mat)
+    expected_finite = genesis.tensor([[True, False], [False, True]], device=device)
+    np.testing.assert_allclose(finite_result.float().numpy(), expected_finite.float().numpy(), 
+                              atol=atol, rtol=rtol, err_msg="2D finite detection failed")
+
+
 if __name__ == "__main__":
     pytest.main()

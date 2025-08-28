@@ -378,10 +378,6 @@ def fill(tensor, value):
     """
     Fill tensor with constant value.
     """
-    if not isinstance(tensor, CUDAStorage):
-        tensor.fill_(value)
-        return tensor
-    
     if not tensor.is_contiguous():
         tensor = tensor.contiguous()
     

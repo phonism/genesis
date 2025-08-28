@@ -814,6 +814,11 @@ def ones(shape, device=None, dtype="float32"):
     return CUDAStorage(shape, dtype=dtype).fill(1.0)
 
 
+def zeros(shape, device=None, dtype="float32"):
+    """Create tensor filled with zeros."""
+    return CUDAStorage(shape, dtype=dtype).fill(0.0)
+
+
 def maximum(x, y):
     """
     Element-wise maximum with broadcasting support.
@@ -1069,3 +1074,105 @@ def argmin(x, dim=None, keepdim=False):
         # Use PyTorch's argmin for specific dimensions (simpler for now)
         torch_result = torch.argmin(x.to_torch(), dim=dim, keepdim=keepdim)
         return CUDAStorage.from_torch(torch_result, dtype="int64")
+
+
+@triton.jit
+def isinf_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """Triton kernel to check if elements are infinite"""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load input values
+    x = tl.load(input_ptr + offsets, mask=mask)
+    
+    # Check for infinity: x > finite_max OR x < -finite_max
+    finite_max = 3.4028235e+38  # Maximum finite float32 value
+    is_pos_inf = x > finite_max
+    is_neg_inf = x < -finite_max
+    result = is_pos_inf | is_neg_inf
+    
+    # Store result as boolean (int8)
+    tl.store(output_ptr + offsets, result.to(tl.int8), mask=mask)
+
+
+@triton.jit  
+def isnan_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """Triton kernel to check if elements are NaN"""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load input values
+    x = tl.load(input_ptr + offsets, mask=mask)
+    
+    # Check for NaN: x != x (NaN property)
+    result = x != x
+    
+    # Store result as boolean (int8)
+    tl.store(output_ptr + offsets, result.to(tl.int8), mask=mask)
+
+
+@triton.jit
+def isfinite_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """Triton kernel to check if elements are finite"""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load input values
+    x = tl.load(input_ptr + offsets, mask=mask)
+    
+    # Check finite: not infinity and not NaN
+    finite_max = 3.4028235e+38  # Maximum finite float32 value
+    is_inf = (x > finite_max) | (x < -finite_max)
+    is_nan = x != x
+    result = ~(is_inf | is_nan)
+    
+    # Store result as boolean (int8)
+    tl.store(output_ptr + offsets, result.to(tl.int8), mask=mask)
+
+
+def isinf(x):
+    """Tests each element to see if it is infinite"""
+    output = CUDAStorage(x.shape, np.bool_)
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    n_elements = x.size
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    isinf_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+
+def isnan(x):
+    """Tests each element to see if it is NaN"""
+    output = CUDAStorage(x.shape, np.bool_)
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    n_elements = x.size
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    isnan_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+
+def isfinite(x):
+    """Tests each element to see if it is finite"""
+    output = CUDAStorage(x.shape, np.bool_)
+    if not x.is_contiguous():
+        x = x.contiguous()
+    
+    n_elements = x.size
+    
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    isfinite_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output

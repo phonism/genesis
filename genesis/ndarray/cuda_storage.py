@@ -117,11 +117,23 @@ class CUDAStorage:
         base: Optional["CUDAStorage"] = None, 
         stream: Optional[int] = None
     ):
-        # Flatten nested tuple if necessary
+        # Normalize shape to tuple of integers
         if isinstance(shape, tuple) and len(shape) == 1 and isinstance(shape[0], tuple):
             self.shape = shape[0]
+        elif isinstance(shape, (list, tuple)):
+            # Convert list/tuple to tuple, flattening nested structures
+            flat_dims = []
+            for x in shape:
+                if isinstance(x, (list, tuple)):
+                    # Nested list/tuple - flatten it
+                    flat_dims.extend(x)
+                else:
+                    flat_dims.append(x)
+            self.shape = tuple(int(dim) for dim in flat_dims)
         else:
-            self.shape = tuple(shape)
+            # Single value
+            self.shape = (int(shape),)
+            
         self.base = base
         
         # Data type setup
@@ -201,7 +213,11 @@ class CUDAStorage:
     @property
     def size(self) -> int:
         """Total number of elements"""
-        return reduce(operator.mul, self.shape, 1)
+        # Ensure we always return an integer, not a list
+        result = 1
+        for dim in self.shape:
+            result *= int(dim)
+        return result
     
     @property
     def ndim(self) -> int:
@@ -2306,3 +2322,4 @@ def from_numpy(arr: np.ndarray) -> CUDAStorage:
     tensor = CUDAStorage(arr.shape, arr.dtype)
     tensor.from_numpy(arr)
     return tensor
+

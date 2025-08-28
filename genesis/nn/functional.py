@@ -723,44 +723,7 @@ class GetItemGather(Function):
         saved = ctx.saved_tensors
         a = saved[0]
         
-        # OPTIMIZATION: Implement efficient scatter-add without full zero tensor creation
-        # This avoids creating large zero tensors and slow CPU-GPU transfers
-        
-        if ctx.tensor_index:
-            index = saved[1]
-            
-            # Try optimized GPU scatter-add first
-            try:
-                # Create zero gradient tensor
-                grad = genesis.zeros(*ctx.original_shape, dtype=out_grad.dtype, device=out_grad.device, requires_grad=False)
-                
-                # Check if we can use scatter-add optimization
-                if hasattr(grad.data, 'scatter_add_') and hasattr(index.data, 'long'):
-                    # Use PyTorch-style scatter_add if available
-                    index_flat = index.data.long().flatten() if index.data.ndim > 1 else index.data.long()
-                    out_grad_flat = out_grad.data.flatten() if out_grad.data.ndim > 1 else out_grad.data
-                    
-                    # Scatter add along the first dimension
-                    grad.data.view(-1).scatter_add_(0, index_flat, out_grad_flat)
-                    return (grad, None)
-                
-            except Exception:
-                pass
-                
-            # Fallback to element-wise scatter (still avoid CPU transfers)
-            try:
-                grad = genesis.zeros(*ctx.original_shape, dtype=out_grad.dtype, device=out_grad.device, requires_grad=False)
-                
-                # For small numbers of indices, use direct assignment
-                if index.data.numel() <= 1000:  # Small indexing
-                    # Use optimized GPU-only setitem
-                    grad.data[index.data] = out_grad.data
-                    return (grad, None)
-                
-            except Exception:
-                pass
-        
-        # Original implementation as ultimate fallback
+        # Create gradient tensor  
         grad = genesis.zeros(*ctx.original_shape, dtype=out_grad.dtype, device=out_grad.device, requires_grad=False)
         
         if ctx.tensor_index:
@@ -826,7 +789,18 @@ class Summation(Function):
         ctx.save_for_backward(a)
         ctx.axis = axis
         ctx.keepdims = keepdims
-        output = Tensor(array_api.sum(a.data, axis=axis, keepdims=keepdims), device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        
+        # For bool tensors, sum should return int64 (like PyTorch)
+        result_dtype = genesis.int64 if a.dtype == genesis.bool else a.dtype
+        
+        # Get the sum result
+        sum_result = array_api.sum(a.data, axis=axis, keepdims=keepdims)
+        
+        # For bool tensors, the GPU ops already converted to int64, so we need to update the dtype
+        if a.dtype == genesis.bool and hasattr(sum_result, 'dtype'):
+            sum_result._dtype = result_dtype
+        
+        output = Tensor(sum_result, device=a.device, requires_grad=a.requires_grad, dtype=result_dtype)
         return output
 
     @staticmethod

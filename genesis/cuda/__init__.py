@@ -8,6 +8,13 @@ and memory operations, organized similarly to torch.cuda.
 import os
 from typing import Dict, Optional, List, Any
 
+try:
+    from cuda import cuda
+    from cuda.bindings import driver
+except ImportError:
+    from cuda.bindings import driver as cuda
+    from cuda.bindings import driver
+
 # Import device class for type hints
 from ..ndarray import Device
 
@@ -19,25 +26,39 @@ from ..ndarray.cuda_memory_manager import (
 )
 
 
-# Device management functions (delegate to existing cuda() function)
+# Device management functions
 def device_count() -> int:
     """Get the number of available CUDA devices."""
-    try:
-        from cuda import cuda
-        device_count = cuda.cuDeviceGetCount()
-        return device_count[1] if device_count[0] == cuda.CUresult.CUDA_SUCCESS else 0
-    except ImportError:
-        return 0
+    device_count = cuda.cuDeviceGetCount()
+    return device_count[1] if device_count[0] == cuda.CUresult.CUDA_SUCCESS else 0
 
 
 def current_device() -> int:
     """Get the current CUDA device index."""
-    try:
-        from cuda import cuda
-        device = cuda.cuCtxGetDevice()
-        return device[1] if device[0] == cuda.CUresult.CUDA_SUCCESS else 0
-    except ImportError:
-        return 0
+    device = cuda.cuCtxGetDevice()
+    return device[1] if device[0] == cuda.CUresult.CUDA_SUCCESS else 0
+
+
+def set_device(device: int) -> None:
+    """Set the current CUDA device."""
+    # Initialize CUDA if not already done
+    cuda.cuInit(0)
+    
+    # Get device handle
+    dev_result = cuda.cuDeviceGet(device)
+    if dev_result[0] != cuda.CUresult.CUDA_SUCCESS:
+        raise RuntimeError(f"Failed to get CUDA device {device}")
+    dev = dev_result[1]
+    
+    # Get primary context and set it as current
+    ctx_result = cuda.cuDevicePrimaryCtxRetain(dev)
+    if ctx_result[0] != cuda.CUresult.CUDA_SUCCESS:
+        raise RuntimeError(f"Failed to retain primary context for device {device}")
+    ctx = ctx_result[1]
+    
+    set_result = cuda.cuCtxSetCurrent(ctx)
+    if set_result != cuda.CUresult.CUDA_SUCCESS:
+        raise RuntimeError(f"Failed to set CUDA device {device}")
 
 
 def get_device_name(device: Optional[int] = None) -> str:
@@ -45,12 +66,8 @@ def get_device_name(device: Optional[int] = None) -> str:
     if device is None:
         device = current_device()
     
-    try:
-        from cuda import cuda
-        name = cuda.cuDeviceGetName(128, device)
-        return name[1].decode('utf-8') if name[0] == cuda.CUresult.CUDA_SUCCESS else f"CUDA Device {device}"
-    except ImportError:
-        return f"CUDA Device {device}"
+    name = cuda.cuDeviceGetName(128, device)
+    return name[1].decode('utf-8') if name[0] == cuda.CUresult.CUDA_SUCCESS else f"CUDA Device {device}"
 
 
 def is_available() -> bool:
@@ -64,17 +81,16 @@ def synchronize(device: Optional[int] = None) -> None:
     
     This ensures all CUDA operations are complete before returning.
     """
-    try:
-        from cuda import cuda
-        if device is not None:
-            # Synchronize specific device
-            current = current_device()
-            if current != device:
-                # Would need to switch context, for now just sync current
-                pass
-        cuda.cuDeviceSynchronize()
-    except ImportError:
-        pass
+    if device is not None:
+        # Synchronize specific device
+        current = current_device()
+        if current != device:
+            # Would need to switch context, for now just sync current
+            pass
+    # Use cuCtxSynchronize instead of cuDeviceSynchronize
+    result = cuda.cuCtxSynchronize()
+    if result[0] != cuda.CUresult.CUDA_SUCCESS:
+        raise RuntimeError(f"CUDA synchronization failed: {result[0]}")
 
 
 # Memory management functions

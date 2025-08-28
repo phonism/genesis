@@ -125,6 +125,72 @@ result = genesis.allclose(tensor1, tensor2, rtol=1e-5, atol=1e-8)
 
 **返回:** 布尔标量张量
 
+### 张量验证函数
+
+#### `isinf(input)`
+测试每个元素是否为无穷大（正无穷或负无穷）。
+
+```python
+inf_mask = genesis.isinf(tensor)
+```
+
+**参数:**
+- `input`: 输入张量
+
+**返回:** 与输入形状相同的布尔张量
+
+#### `isnan(input)`
+测试每个元素是否为NaN（非数值）。
+
+```python
+nan_mask = genesis.isnan(tensor)
+```
+
+**参数:**
+- `input`: 输入张量
+
+**返回:** 与输入形状相同的布尔张量
+
+#### `isfinite(input)`
+测试每个元素是否为有限值（非无穷且非NaN）。
+
+```python
+finite_mask = genesis.isfinite(tensor)
+```
+
+**参数:**
+- `input`: 输入张量
+
+**返回:** 与输入形状相同的布尔张量
+
+### 分布式训练函数
+
+#### `genesis.distributed.init_process_group(backend, world_size, rank)`
+初始化分布式进程组。
+
+```python
+import genesis.distributed as dist
+dist.init_process_group(backend='nccl', world_size=2, rank=0)
+```
+
+**参数:**
+- `backend`: 通信后端（'nccl' 用于GPU）
+- `world_size`: 进程总数
+- `rank`: 当前进程的rank
+
+#### `genesis.distributed.DistributedDataParallel(model, device_ids=None)`
+分布式数据并行包装器。
+
+```python
+ddp_model = dist.DistributedDataParallel(model, device_ids=[0])
+```
+
+**参数:**
+- `model`: 要包装的模型
+- `device_ids`: GPU设备ID列表
+
+**返回:** DDP包装的模型
+
 ### 创建函数
 
 #### `eye(n, m=None, device=None, dtype=genesis.float32)`

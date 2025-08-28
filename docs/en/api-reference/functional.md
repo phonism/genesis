@@ -125,6 +125,72 @@ result = genesis.allclose(tensor1, tensor2, rtol=1e-5, atol=1e-8)
 
 **Returns:** Boolean scalar tensor
 
+### Tensor Validation Functions
+
+#### `isinf(input)`
+Test each element to see if it is infinite (positive or negative infinity).
+
+```python
+inf_mask = genesis.isinf(tensor)
+```
+
+**Parameters:**
+- `input`: Input tensor
+
+**Returns:** Boolean tensor with same shape as input
+
+#### `isnan(input)`
+Test each element to see if it is NaN (Not a Number).
+
+```python
+nan_mask = genesis.isnan(tensor)
+```
+
+**Parameters:**
+- `input`: Input tensor
+
+**Returns:** Boolean tensor with same shape as input
+
+#### `isfinite(input)`
+Test each element to see if it is finite (not infinite and not NaN).
+
+```python
+finite_mask = genesis.isfinite(tensor)
+```
+
+**Parameters:**
+- `input`: Input tensor
+
+**Returns:** Boolean tensor with same shape as input
+
+### Distributed Training Functions
+
+#### `genesis.distributed.init_process_group(backend, world_size, rank)`
+Initialize distributed process group.
+
+```python
+import genesis.distributed as dist
+dist.init_process_group(backend='nccl', world_size=2, rank=0)
+```
+
+**Parameters:**
+- `backend`: Communication backend ('nccl' for GPU)
+- `world_size`: Total number of processes
+- `rank`: Rank of current process
+
+#### `genesis.distributed.DistributedDataParallel(model, device_ids=None)`
+Distributed data parallel wrapper.
+
+```python
+ddp_model = dist.DistributedDataParallel(model, device_ids=[0])
+```
+
+**Parameters:**
+- `model`: Model to wrap
+- `device_ids`: List of GPU device IDs
+
+**Returns:** DDP-wrapped model
+
 ### Creation Functions
 
 #### `eye(n, m=None, device=None, dtype=genesis.float32)`

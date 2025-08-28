@@ -8,6 +8,7 @@ import operator
 import os
 import math
 from ..cuda_storage import CUDAStorage
+from .basic_ops import zeros, add
 
 
 # =============================================================================
@@ -800,7 +801,17 @@ def reduce_sum_v3(x, axis=None, keepdims=False):
 def reduce_sum(x, axis=None, keepdims=False):
     """
     Main reduce sum function with version control.
+    Handles bool tensor conversion to int64 automatically.
     """
+    # For bool tensors, convert to int64 first (like PyTorch)
+    if hasattr(x, 'dtype'):
+        import genesis
+        if x.dtype == genesis.bool:
+            # Convert bool to int64 for proper summation
+            zeros_int64 = zeros(x.shape, dtype=genesis.int64)
+            int_x = add(zeros_int64, x)  # This converts bool to int
+            x = int_x
+    
     version = os.environ.get('GENESIS_REDUCTION_VERSION', 'v3')
     
     if version == 'v3':
