@@ -87,15 +87,27 @@ cd genesis
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Install Genesis in development mode
+# Basic installation (CPU only)
 pip install -e .
 
-# For GPU acceleration (recommended)
+# Full installation with LLM support and development tools
+pip install -e ".[llm,dev]"
+
+# Verify installation
+python verify_install.py
+
+# For GPU acceleration (Linux/Windows only)
 export CUDA_VISIBLE_DEVICES=0  # Use first GPU
 ```
+
+**Installation Options:**
+- `pip install -e .` - Core framework only
+- `pip install -e ".[llm]"` - Add LLM support (transformers, safetensors)
+- `pip install -e ".[dev]"` - Add development tools (pytest, black, mypy)
+- `pip install -e ".[docs]"` - Add documentation tools (mkdocs)
+- `pip install -e ".[all]"` - Everything included
+
+See [INSTALLATION.md](INSTALLATION.md) for detailed platform-specific instructions.
 
 ### Basic Usage
 

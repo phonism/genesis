@@ -4,8 +4,7 @@ Random number generation operations for GPU backend.
 import triton
 import triton.language as tl
 from ..cuda_storage import CUDAStorage
-import time
-import os
+from ...random import default_generator
 
 
 # =============================================================================
@@ -93,8 +92,8 @@ def randn(shape, dtype="float32"):
     output = CUDAStorage(shape, dtype=dtype)
     n_elements = output.size
     
-    # Generate seed from current time and process ID
-    seed = int((time.time() * 1000000) % (2**31)) + os.getpid()
+    # Use unified RNG system - respects genesis.manual_seed()
+    seed = default_generator().next_seed()
     
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     randn_kernel[grid](output, n_elements, seed, BLOCK_SIZE=1024)
@@ -116,8 +115,8 @@ def rand(shape, dtype="float32"):
     output = CUDAStorage(shape, dtype=dtype)
     n_elements = output.size
     
-    # Generate seed from current time and process ID
-    seed = int((time.time() * 1000000) % (2**31)) + os.getpid()
+    # Use unified RNG system - respects genesis.manual_seed()
+    seed = default_generator().next_seed()
     
     grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     rand_kernel[grid](output, n_elements, seed, BLOCK_SIZE=1024)

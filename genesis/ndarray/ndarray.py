@@ -101,7 +101,13 @@ class Device:
         return NDArray.make(shape, device=self, dtype=dtype)
 
     def full(self, shape, fill_value, dtype: Optional[str] = genesis.float32) -> "NDArray":
+        """Create tensor filled with specified value.
+        
+        Optimized for zeros in CUDAStorage.fill() using fast CUDA memset.
+        """
         dtype = genesis.float32 if dtype is None else dtype
+        
+        # Use standard path - optimization is now in CUDAStorage.fill()
         arr = self.empty(shape, dtype)
         arr.fill(fill_value)
         return arr
