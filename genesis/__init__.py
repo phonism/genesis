@@ -4,6 +4,8 @@ A PyTorch-compatible deep learning framework with CUDA acceleration,
 automatic differentiation, and optimized tensor operations.
 """
 
+__version__ = "0.1.0"
+
 from .dtypes import (
     float32, float16, float64, bfloat16,
     int32, int64, int16, int8, uint8, bool,
@@ -45,3 +47,10 @@ from . import distributed  # Distributed training
 from .backend import *
 from .functional import *
 from . import cuda  # CUDA memory management utilities
+
+# Random number generation - PyTorch-compatible RNG API
+from .random import (
+    seed, manual_seed, initial_seed,
+    get_rng_state, set_rng_state, 
+    default_generator, fork_rng, Generator
+)

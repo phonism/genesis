@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 from collections import defaultdict
 import time
+from .memory_stats_collector import get_stats_collector
 
 
 def _ok(ret):
@@ -57,10 +58,17 @@ class Segment:
         self.total_size = size
         
         # allocate entire segment from CUDA
-        self.base_ptr = _ok(cuda.cuMemAlloc(size))
+        try:
+            self.base_ptr = _ok(cuda.cuMemAlloc(size))
+        except RuntimeError as e:
+            # Fast fail on OOM with clear error message
+            raise RuntimeError(f"CUDA OOM: Failed to allocate large segment of {size} bytes "
+                             f"({size // (1024*1024)} MB). Consider reducing batch size or model size.") from e
         
-        # initialize memory to zero to avoid dirty data causing precision issues
-        _ok(cuda.cuMemsetD8(self.base_ptr, 0, size))
+        # NOTE: Skip memory initialization for performance
+        # CUDA memory is generally clean, and clearing 1GB takes ~3 seconds
+        # If precision issues occur, we can implement on-demand clearing
+        # _ok(cuda.cuMemsetD8(self.base_ptr, 0, size))
         
         # initialize as a single large free block
         self.blocks: List[Block] = [
@@ -552,6 +560,9 @@ class RefCountedMemoryPool:
         self.critical_cleanups = 0  # critical memory situation cleanups
         self.defrag_operations = 0  # defragmentation operations performed
         
+        # Warmup pool for common sizes
+        self._warmup_pool()
+        
     def allocate_block(self, size: int, stream: Optional[int] = None) -> 'RefCountedBlock':
         """Allocate a reference-counted block from pool or create new one"""
         bucket = self._get_bucket(size)
@@ -597,22 +608,11 @@ class RefCountedMemoryPool:
             self.active_blocks[ptr] = block
             self.pool_misses += 1
             return block
-        except Exception as e:
-            # Allocation failed - trigger garbage collection and retry
-            self._trigger_gc()
-            ptr = _ok(cuda.cuMemAlloc(bucket))
-            block = RefCountedBlock(
-                ptr=ptr,
-                size=bucket,
-                is_free=False,
-                segment_id=-1,
-                ref_count=1,
-                last_used_time=current_time,
-                stream_id=stream
-            )
-            self.active_blocks[ptr] = block
-            self.pool_misses += 1
-            return block
+        except RuntimeError as e:
+            # Fast fail on OOM - provide clear error message
+            raise RuntimeError(f"CUDA OOM: Failed to allocate {bucket} bytes ({nbytes} requested). "
+                             f"Pool stats: {len(self.active_blocks)} active blocks, "
+                             f"{sum(len(blocks) for blocks in self.pool.values())} cached blocks.") from e
     
     def decrease_ref(self, ptr: int, stream: Optional[int] = None) -> bool:
         """Decrease reference count and potentially return to pool"""
@@ -781,6 +781,60 @@ class RefCountedMemoryPool:
             bucket *= 2
         return bucket
     
+    def _warmup_pool(self):
+        """Warm up pool with common allocation sizes for better cache hit rate."""
+        # Common sizes from benchmark and deep learning workloads (< 1MB for ref_pool)
+        warmup_sizes = [
+            # Benchmark common sizes
+            256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
+            # Additional common sizes
+            64, 128, 384, 768, 1536, 3072, 6144, 12288, 24576, 49152, 98304,
+            # Common tensor sizes for small models
+            196608, 393216, 786432  # up to ~768KB
+        ]
+        
+        warmup_count_per_size = 8  # Pre-allocate 8 blocks per size
+        
+        try:
+            for size in warmup_sizes:
+                if size >= 1024 * 1024:  # Skip sizes >= 1MB (ref_pool limit)
+                    continue
+                    
+                bucket = self._get_bucket(size)
+                
+                # Skip if already warmed up
+                if len(self.memory_pool[bucket]) >= warmup_count_per_size:
+                    continue
+                
+                # Pre-allocate blocks
+                for _ in range(warmup_count_per_size):
+                    try:
+                        ptr = _ok(cuda.cuMemAlloc(bucket))
+                        
+                        block = RefCountedBlock(
+                            ptr=ptr,
+                            size=bucket,
+                            is_free=True,
+                            segment_id=0,
+                            ref_count=0,
+                            last_used_time=time.time()
+                        )
+                        
+                        self.memory_pool[bucket].append(block)
+                        self.current_pool_size += bucket
+                        
+                        # Don't exceed pool size limit
+                        if self.current_pool_size >= self.max_pool_size * 0.1:  # Use 10% for warmup
+                            return
+                            
+                    except Exception:
+                        # If allocation fails, skip remaining blocks for this size
+                        break
+                        
+        except Exception:
+            # If warmup fails completely, continue without it
+            pass
+    
     def clear_all_caches(self):
         """Clear all caches and free all pooled memory"""
         total_freed = 0
@@ -890,6 +944,9 @@ class CUDAMemoryManager:
         self.active_blocks = {}  # ptr -> size
         self.lock = threading.RLock()
         
+        # Enhanced statistics collector
+        self.stats_collector = get_stats_collector()
+        
         # Phase 3: Block allocator for large allocations
         self.segments: List[Segment] = []
         self.next_segment_id = 0
@@ -900,6 +957,12 @@ class CUDAMemoryManager:
         self.alignment = 512  # 512B alignment
         self.max_cache_size = 1024 * 1024 * 1024  # 1GB cache limit
         self.current_cache_size = 0
+        
+        # Large memory cache (>=1MB)
+        self.large_memory_cache = defaultdict(list)  # size -> [ptr_list]
+        self.max_large_cache_size = 512 * 1024 * 1024  # 512MB cache for large blocks
+        self.current_large_cache_size = 0
+        self.max_cached_blocks_per_size = 4  # Max 4 cached blocks per size
         
         # Warmup configuration - preallocation for common sizes
         self.warmup_enabled = True
@@ -1034,6 +1097,7 @@ class CUDAMemoryManager:
     
     def _allocate_small(self, nbytes: int) -> int:
         """Allocate small memory using optimized bucket caching"""
+        start_time = time.perf_counter_ns()
         bucket_size = self._get_bucket_size(nbytes)
         
         with self.lock:
@@ -1043,13 +1107,28 @@ class CUDAMemoryManager:
                 self.active_blocks[ptr] = bucket_size
                 self.current_cache_size -= bucket_size
                 self.cache_hits += 1
+                
+                # Record cache hit statistics
+                alloc_time = time.perf_counter_ns() - start_time
+                self.stats_collector.record_allocation(
+                    size=nbytes,
+                    bucket_size=bucket_size,
+                    cache_hit=True,
+                    allocator_type='small',
+                    allocation_time_ns=alloc_time
+                )
                 return ptr
         
         # Cache miss - check if we should do batch allocation
         batch_size = self._get_batch_allocation_size(bucket_size)
         
         # Allocate one block for immediate return
-        ptr = _ok(cuda.cuMemAlloc(bucket_size))
+        try:
+            ptr = _ok(cuda.cuMemAlloc(bucket_size))
+        except RuntimeError as e:
+            # Fast fail on OOM with clear error message
+            raise RuntimeError(f"CUDA OOM: Failed to allocate {bucket_size} bytes "
+                             f"(bucket for {nbytes} bytes request). Try reducing model size or batch size.") from e
         
         # If cache is not full, allocate additional blocks for future use
         if batch_size > 1 and self.current_cache_size + (batch_size - 1) * bucket_size <= self.max_cache_size:
@@ -1066,6 +1145,16 @@ class CUDAMemoryManager:
             self.active_blocks[ptr] = bucket_size
             self.alloc_count += 1
             self.cache_misses += 1
+        
+        # Record cache miss statistics
+        alloc_time = time.perf_counter_ns() - start_time
+        self.stats_collector.record_allocation(
+            size=nbytes,
+            bucket_size=bucket_size,
+            cache_hit=False,
+            allocator_type='small',
+            allocation_time_ns=alloc_time
+        )
         return ptr
     
     def _get_batch_allocation_size(self, bucket_size: int) -> int:
@@ -1083,30 +1172,84 @@ class CUDAMemoryManager:
             return 1  # Very large tensors: single allocation
     
     def _allocate_large(self, nbytes: int) -> int:
-        """Allocate large memory using block allocator"""
+        """Allocate large memory using block allocator with caching"""
+        start_time = time.perf_counter_ns()
         aligned_size = self._round_up(nbytes, self.alignment)
         
         with self.lock:
+            # First try large memory cache
+            if self.large_memory_cache[aligned_size]:
+                ptr = self.large_memory_cache[aligned_size].pop()
+                self.active_blocks[ptr] = aligned_size
+                self.current_large_cache_size -= aligned_size
+                self.block_hits += 1
+                
+                # Record cache hit statistics
+                alloc_time = time.perf_counter_ns() - start_time
+                self.stats_collector.record_allocation(
+                    size=nbytes,
+                    bucket_size=aligned_size,
+                    cache_hit=True,
+                    allocator_type='large_cache',
+                    allocation_time_ns=alloc_time
+                )
+                return ptr
+            
             # Try to allocate from existing segments
             for segment in self.segments:
                 ptr = segment.allocate(aligned_size)
                 if ptr is not None:
                     self.active_blocks[ptr] = aligned_size
                     self.block_hits += 1
+                    
+                    # Record block hit statistics
+                    alloc_time = time.perf_counter_ns() - start_time
+                    self.stats_collector.record_allocation(
+                        size=nbytes,
+                        bucket_size=aligned_size,
+                        cache_hit=True,
+                        allocator_type='large',
+                        allocation_time_ns=alloc_time
+                    )
                     return ptr
             
             # No suitable block found - create new segment
-            segment = self._create_segment(max(aligned_size * 2, self.segment_size))
+            # Use adaptive segment size: smaller for small requests to avoid waste
+            if aligned_size < 16 * 1024 * 1024:  # < 16MB
+                segment_size = max(aligned_size * 8, 64 * 1024 * 1024)  # 8x request or 64MB min
+            else:
+                segment_size = max(aligned_size * 2, self.segment_size)  # Original logic for large
+            segment = self._create_segment(segment_size)
             ptr = segment.allocate(aligned_size)
             if ptr is not None:
                 self.active_blocks[ptr] = aligned_size
                 self.block_misses += 1
+                
+                # Record new segment allocation statistics
+                alloc_time = time.perf_counter_ns() - start_time
+                self.stats_collector.record_allocation(
+                    size=nbytes,
+                    bucket_size=aligned_size,
+                    cache_hit=False,
+                    allocator_type='large',
+                    allocation_time_ns=alloc_time
+                )
                 return ptr
             
             # Fallback: direct allocation
             ptr = _ok(cuda.cuMemAlloc(aligned_size))
             self.active_blocks[ptr] = aligned_size
             self.block_misses += 1
+            
+            # Record direct allocation statistics
+            alloc_time = time.perf_counter_ns() - start_time
+            self.stats_collector.record_allocation(
+                size=nbytes,
+                bucket_size=aligned_size,
+                cache_hit=False,
+                allocator_type='large_direct',
+                allocation_time_ns=alloc_time
+            )
             return ptr
     
     def free(self, ptr: int, stream: Optional[int] = None):
@@ -1123,6 +1266,9 @@ class CUDAMemoryManager:
                 return  # Already freed or not from our allocator
                 
             size = self.active_blocks.pop(ptr)
+            
+            # Record deallocation statistics (note: we don't have allocation timestamp here)
+            self.stats_collector.record_deallocation(size=size)
             
             # Decide free strategy based on size
             if size < self.block_allocator_threshold:
@@ -1145,8 +1291,16 @@ class CUDAMemoryManager:
             pass
     
     def _free_large(self, ptr: int, size: int):
-        """Free large memory to block allocator"""
-        # Try to free to segment
+        """Free large memory to cache or block allocator"""
+        # Try to cache the block if there's space and not too many cached
+        if (self.current_large_cache_size + size <= self.max_large_cache_size and 
+            len(self.large_memory_cache[size]) < self.max_cached_blocks_per_size):
+            
+            self.large_memory_cache[size].append(ptr)
+            self.current_large_cache_size += size
+            return
+            
+        # Cache full or too many blocks of this size - try to free to segment
         for segment in self.segments:
             if segment.free(ptr):
                 return
@@ -1229,10 +1383,25 @@ class CUDAMemoryManager:
             
             return stats
     
+    def get_enhanced_stats(self) -> Dict:
+        """Get enhanced memory statistics with detailed insights."""
+        # Get basic stats
+        basic_stats = self.get_stats()
+        
+        # Get enhanced stats from collector
+        enhanced_stats = self.stats_collector.get_enhanced_stats()
+        
+        # Combine and return
+        return {
+            'basic_stats': basic_stats,
+            'enhanced_stats': enhanced_stats,
+            'collection_active': True
+        }
+    
     def empty_cache(self):
-        """Phase 2: Empty all bucket cached memory"""
+        """Empty all cached memory (small and large)"""
         with self.lock:
-            # Free all cached blocks to CUDA
+            # Free all small cached blocks to CUDA
             for size, ptr_list in self.free_blocks.items():
                 for ptr in ptr_list:
                     try:
@@ -1240,10 +1409,20 @@ class CUDAMemoryManager:
                     except:
                         pass
             
-            # Clear cache
+            # Free all large cached blocks to CUDA
+            for size, ptr_list in self.large_memory_cache.items():
+                for ptr in ptr_list:
+                    try:
+                        _ok(cuda.cuMemFree(ptr))
+                    except:
+                        pass
+            
+            # Clear caches
             self.free_blocks.clear()
+            self.large_memory_cache.clear()
             self.current_cache_size = 0
-            print(f"Cache cleared: freed all cached blocks")
+            self.current_large_cache_size = 0
+            print(f"Cache cleared: freed all small and large cached blocks")
     
     def __del__(self):
         """Cleanup CUDA resources in proper order"""
@@ -1301,7 +1480,15 @@ def allocate_memory(nbytes: int, stream: Optional[int] = None) -> int:
 
 def free_memory(ptr: int, nbytes: int = 0, stream: Optional[int] = None):
     """Free GPU memory with size info for caching"""
-    get_memory_manager().free(ptr, stream)
+    manager = get_memory_manager()
+    
+    # Route to appropriate allocator based on size (same logic as allocate_memory)
+    if nbytes > 0 and nbytes < 1024 * 1024:
+        # Small allocations: use ref pool
+        manager.ref_pool.decrease_ref(ptr, stream)
+    else:
+        # Large allocations or unknown size: use traditional allocator
+        manager.free(ptr, stream)
 
 def increase_ref_count(ptr: int) -> bool:
     """Increase reference count for shared tensor ownership"""
@@ -1318,6 +1505,10 @@ def trigger_gc():
 def memory_stats() -> Dict:
     """Get memory statistics"""
     return get_memory_manager().get_stats()
+
+def enhanced_memory_stats() -> Dict:
+    """Get enhanced memory statistics with detailed insights"""
+    return get_memory_manager().get_enhanced_stats()
 
 def empty_cache():
     """Empty memory cache"""

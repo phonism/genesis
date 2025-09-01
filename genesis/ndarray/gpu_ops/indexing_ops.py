@@ -377,14 +377,10 @@ def setitem(x, idxs, other):
 def fill(tensor, value):
     """
     Fill tensor with constant value.
+    Delegates to CUDAStorage.fill() for unified optimization.
     """
-    if not tensor.is_contiguous():
-        tensor = tensor.contiguous()
-    
-    n_elements = tensor.size
-    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-    fill_kernel[grid](tensor, value, n_elements, BLOCK_SIZE=1024)
-    
+    # Use the CUDAStorage.fill() method which has the zeros optimization
+    tensor.fill(value)
     return tensor
 
 

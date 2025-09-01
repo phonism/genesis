@@ -27,14 +27,11 @@ def set_seed(seed: int) -> None:
     
     Args:
         seed: Integer seed value for random number generators
-    
-    Note:
-        Genesis doesn't have global manual_seed yet, so only
-        sets seeds for Python random and numpy.
     """
     random.seed(seed)
     np.random.seed(seed)
-    # Genesis doesn't have global manual_seed, skip for now 
+    # Use Genesis unified RNG system
+    genesis.manual_seed(seed) 
 
 set_seed(42)
 
