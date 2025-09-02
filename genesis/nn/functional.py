@@ -728,7 +728,14 @@ class GetItemGather(Function):
         
         if ctx.tensor_index:
             index = saved[1]
-            grad.data[index.data] = out_grad.data
+            # Handle mixed indexing case where index is a tuple  
+            if isinstance(index.data, tuple) and len(index.data) == 2:
+                # Mixed 2D indexing: need to scatter 1D out_grad to 2D grad tensor
+                row_idx, col_idx = index.data
+                # Use the existing CUDAStorage mixed indexing setitem
+                grad.data[index.data] = out_grad.data
+            else:
+                grad.data[index.data] = out_grad.data
         else:
             # Use saved index for other cases
             if isinstance(ctx.index, list):
@@ -1386,3 +1393,85 @@ class Maximum(Function):
             Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype),
             Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype)
         )
+
+
+def cross_entropy(input, target, weight=None, ignore_index=-100, reduction='mean'):
+    """
+    Efficient sparse cross entropy loss function.
+    
+    Combines log_softmax and sparse NLL loss without one-hot conversion.
+    This avoids the O(N*C) memory overhead of one-hot encoding.
+    
+    Args:
+        input: Tensor of shape (N, C) where N is batch size, C is number of classes
+        target: Tensor of shape (N,) containing class indices
+        weight: Manual rescaling weight for each class
+        ignore_index: Index to ignore in loss computation
+        reduction: Reduction method ('mean', 'sum', 'none')
+        
+    Returns:
+        Cross entropy loss tensor
+    """
+    return sparse_cross_entropy(input, target, weight, ignore_index, reduction)
+
+def sparse_cross_entropy(input, target, weight=None, ignore_index=-100, reduction='mean'):
+    """
+    Efficient sparse cross entropy implementation avoiding one-hot conversion.
+    
+    This implementation uses sparse indexing to gather log probabilities
+    directly from the log_softmax output, similar to PyTorch's CUDA kernel.
+    """
+    # Flatten input to 2D for easier indexing: (N*..., C)
+    original_shape = input.shape
+    batch_size = original_shape[0] if len(original_shape) > 1 else 1
+    num_classes = original_shape[-1]
+    
+    # Reshape input to (N, C) where N = batch_size * other_dims
+    input_2d = input.view(-1, num_classes)  # Shape: (N, C)
+    target_1d = target.view(-1)             # Shape: (N,)
+    
+    # Compute log softmax for numerical stability
+    log_probs = log_softmax(input_2d, dim=-1)  # Shape: (N, C)
+    
+    # Create mask for ignore_index
+    if ignore_index != -100:
+        mask = (target_1d != ignore_index)  # Shape: (N,)
+        valid_targets = target_1d * mask.long()  # Zero out ignored indices
+    else:
+        mask = None
+        valid_targets = target_1d
+    
+    # Sparse indexing: gather log probabilities for target classes
+    # This is the key optimization - no one-hot conversion needed!
+    batch_indices = genesis.arange(input_2d.shape[0], device=input.device)  # [0, 1, 2, ..., N-1]
+    
+    # Use advanced indexing to gather: log_probs[batch_idx, target_idx]
+    selected_log_probs = log_probs[batch_indices, valid_targets]  # Shape: (N,)
+    
+    # Compute negative log likelihood
+    nll = -selected_log_probs  # Shape: (N,)
+    
+    # Apply ignore_index mask
+    if mask is not None:
+        nll = nll * mask.float()
+    
+    # Apply class weights if provided
+    if weight is not None:
+        class_weights = weight[valid_targets]  # Shape: (N,)
+        nll = nll * class_weights
+    
+    # Apply reduction
+    if reduction == 'none':
+        # Reshape back to original batch dimensions
+        return nll.view(original_shape[:-1])  # Remove last dimension (classes)
+    elif reduction == 'sum':
+        return summation(nll)
+    elif reduction == 'mean':
+        if mask is not None:
+            # Only average over non-ignored elements
+            valid_count = summation(mask.float())
+            return summation(nll) / valid_count if valid_count > 0 else genesis.tensor(0.0, device=input.device)
+        else:
+            return mean(nll)
+    else:
+        raise ValueError(f"Invalid reduction mode: {reduction}")

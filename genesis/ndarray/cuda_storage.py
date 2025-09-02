@@ -25,6 +25,9 @@ from .cuda_memory_manager import (
 )
 from .base_storage import BaseStorage
 
+# Import new indexing operations module
+from .cuda_indexing_ops import CUDAIndexingOps
+
 # ============= Index Plan Architecture =============
 
 class IndexKind(Enum):
@@ -33,6 +36,7 @@ class IndexKind(Enum):
     SCATTER = "scatter"     # Scatter operation  
     COPY = "copy"          # strided copy
     FILL = "fill"          # Fill operation
+    MIXED_LIST_SLICE = "mixed_list_slice"  # Mixed list + slice indexing
 
 @dataclass
 class IndexPlan:
@@ -45,6 +49,11 @@ class IndexPlan:
     # Advanced indexing metadata
     index_tensor: Optional['CUDAStorage'] = None
     needs_mask_compaction: bool = False
+    # Mixed indexing metadata  
+    column_index: Optional['CUDAStorage'] = None
+    is_mixed_2d: bool = False
+    # Mixed list + slice indexing metadata
+    slices: Optional[Tuple] = None
 
 # CUDA error checking
 def check_cuda_error(result):
@@ -66,12 +75,12 @@ def check_cuda_error(result):
 _default_stream = None
 
 def _ensure_stream():
-    """Ensure default stream exists - use memory manager's stream"""
+    """Ensure default stream exists - use lightweight stream initialization"""
     global _default_stream
     if _default_stream is None:
-        # Use memory manager's default stream to avoid multi-stream issues
-        manager = get_memory_manager()
-        _default_stream = manager.default_stream
+        # Use default CUDA stream (stream 0) to avoid expensive memory manager initialization
+        # This avoids the 7+ second initialization cost of get_memory_manager()
+        _default_stream = 0  # Default CUDA stream
     return _default_stream
 
 
@@ -165,6 +174,7 @@ class CUDAStorage(BaseStorage):
         else:
             self.ptr = ptr
             self.owns_memory = False
+        
     
     
     def __del__(self):
@@ -252,201 +262,6 @@ class CUDAStorage(BaseStorage):
     
     # ============= Index Parsing Layer (MVP Architecture) =============
     
-    def _parse_index(self, key) -> IndexPlan:
-        """Parse index key into unified IndexPlan"""
-        # Handle CUDAStorage as index
-        if isinstance(key, CUDAStorage):
-            if key.dtype == "bool":
-                # Boolean indexing
-                if key.shape != self.shape:
-                    raise ValueError("Boolean mask must have same shape as tensor")
-                return IndexPlan(kind=IndexKind.GATHER, needs_mask_compaction=True, index_tensor=key)
-            else:
-                # Integer tensor indexing
-                return IndexPlan(kind=IndexKind.GATHER, index_tensor=key)
-        
-        # Handle list indexing
-        if isinstance(key, list):
-            # Convert list to numpy array then to CUDAStorage
-            key_array = np.array(key)
-            if key_array.dtype == np.bool_ or key_array.dtype == bool:
-                mask_tensor = from_numpy(key_array.astype(np.bool_))
-                return IndexPlan(kind=IndexKind.GATHER, needs_mask_compaction=True, index_tensor=mask_tensor)
-            else:
-                # Integer list indexing
-                idx_tensor = from_numpy(key_array.astype(np.int64))
-                return IndexPlan(kind=IndexKind.GATHER, index_tensor=idx_tensor)
-        
-        # Handle tuple containing advanced indexing
-        if isinstance(key, tuple):
-            has_advanced = any(isinstance(idx, (list, CUDAStorage)) or 
-                              (hasattr(idx, 'shape') and hasattr(idx, 'dtype')) 
-                              for idx in key if idx is not None)
-            
-            if has_advanced:
-                # Mixed indexing - not supported
-                return self._parse_mixed_index(key)
-        
-        # Handle numpy array indexing
-        if hasattr(key, 'shape') and hasattr(key, 'dtype'):
-            if key.dtype == np.bool_ or key.dtype == bool:
-                # Convert to CUDAStorage
-                mask_tensor = from_numpy(key.astype(np.bool_))
-                return IndexPlan(kind=IndexKind.GATHER, needs_mask_compaction=True, index_tensor=mask_tensor)
-            elif np.issubdtype(key.dtype, np.integer):
-                # Integer array indexing
-                idx_tensor = from_numpy(key.astype(np.int64))
-                return IndexPlan(kind=IndexKind.GATHER, index_tensor=idx_tensor)
-        
-        # Handle basic indexing (int, slice, tuple, etc.)
-        return self._parse_basic_index(key)
-    
-    def _parse_mixed_index(self, key) -> IndexPlan:
-        """Handle mixed indexing (tuple with both basic and advanced indexing)"""
-        raise NotImplementedError("Mixed indexing not supported - use separate basic or advanced indexing")
-    
-    def _parse_basic_index(self, key) -> IndexPlan:
-        """Parse basic indexing into view operations"""
-        if isinstance(key, int):
-            # Single integer index
-            if key < 0:
-                key += self.shape[0]
-            if key >= self.shape[0] or key < 0:
-                raise IndexError(f"Index {key} out of bounds")
-            
-            result_shape = self.shape[1:]
-            result_strides = self.strides[1:] 
-            ptr_offset_bytes = key * self.strides[0] * self.itemsize
-            
-            return IndexPlan(
-                kind=IndexKind.VIEW,
-                result_shape=result_shape,
-                result_strides=result_strides,
-                ptr_offset_bytes=ptr_offset_bytes
-            )
-        
-        elif isinstance(key, slice):
-            # Slice indexing
-            start, stop, step = key.indices(self.shape[0])
-            
-            if step > 0:
-                length = max(0, (stop - start + step - 1) // step)
-            else:
-                length = max(0, (start - stop - step - 1) // (-step))
-            
-            result_shape = (length,) + self.shape[1:]
-            result_strides = (self.strides[0] * step,) + self.strides[1:]
-            ptr_offset_bytes = start * self.strides[0] * self.itemsize
-            
-            return IndexPlan(
-                kind=IndexKind.VIEW,
-                result_shape=result_shape,
-                result_strides=result_strides,
-                ptr_offset_bytes=ptr_offset_bytes
-            )
-        
-        elif isinstance(key, tuple):
-            # Check if this is mixed indexing (contains advanced indexing elements)
-            has_advanced = any(isinstance(idx, (list, CUDAStorage)) or 
-                              (hasattr(idx, 'shape') and hasattr(idx, 'dtype')) 
-                              for idx in key)
-            
-            if has_advanced:
-                # Mixed indexing - this should be handled as advanced indexing, not basic
-                raise NotImplementedError("Mixed indexing should be handled by advanced indexing path")
-            
-            # Multi-dimensional indexing - simplified version, only handle all int/slice cases
-            # Count non-None indices to validate against tensor dimensions
-            non_none_count = sum(1 for idx in key if idx is not None)
-            if non_none_count > len(self.shape):
-                raise IndexError("Too many indices for tensor")
-            
-            # Build combined view
-            result_shape = []
-            result_strides = []
-            ptr_offset_bytes = 0
-            
-            # Handle Ellipsis expansion first
-            if Ellipsis in key:
-                # Expand Ellipsis
-                ell_idx = key.index(Ellipsis)
-                left = list(key[:ell_idx])
-                right = list(key[ell_idx+1:])
-                missing = len(self.shape) - (len(left) + len(right))
-                if missing < 0:
-                    raise IndexError("too many indices for tensor")
-                full_key = left + [slice(None)] * missing + right
-            else:
-                # Pad dimensions
-                full_key = list(key) + [slice(None)] * (len(self.shape) - len(key))
-            
-            tensor_dim = 0  # Track which tensor dimension we're processing
-            for key_idx, idx in enumerate(full_key):
-                if idx is None:
-                    # None (newaxis) - add new dimension of size 1
-                    result_shape.append(1)
-                    result_strides.append(0)
-                    # Don't advance tensor_dim counter since this doesn't consume a tensor dimension
-                    continue
-                
-                # For non-None indices, we process actual tensor dimensions
-                if tensor_dim >= len(self.shape):
-                    raise IndexError("Too many indices for tensor")
-                    
-                if isinstance(idx, int):
-                    # Integer index - eliminate dimension
-                    if idx < 0:
-                        idx += self.shape[tensor_dim]
-                    if idx >= self.shape[tensor_dim] or idx < 0:
-                        raise IndexError(f"Index {idx} out of bounds for dimension {tensor_dim}")
-                    
-                    ptr_offset_bytes += idx * self.strides[tensor_dim] * self.itemsize
-                    # Don't add to result_shape (dimension eliminated)
-                    tensor_dim += 1
-                    
-                elif isinstance(idx, slice):
-                    # Slice index - modify dimension
-                    start, stop, step = idx.indices(self.shape[tensor_dim])
-                    
-                    if step > 0:
-                        length = max(0, (stop - start + step - 1) // step)
-                    else:
-                        length = max(0, (start - stop - step - 1) // (-step))
-                    
-                    ptr_offset_bytes += start * self.strides[tensor_dim] * self.itemsize
-                    result_shape.append(length)
-                    result_strides.append(self.strides[tensor_dim] * step)
-                    tensor_dim += 1
-                    
-                else:
-                    raise NotImplementedError(f"Indexing with {type(idx)} not implemented yet")
-            
-            # Add any remaining tensor dimensions that weren't indexed
-            while tensor_dim < len(self.shape):
-                result_shape.append(self.shape[tensor_dim])
-                result_strides.append(self.strides[tensor_dim])
-                tensor_dim += 1
-            
-            return IndexPlan(
-                kind=IndexKind.VIEW,
-                result_shape=tuple(result_shape),
-                result_strides=tuple(result_strides),
-                ptr_offset_bytes=ptr_offset_bytes
-            )
-        
-        elif key is None:
-            # None (newaxis) - add dimension of size 1 at the beginning
-            result_shape = (1,) + self.shape
-            result_strides = (0,) + self.strides
-            return IndexPlan(
-                kind=IndexKind.VIEW,
-                result_shape=result_shape,
-                result_strides=result_strides,
-                ptr_offset_bytes=0
-            )
-        
-        # Other cases return copy for now
-        return IndexPlan(kind=IndexKind.COPY)
     
     def is_contiguous(self) -> bool:
         """Check if tensor has contiguous memory"""
@@ -817,212 +632,43 @@ class CUDAStorage(BaseStorage):
         )
         return self
     
-    def __getitem__(self, key):
-        """GPU native getitem implementation - based on IndexPlan architecture"""
-        plan = self._parse_index(key)
-        
-        if plan.kind == IndexKind.VIEW:
-            # Zero-copy view
-            result_ptr = int(self.ptr) + plan.ptr_offset_bytes if self.ptr else None
-            return CUDAStorage(
-                shape=plan.result_shape,
-                dtype=self.dtype,
-                ptr=result_ptr,
-                strides=plan.result_strides,
-                base=self
-            )
-        
-        elif plan.kind == IndexKind.GATHER:
-            if plan.needs_mask_compaction:
-                # Boolean indexing
-                if tuple(plan.index_tensor.shape) != tuple(self.shape):
-                    raise ValueError("boolean mask must have the same shape as tensor")
-                lin_idx = _boolean_mask_to_linear_indices(plan.index_tensor)
-                return _gather_linear(self, lin_idx)
+    
+    def _preprocess_index_key(self, key):
+        """Convert lists in index keys to tensors before passing to indexing operations"""
+        if isinstance(key, list):
+            # Convert list to tensor
+            key_array = np.array(key)
+            if key_array.dtype == np.bool_ or key_array.dtype == bool:
+                return from_numpy(key_array.astype(np.bool_))
             else:
-                # Integer tensor indexing
-                idx = plan.index_tensor
-                if idx.dtype != "int64":
-                    idx = idx.to("int64")
-                
-                # Convert row indices to linear indices accounting for row size
-                row_size = int(np.prod(self.shape[1:]))  # elements per row
-                
-                # Use GPU-native expansion
-                idx_flat = idx.reshape((-1,))  # flatten index tensor
-                linear_idx_tensor = _expand_row_indices_gpu(idx_flat, row_size)
-                
-                flat_src = self.contiguous()
-                flat_src = CUDAStorage((flat_src.size,), dtype=self.dtype, ptr=flat_src.ptr, strides=(1,), base=flat_src)
-                out = _gather_linear(flat_src, linear_idx_tensor)
-                
-                # Correct shape: index_shape + remaining_original_dims  
-                result_shape = tuple(plan.index_tensor.shape) + tuple(self.shape[1:])
-                return out.reshape(result_shape)
+                return from_numpy(key_array.astype(np.int64))
         
-        else:
-            raise NotImplementedError(f"Unsupported indexing operation: {type(key)}")
-    
-    
-    def __setitem__(self, key, value):
-        """GPU native setitem implementation - based on IndexPlan architecture"""
-        # Handle CUDAStorage indexing first
-        if isinstance(key, CUDAStorage):
-            if key.dtype == "bool":
-                return self._setitem_boolean_mask(key, value)
-            elif key.dtype in ["int32", "int64"]:
-                return self._setitem_integer_indices(key, value)
-        
-        # Try to parse with IndexPlan
-        plan = self._parse_index(key)
-        
-        if plan.kind == IndexKind.VIEW:
-            # View assignment: get target view, then copy data
-            target_view = self[key]  # Reuse getitem to get view
-            self._copy_data_to_view(target_view, value)
-            return
-        
-        elif plan.kind == IndexKind.GATHER:
-            # Advanced indexing assignment - implement scatter operation
-            return self._setitem_gather(plan, value)
-        
-        # Handle basic indexing cases
-        if isinstance(key, int):
-            if key < 0:
-                key = self.shape[0] + key
-            target_view = self[key]
-            self._copy_data_to_view(target_view, value)
-            return
-            
-        elif isinstance(key, slice):
-            target_view = self[key]
-            self._copy_data_to_view(target_view, value)
-            return
-            
         elif isinstance(key, tuple):
-            target_view = self[key]
-            self._copy_data_to_view(target_view, value)
-            return
-            
-        elif isinstance(key, list):
-            # List indexing: treat as integer indices
-            if isinstance(value, (int, float)):
-                for idx in key:
-                    self[idx] = value
-            else:
-                if hasattr(value, '__len__') and len(value) == len(key):
-                    for i, idx in enumerate(key):
-                        self[idx] = value[i] if hasattr(value, '__getitem__') else value
+            # Process each element in tuple
+            processed_key = []
+            for idx in key:
+                if isinstance(idx, list):
+                    key_array = np.array(idx)
+                    if key_array.dtype == np.bool_ or key_array.dtype == bool:
+                        processed_key.append(from_numpy(key_array.astype(np.bool_)))
+                    else:
+                        processed_key.append(from_numpy(key_array.astype(np.int64)))
                 else:
-                    for idx in key:
-                        self[idx] = value
-            return
-            
+                    processed_key.append(idx)
+            return tuple(processed_key)
+        
         else:
-            raise NotImplementedError(f"Unsupported indexing type: {type(key)}")
+            # Return key as-is (int, slice, tensor, etc.)
+            return key
     
-    def _setitem_boolean_mask(self, mask, value):
-        """Set values using boolean mask - Triton-optimized GPU implementation"""
-        # Use Triton kernel for efficient boolean mask setitem
-        
-        # Convert to flat tensors
-        self_flat = self.reshape((-1,))
-        mask_flat = mask.reshape((-1,))
-        
-        if isinstance(value, (int, float)):
-            # Scalar value: use Triton kernel
-            self._triton_boolean_setitem_scalar(self_flat, mask_flat, float(value))
-        else:
-            # Array value: need to handle properly
-            if isinstance(value, CUDAStorage):
-                value_flat = value.reshape((-1,))
-            else:
-                # Convert to CUDAStorage
-                import numpy as np
-                value_np = np.array(value, dtype=self._numpy_dtype)
-                value_flat = from_numpy(value_np).reshape((-1,))
-            
-            self._triton_boolean_setitem_array(self_flat, mask_flat, value_flat)
-        
-        return self
+    def __getitem__(self, key):
+        """GPU native getitem implementation - using extracted indexing operations"""
+        # Pre-process lists to tensors
+        key = self._preprocess_index_key(key)
+        plan = CUDAIndexingOps.parse_index(self, key)
+        return CUDAIndexingOps.execute_getitem(self, plan)
     
-    def _triton_boolean_setitem_scalar(self, target_flat, mask_flat, value):
-        """Triton kernel for boolean mask setitem with scalar value"""
-        n_elements = target_flat.size
-        
-        @triton.jit
-        def boolean_setitem_scalar_kernel(
-            target_ptr, mask_ptr, value,
-            n_elements,
-            BLOCK_SIZE: tl.constexpr,
-        ):
-            pid = tl.program_id(axis=0)
-            block_start = pid * BLOCK_SIZE
-            offsets = block_start + tl.arange(0, BLOCK_SIZE)
-            mask = offsets < n_elements
-            
-            # Load mask values
-            mask_vals = tl.load(mask_ptr + offsets, mask=mask, other=0)
-            
-            # Load current target values
-            target_vals = tl.load(target_ptr + offsets, mask=mask, other=0.0)
-            
-            # Set value where mask is true
-            new_vals = tl.where(mask_vals, value, target_vals)
-            
-            # Store back
-            tl.store(target_ptr + offsets, new_vals, mask=mask)
-        
-        BLOCK_SIZE = 1024
-        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-        
-        boolean_setitem_scalar_kernel[grid](
-            target_flat, mask_flat, value,
-            n_elements,
-            BLOCK_SIZE=BLOCK_SIZE,
-        )
     
-    def _triton_boolean_setitem_array(self, target_flat, mask_flat, value_flat):
-        """Triton kernel for boolean mask setitem with array values"""
-        # For array values, we need to track which value element to use
-        # Current implementation: element-wise assignment (can be optimized with Triton kernel)
-        value_idx = 0
-        for i in range(mask_flat.size):
-            mask_val = mask_flat[i]
-            if hasattr(mask_val, 'to_numpy'):
-                is_true = bool(mask_val.to_numpy().item())
-            else:
-                is_true = bool(mask_val)
-                
-            if is_true and value_idx < value_flat.size:
-                target_flat[i] = value_flat[value_idx]
-                value_idx += 1
-    
-    def _setitem_integer_indices(self, indices, value):
-        """Set values using integer indices - efficient GPU implementation"""
-        # Use existing __getitem__ to get indexed elements, then bulk copy
-        
-        # Get the integer-indexed view  
-        selected = self[indices]  # This uses existing efficient integer indexing
-        
-        # Assign value using existing copy operations
-        if isinstance(value, (int, float)):
-            # Scalar: use efficient fill
-            selected.fill(value)
-        elif isinstance(value, CUDAStorage):
-            # Another tensor: use efficient copy
-            if selected.size != value.size:
-                if value.size == 1:
-                    selected.fill(float(value.flat()[0]))
-                else:
-                    raise ValueError(f"Cannot broadcast value of size {value.size} to {selected.size} positions")
-            else:
-                result = cuda.cuMemcpyDtoD(selected.ptr, value.ptr, selected.nbytes)
-                check_cuda_error(result)
-        else:
-            self._copy_data_to_view(selected, value)
-        
-        return self
     
     def _copy_data_to_view(self, target_view, value):
         """Copy data to target view"""
@@ -1295,6 +941,13 @@ class CUDAStorage(BaseStorage):
             if value_np.shape != target_view.shape:
                 value_np = np.broadcast_to(value_np, target_view.shape)
             target_view.from_numpy(value_np)
+    
+    def __setitem__(self, key, value):
+        """GPU native setitem implementation - using extracted indexing operations"""
+        # Pre-process lists to tensors  
+        key = self._preprocess_index_key(key)
+        plan = CUDAIndexingOps.parse_index(self, key)
+        return CUDAIndexingOps.execute_setitem(self, plan, value)
     
     
     def float(self):
@@ -1582,106 +1235,6 @@ class CUDAStorage(BaseStorage):
         
         return result
     
-    def _setitem_gather(self, plan, value):
-        """Implement advanced indexing assignment (scatter operation)"""
-        if plan.needs_mask_compaction:
-            # Boolean indexing assignment
-            return self._setitem_gather_boolean(plan.index_tensor, value)
-        else:
-            # Integer tensor indexing assignment
-            return self._setitem_gather_integer(plan.index_tensor, value)
-    
-    def _setitem_gather_boolean(self, mask, value):
-        """Set values using boolean mask indexing (scatter with boolean mask)"""
-        if tuple(mask.shape) != tuple(self.shape):
-            raise ValueError("boolean mask must have the same shape as tensor")
-        
-        # Convert boolean mask to linear indices
-        lin_idx = _boolean_mask_to_linear_indices(mask)
-        
-        # Use integer scatter operation
-        self._setitem_scatter_linear(lin_idx, value)
-        return self
-    
-    def _setitem_gather_integer(self, indices, value):
-        """Set values using integer tensor indexing (scatter operation)"""
-        idx = indices
-        if idx.dtype != "int64":
-            idx = idx.to("int64")
-        
-        # Convert row indices to linear indices
-        row_size = int(np.prod(self.shape[1:]))  # elements per row
-        
-        if row_size == 1:
-            # 1D case: indices are already linear
-            linear_idx = idx
-        else:
-            # Multi-dimensional case: expand row indices to linear indices
-            idx_flat = idx.reshape((-1,))
-            linear_idx = _expand_row_indices_gpu(idx_flat, row_size)
-        
-        self._setitem_scatter_linear(linear_idx, value)
-        return self
-    
-    def _setitem_scatter_linear(self, linear_indices, value):
-        """Scatter values to linear indices"""
-        if isinstance(value, (int, float)):
-            # Scalar value: use Triton kernel for scatter
-            self._triton_scatter_scalar(linear_indices, float(value))
-        else:
-            # Array value: scatter array values
-            if isinstance(value, CUDAStorage):
-                value_flat = value.reshape((-1,))
-            else:
-                # Convert to CUDAStorage
-                import numpy as np
-                if np.isscalar(value):
-                    # Single scalar
-                    self._triton_scatter_scalar(linear_indices, float(value))
-                    return
-                else:
-                    value_np = np.array(value, dtype=self._numpy_dtype)
-                    value_flat = from_numpy(value_np).reshape((-1,))
-            
-            self._triton_scatter_array(linear_indices, value_flat)
-    
-    def _triton_scatter_scalar(self, indices, value):
-        """Triton kernel for scatter operation with scalar value"""
-        n_indices = indices.size
-        
-        # Ensure self is contiguous for linear indexing
-        if not self.is_contiguous():
-            raise ValueError("Target tensor must be contiguous for scatter operation")
-        
-        BLOCK_SIZE = 1024
-        grid = lambda meta: (triton.cdiv(n_indices, meta['BLOCK_SIZE']),)
-        
-        _scatter_scalar_kernel[grid](
-            self, indices, value,
-            n_indices,
-            BLOCK_SIZE=BLOCK_SIZE,
-        )
-    
-    def _triton_scatter_array(self, indices, values):
-        """Triton kernel for scatter operation with array values"""
-        n_indices = indices.size
-        n_values = values.size
-        
-        if n_indices != n_values:
-            raise ValueError(f"Number of indices ({n_indices}) must match number of values ({n_values})")
-        
-        # Ensure self is contiguous for linear indexing
-        if not self.is_contiguous():
-            raise ValueError("Target tensor must be contiguous for scatter operation")
-        
-        BLOCK_SIZE = 1024
-        grid = lambda meta: (triton.cdiv(n_indices, meta['BLOCK_SIZE']),)
-        
-        _scatter_array_kernel[grid](
-            self, indices, values,
-            n_indices,
-            BLOCK_SIZE=BLOCK_SIZE,
-        )
     
     def __repr__(self):
         try:
@@ -1690,291 +1243,34 @@ class CUDAStorage(BaseStorage):
             return f"CUDAStorage(shape={self.shape}, dtype={self.dtype})"
 
 
-# ===================== Triton kernels for indexing =====================
+# Utility functions: create tensors
+def empty(shape: Tuple[int, ...], dtype: np.dtype = np.float32) -> CUDAStorage:
+    """Create uninitialized tensor"""
+    return CUDAStorage(shape, dtype)
 
-@triton.jit
-def _gather_linear_kernel(src_ptr, idx_ptr, out_ptr, N, BLOCK: tl.constexpr):
-    pid  = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    m    = offs < N
-    idx  = tl.load(idx_ptr + offs, mask=m).to(tl.int64)
-    val  = tl.load(src_ptr + idx, mask=m)
-    tl.store(out_ptr + offs, val, mask=m)
+def zeros(shape: Tuple[int, ...], dtype: np.dtype = np.float32) -> CUDAStorage:
+    """Create tensor filled with zeros"""
+    tensor = CUDAStorage(shape, dtype)
+    result = cuda.cuMemsetD8(tensor.ptr, 0, tensor.nbytes)
+    check_cuda_error(result)
+    return tensor
 
-@triton.jit
-def _expand_row_indices_kernel(
-    row_indices_ptr, linear_indices_ptr,
-    num_rows, row_size,
-    BLOCK_SIZE: tl.constexpr
-):
-    """
-    GPU-native expansion of row indices to linear indices.
-    Replaces CPU loop for advanced indexing.
-    """
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    
-    # Calculate which output element we're computing
-    output_idx = offsets
-    mask = output_idx < (num_rows * row_size)
-    
-    # Calculate which row and which column within row
-    row_idx = output_idx // row_size
-    col_idx = output_idx % row_size
-    
-    # Load the actual row index from input tensor
-    row_indices = tl.load(row_indices_ptr + row_idx, mask=mask, other=0)
-    
-    # Calculate linear index: actual_row * row_size + col_offset
-    linear_idx = row_indices * row_size + col_idx
-    
-    tl.store(linear_indices_ptr + output_idx, linear_idx, mask=mask)
+def ones(shape: Tuple[int, ...], dtype: np.dtype = np.float32) -> CUDAStorage:
+    """Create tensor filled with ones"""
+    # Simplified implementation, should use kernel
+    arr = np.ones(shape, dtype=dtype)
+    tensor = CUDAStorage(shape, dtype)
+    tensor.from_numpy(arr)
+    return tensor
 
-@triton.jit
-def _dtype_convert_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    """
-    GPU-native data type conversion kernel.
-    Triton handles type conversion automatically based on pointer types.
-    """
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    
-    # Load and convert (Triton handles type conversion automatically)
-    input_vals = tl.load(input_ptr + offsets, mask=mask, other=0.0)
-    tl.store(output_ptr + offsets, input_vals, mask=mask)
+def from_numpy(arr: np.ndarray) -> CUDAStorage:
+    """Create tensor from numpy array"""
+    tensor = CUDAStorage(arr.shape, arr.dtype)
+    tensor.from_numpy(arr)
+    return tensor
 
-@triton.jit
-def _cat_last_dim_kernel(
-    tensor1_ptr, tensor2_ptr, output_ptr,
-    num_rows, size1, size2, output_size,
-    BLOCK_SIZE: tl.constexpr
-):
-    """
-    Optimized concatenation along last dimension using Triton.
-    Replaces the CPU loop for last dimension concatenation.
-    """
-    pid = tl.program_id(axis=0)
-    row_idx = pid
-    
-    if row_idx >= num_rows:
-        return
-    
-    # Copy first tensor data
-    for i in range(0, size1, BLOCK_SIZE):
-        offset_range = i + tl.arange(0, BLOCK_SIZE)
-        mask = offset_range < size1
-        
-        src_ptr = tensor1_ptr + row_idx * size1 + offset_range
-        dst_ptr = output_ptr + row_idx * output_size + offset_range
-        
-        data = tl.load(src_ptr, mask=mask)
-        tl.store(dst_ptr, data, mask=mask)
-    
-    # Copy second tensor data
-    for i in range(0, size2, BLOCK_SIZE):
-        offset_range = i + tl.arange(0, BLOCK_SIZE)
-        mask = offset_range < size2
-        
-        src_ptr = tensor2_ptr + row_idx * size2 + offset_range
-        dst_ptr = output_ptr + row_idx * output_size + size1 + offset_range
-        
-        data = tl.load(src_ptr, mask=mask)
-        tl.store(dst_ptr, data, mask=mask)
 
-@triton.jit
-def _compact_mask_atomic_i32(
-    mask_ptr,              # *u8 / *i1
-    out_idx_ptr_i32,       # *i32
-    counter_ptr_i32,       # *i32 (global counter with length=1)
-    N,                     # Runtime parameter, avoid repeated JIT compilation
-    BLOCK: tl.constexpr,
-):
-    """Efficient implementation using single atomic reservation + prefix sum, avoiding MLIR type validation issues"""
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    inb = offs < N
-
-    # Read mask -> bool
-    v = tl.load(mask_ptr + offs, mask=inb, other=0)
-    active = inb & (v != 0)
-
-    # Prefix sum needs numeric type; convert bool -> i32
-    act_i32 = active.to(tl.int32)
-
-    # "Active indices" within this block (exclusive prefix sum)
-    # tl.cumsum is inclusive, so subtract self to get exclusive
-    local = tl.cumsum(act_i32, axis=0) - act_i32      # [BLOCK] i32
-
-    # Active count of this block (get scalar i32)
-    cnt = tl.sum(act_i32, axis=0)                     # () i32
-
-    # Global single atomic add, reserve contiguous space
-    base = tl.atomic_add(counter_ptr_i32, cnt)        # () i32
-
-    # Only compute/store for active lanes
-    idx = base + local                                # [BLOCK] i32 (only effective for active)
-    tl.store(out_idx_ptr_i32 + idx, offs, mask=active)
-
-@triton.jit
-def _widen_i32_to_i64(src_i32, dst_i64, n, BLOCK: tl.constexpr):
-    """Widen int32 array to int64"""
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    val_i32 = tl.load(src_i32 + offs, mask=mask, other=0)
-    val_i64 = val_i32.to(tl.int64)  # This is safe since we're widening from i32 to i64
-    tl.store(dst_i64 + offs, val_i64, mask=mask)
-
-def _flatten_view(t: "CUDAStorage") -> "CUDAStorage":
-    # Keep zero-copy flatten (only change shape/strides)
-    return CUDAStorage((t.size,), dtype=t.dtype, ptr=t.ptr, strides=(1,), base=t)
-
-def _boolean_mask_to_linear_indices(mask: "CUDAStorage") -> "CUDAStorage":
-    """Compress bool mask with same shape as data to linear indices (return 1D int64).
-       Use full int32 pipeline to avoid MLIR crashes, then convert to int64 at the end."""
-    assert mask.dtype == "bool", "mask must be boolean"
-    m = mask
-    if not m.is_contiguous():
-        m = m.contiguous()
-    flat = _flatten_view(m)
-
-    N = flat.size
-    # Pre-allocate index buffer of max length N (using int32)
-    idx_buf_i32 = empty((N,), np.int32)
-    # Counter (int32)
-    counter = empty((1,), np.int32)
-    # Zero the counter
-    check_cuda_error(cuda.cuMemsetD8(counter.ptr, 0, 4))
-
-    BLOCK = 1024
-    grid  = (triton.cdiv(N, BLOCK),)
-    _compact_mask_atomic_i32[grid](flat, idx_buf_i32, counter, N, BLOCK=BLOCK, num_warps=4)
-
-    # Read back counter (4 bytes), this is the only tiny DtoH (negligible)
-    import numpy as _np
-    k_host = _np.empty(1, dtype=_np.int32)
-    check_cuda_error(cuda.cuMemcpyDtoH(k_host, counter.ptr, 4))
-    k = int(k_host[0])
-
-    # Convert int32 indices to int64 (avoid doing conversion in kernel)
-    # Create int64 buffer
-    idx_buf_i64 = empty((k,), np.int64)
-    
-    if k > 0:
-        # Use externally defined widen kernel
-        WIDEN_BLOCK = 1024
-        widen_grid = (triton.cdiv(k, WIDEN_BLOCK),)
-        _widen_i32_to_i64[widen_grid](idx_buf_i32, idx_buf_i64, k, BLOCK=WIDEN_BLOCK)
-
-    # Return int64 version of the indices
-    return CUDAStorage((k,), dtype="int64", ptr=idx_buf_i64.ptr, strides=(1,), base=idx_buf_i64)
-
-def _gather_linear(src: "CUDAStorage", linear_idx: "CUDAStorage") -> "CUDAStorage":
-    """Gather from contiguous src using linear indices, return 1D contiguous vector."""
-    idx = linear_idx
-    if idx.dtype != "int64":
-        idx = idx.to("int64")
-    if not src.is_contiguous():
-        src = src.contiguous()
-
-    N = int(idx.size)
-    out = empty((N,), src._numpy_dtype)
-
-    BLOCK = 1024
-    grid  = (triton.cdiv(N, BLOCK),)
-    _gather_linear_kernel[grid](src, idx, out, N, BLOCK=BLOCK, num_warps=4)
-    return out
-
-def _expand_row_indices_gpu(row_indices: "CUDAStorage", row_size: int) -> "CUDAStorage":
-    """
-    GPU-native expansion of row indices to linear indices.
-    Replaces the CPU loop in advanced indexing.
-    """
-    if row_indices.dtype != "int64":
-        row_indices = row_indices.to("int64")
-    
-    num_rows = row_indices.size
-    total_elements = num_rows * row_size
-    
-    # Create output tensor
-    linear_indices = CUDAStorage((total_elements,), dtype="int64")
-    
-    # Launch kernel
-    BLOCK_SIZE = 1024
-    grid = (triton.cdiv(total_elements, BLOCK_SIZE),)
-    
-    _expand_row_indices_kernel[grid](
-        row_indices, linear_indices,
-        num_rows, row_size,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    return linear_indices
-
-def _convert_dtype_gpu(self, target_dtype: str) -> "CUDAStorage":
-    """
-    GPU-native dtype conversion using Triton kernel.
-    Avoids expensive CPU round-trip.
-    """
-    if self.dtype == target_dtype:
-        return self
-    
-    output = CUDAStorage(self.shape, dtype=target_dtype)
-    
-    if not self.is_contiguous():
-        src = self.contiguous()
-    else:
-        src = self
-    
-    n_elements = src.size
-    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
-    
-    _dtype_convert_kernel[grid](src, output, n_elements, BLOCK_SIZE=1024)
-    
-    return output
-
-def _cat_last_dim_gpu(tensor1: "CUDAStorage", tensor2: "CUDAStorage") -> "CUDAStorage":
-    """
-    GPU-native concatenation along last dimension for two tensors.
-    Optimized for the common case in RoPE (rotate_half).
-    """
-    # Verify inputs
-    if tensor1.shape[:-1] != tensor2.shape[:-1]:
-        raise ValueError("All dimensions except last must match")
-    if tensor1.dtype != tensor2.dtype:
-        raise ValueError("Tensors must have same dtype")
-    
-    # Calculate output shape
-    output_shape = list(tensor1.shape)
-    output_shape[-1] = tensor1.shape[-1] + tensor2.shape[-1]
-    output_shape = tuple(output_shape)
-    
-    # Create output tensor
-    result = CUDAStorage(output_shape, dtype=tensor1.dtype)
-    
-    # Ensure contiguous
-    t1 = tensor1.contiguous() if not tensor1.is_contiguous() else tensor1
-    t2 = tensor2.contiguous() if not tensor2.is_contiguous() else tensor2
-    
-    # Launch kernel
-    num_rows = prod(t1.shape[:-1])
-    size1 = t1.shape[-1]
-    size2 = t2.shape[-1]
-    output_size = size1 + size2
-    
-    BLOCK_SIZE = 64  # Good for typical hidden sizes
-    grid = (num_rows,)
-    
-    _cat_last_dim_kernel[grid](
-        t1, t2, result,
-        num_rows, size1, size2, output_size,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    return result
+# ===================== Triton kernels for strided copy operations =====================
 
 @triton.jit
 def _copy_strided_to_contig_optimized(
@@ -2165,6 +1461,123 @@ def _copy_contig_to_strided_general(
     data = tl.load(src_ptr + offs, mask=mask)
     tl.store(dst_ptr + dst_off, data, mask=mask)
 
+# ===================== Data type conversion kernels =====================
+
+@triton.jit
+def _dtype_convert_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    GPU-native data type conversion kernel.
+    Triton handles type conversion automatically based on pointer types.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load and convert (Triton handles type conversion automatically)
+    input_vals = tl.load(input_ptr + offsets, mask=mask, other=0.0)
+    tl.store(output_ptr + offsets, input_vals, mask=mask)
+
+def _convert_dtype_gpu(self, target_dtype: str) -> "CUDAStorage":
+    """
+    GPU-native dtype conversion using Triton kernel.
+    Avoids expensive CPU round-trip.
+    """
+    if self.dtype == target_dtype:
+        return self
+    
+    output = CUDAStorage(self.shape, dtype=target_dtype)
+    
+    if not self.is_contiguous():
+        src = self.contiguous()
+    else:
+        src = self
+    
+    n_elements = src.size
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+    
+    _dtype_convert_kernel[grid](src, output, n_elements, BLOCK_SIZE=1024)
+    
+    return output
+
+@triton.jit
+def _cat_last_dim_kernel(
+    tensor1_ptr, tensor2_ptr, output_ptr,
+    num_rows, size1, size2, output_size,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    Optimized concatenation along last dimension using Triton.
+    Replaces the CPU loop for last dimension concatenation.
+    """
+    pid = tl.program_id(axis=0)
+    row_idx = pid
+    
+    if row_idx >= num_rows:
+        return
+    
+    # Copy first tensor data
+    for i in range(0, size1, BLOCK_SIZE):
+        offset_range = i + tl.arange(0, BLOCK_SIZE)
+        mask = offset_range < size1
+        
+        src_ptr = tensor1_ptr + row_idx * size1 + offset_range
+        dst_ptr = output_ptr + row_idx * output_size + offset_range
+        
+        data = tl.load(src_ptr, mask=mask)
+        tl.store(dst_ptr, data, mask=mask)
+    
+    # Copy second tensor data
+    for i in range(0, size2, BLOCK_SIZE):
+        offset_range = i + tl.arange(0, BLOCK_SIZE)
+        mask = offset_range < size2
+        
+        src_ptr = tensor2_ptr + row_idx * size2 + offset_range
+        dst_ptr = output_ptr + row_idx * output_size + size1 + offset_range
+        
+        data = tl.load(src_ptr, mask=mask)
+        tl.store(dst_ptr, data, mask=mask)
+
+def _cat_last_dim_gpu(tensor1: "CUDAStorage", tensor2: "CUDAStorage") -> "CUDAStorage":
+    """
+    GPU-native concatenation along last dimension for two tensors.
+    Optimized for the common case in RoPE (rotate_half).
+    """
+    # Verify inputs
+    if tensor1.shape[:-1] != tensor2.shape[:-1]:
+        raise ValueError("All dimensions except last must match")
+    if tensor1.dtype != tensor2.dtype:
+        raise ValueError("Tensors must have same dtype")
+    
+    # Calculate output shape
+    output_shape = list(tensor1.shape)
+    output_shape[-1] = tensor1.shape[-1] + tensor2.shape[-1]
+    output_shape = tuple(output_shape)
+    
+    # Create output tensor
+    result = CUDAStorage(output_shape, dtype=tensor1.dtype)
+    
+    # Ensure contiguous
+    t1 = tensor1.contiguous() if not tensor1.is_contiguous() else tensor1
+    t2 = tensor2.contiguous() if not tensor2.is_contiguous() else tensor2
+    
+    # Launch kernel
+    num_rows = prod(t1.shape[:-1])
+    size1 = t1.shape[-1]
+    size2 = t2.shape[-1]
+    output_size = size1 + size2
+    
+    BLOCK_SIZE = 64  # Good for typical hidden sizes
+    grid = (num_rows,)
+    
+    _cat_last_dim_kernel[grid](
+        t1, t2, result,
+        num_rows, size1, size2, output_size,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    return result
+
 # Cache for metadata to avoid repeated GPU allocations
 _metadata_cache = {}
 
@@ -2309,69 +1722,4 @@ def copy_strided_reverse_kernel(src: CUDAStorage, dst: CUDAStorage):
             BLOCK=BLOCK,
             num_warps=num_warps
         )
-
-# ===================== Triton kernels for scatter operations =====================
-
-@triton.jit
-def _scatter_scalar_kernel(
-    target_ptr, indices_ptr, value,
-    n_indices,
-    BLOCK_SIZE: tl.constexpr,
-):
-    """Scatter scalar value to target tensor at specified indices"""
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_indices
-    
-    # Load indices
-    indices = tl.load(indices_ptr + offsets, mask=mask).to(tl.int64)
-    
-    # Store value at indexed positions
-    tl.store(target_ptr + indices, value, mask=mask)
-
-@triton.jit
-def _scatter_array_kernel(
-    target_ptr, indices_ptr, values_ptr,
-    n_indices,
-    BLOCK_SIZE: tl.constexpr,
-):
-    """Scatter array values to target tensor at specified indices"""
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_indices
-    
-    # Load indices and values
-    indices = tl.load(indices_ptr + offsets, mask=mask).to(tl.int64)
-    values = tl.load(values_ptr + offsets, mask=mask)
-    
-    # Store values at indexed positions
-    tl.store(target_ptr + indices, values, mask=mask)
-
-# Utility functions: create tensors
-def empty(shape: Tuple[int, ...], dtype: np.dtype = np.float32) -> CUDAStorage:
-    """Create uninitialized tensor"""
-    return CUDAStorage(shape, dtype)
-
-def zeros(shape: Tuple[int, ...], dtype: np.dtype = np.float32) -> CUDAStorage:
-    """Create tensor filled with zeros"""
-    tensor = CUDAStorage(shape, dtype)
-    result = cuda.cuMemsetD8(tensor.ptr, 0, tensor.nbytes)
-    check_cuda_error(result)
-    return tensor
-
-def ones(shape: Tuple[int, ...], dtype: np.dtype = np.float32) -> CUDAStorage:
-    """Create tensor filled with ones"""
-    # Simplified implementation, should use kernel
-    arr = np.ones(shape, dtype=dtype)
-    tensor = CUDAStorage(shape, dtype)
-    tensor.from_numpy(arr)
-    return tensor
-
-def from_numpy(arr: np.ndarray) -> CUDAStorage:
-    """Create tensor from numpy array"""
-    tensor = CUDAStorage(arr.shape, arr.dtype)
-    tensor.from_numpy(arr)
-    return tensor
 

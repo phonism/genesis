@@ -1035,10 +1035,9 @@ def test_getitem_mixed(shape, device):
     Tests:
         - Mixed slice and integer indexing
         - Integer array with slice indexing
+        - Mixed 2D tensor indexing (row_indices, col_indices)
         - Backward gradients through mixed indexing
     """
-    # TODO: implement
-    pytest.skip("Not implemented")
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.Tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
@@ -1061,6 +1060,33 @@ def test_getitem_mixed(shape, device):
         B1.sum().backward()
         TB1.sum().backward()
         np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=atol, rtol=rtol)
+        
+        # Test mixed 2D tensor indexing
+        if len(shape) == 2 and shape[0] >= 3 and shape[1] >= 3:
+            # Create index tensors
+            row_indices = genesis.tensor([0, 1, 2], device=device, dtype=genesis.int64)
+            col_indices = genesis.tensor([1, 2, 0], device=device, dtype=genesis.int64)
+            
+            # Genesis mixed indexing
+            A_new = genesis.Tensor(_A, device=device, requires_grad=True)
+            B3 = A_new[row_indices, col_indices]
+            
+            # PyTorch equivalent
+            TA_new = torch.Tensor(_A)
+            TA_new.requires_grad = True
+            row_indices_torch = torch.tensor([0, 1, 2], dtype=torch.int64)
+            col_indices_torch = torch.tensor([1, 2, 0], dtype=torch.int64)
+            TB3 = TA_new[row_indices_torch, col_indices_torch]
+            
+            # Compare forward pass
+            np.testing.assert_allclose(TB3.detach().numpy(), B3.detach().numpy(), 
+                                      atol=atol, rtol=rtol, err_msg="Mixed 2D indexing forward failed")
+            
+            # Test backward pass
+            B3.sum().backward()
+            TB3.sum().backward()
+            np.testing.assert_allclose(TA_new.grad.numpy(), A_new.grad.numpy(), 
+                                      atol=atol, rtol=rtol, err_msg="Mixed 2D indexing backward failed")
 
 
 @pytest.mark.parametrize("shape", GETITEM_SHAPES[:2])
@@ -1151,6 +1177,33 @@ def test_setitem_advanced(shape, device):
         A3[indices] = -1.0
         TA3[indices] = -1.0
         np.testing.assert_allclose(TA3.numpy(), A3.numpy(), atol=atol, rtol=rtol)
+    
+    # Mixed 2D tensor indexing for setitem
+    if len(shape) == 2 and shape[0] >= 3 and shape[1] >= 3:
+        # Create index tensors
+        row_indices = genesis.tensor([0, 1, 2], device=device, dtype=genesis.int64)
+        col_indices = genesis.tensor([1, 2, 0], device=device, dtype=genesis.int64)
+        values = genesis.tensor([100.0, 200.0, 300.0], device=device, dtype=genesis.float32)
+        
+        # Genesis mixed setitem
+        A4 = genesis.Tensor(_A.copy(), device=device)
+        A4[row_indices, col_indices] = values
+        
+        # PyTorch equivalent
+        TA4 = torch.Tensor(_A.copy())
+        row_indices_torch = torch.tensor([0, 1, 2], dtype=torch.int64)
+        col_indices_torch = torch.tensor([1, 2, 0], dtype=torch.int64)
+        values_torch = torch.tensor([100.0, 200.0, 300.0], dtype=torch.float32)
+        TA4[row_indices_torch, col_indices_torch] = values_torch
+        
+        # Compare results
+        np.testing.assert_allclose(TA4.numpy(), A4.numpy(), 
+                                  atol=atol, rtol=rtol, err_msg="Mixed 2D setitem failed")
+        
+        # Verify specific values were set correctly
+        result = A4[row_indices, col_indices]
+        np.testing.assert_allclose(result.numpy(), values.numpy(), 
+                                  atol=atol, rtol=rtol, err_msg="Mixed 2D setitem values incorrect")
     
     # Note: Backward testing for setitem on requires_grad=True tensors is not supported
     # as it violates the leaf variable in-place modification restriction
@@ -2503,6 +2556,7 @@ def test_isinf_isnan_isfinite(device):
     expected_finite = genesis.tensor([[True, False], [False, True]], device=device)
     np.testing.assert_allclose(finite_result.float().numpy(), expected_finite.float().numpy(), 
                               atol=atol, rtol=rtol, err_msg="2D finite detection failed")
+
 
 
 if __name__ == "__main__":

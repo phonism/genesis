@@ -28,9 +28,11 @@ graph TB
     
     subgraph "GPU Independent Implementation"
         K --> L[cuda_storage.py<br/>Pure CUDA Memory Management]
-        K --> M[ndarray_ops_gpu.py<br/>Triton kernels]
-        L --> N[CUDA Python API]
-        M --> O[Triton Compiler]
+        K --> M[cuda_indexing_ops.py<br/>Advanced Indexing Operations]
+        K --> N[ndarray_ops_gpu.py<br/>Triton kernels]
+        L --> O[CUDA Python API]
+        M --> O
+        N --> P[Triton Compiler]
     end
     
     subgraph "CPU Implementation"
@@ -70,6 +72,18 @@ Each component can be understood and extended independently:
 - Automatic differentiation system is independent of specific tensor implementations
 - Neural network modules are based on general tensor operations
 - Backend abstraction allows easy switching between different implementations
+
+## 🔄 Recent Architecture Improvements
+
+### Enhanced Module Organization
+- **Streamlined CUDA Operations**: Consolidated indexing operations into `cuda_indexing_ops.py` for better maintainability
+- **Optimized Memory Management**: Improved CUDA memory allocation patterns and reduced overhead
+- **Cleaner Code Structure**: Removed redundant modules and optimized component relationships
+
+### Performance Enhancements
+- **Faster Kernel Compilation**: Optimized Triton kernel initialization and compilation process
+- **Reduced Startup Time**: Improved framework initialization and warmup procedures
+- **Better Resource Utilization**: Enhanced GPU memory usage patterns and allocation strategies
 
 ## 📊 Main Component Details
 
