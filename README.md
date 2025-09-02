@@ -27,11 +27,12 @@
 Genesis is a lightweight yet powerful deep learning framework that combines **educational clarity** with **production-level performance**. Built from scratch in Python, it features a unique dual-backend architecture: PyTorch for CPU operations and a completely independent CUDA/Triton implementation for GPU acceleration.
 
 **🔥 Latest Features**:
-- ✅ **Qwen Model Support**: Full implementation with training and inference
-- ✅ **Mixed Precision Training**: FP16/BF16 support with Automatic Mixed Precision (AMP)
-- ✅ **Advanced Training Features**: Gradient clipping, learning rate schedulers
-- ✅ **LLM Applications**: Complete training pipeline for 0.5B+ models
-- ✅ **Enhanced Performance**: Optimized CUDA memory management and Triton kernels
+- ✅ **Advanced Memory Management**: Reference-counted memory pools with cache optimization and OOM protection
+- ✅ **Performance Monitoring**: Comprehensive memory statistics collection and performance profiling tools
+- ✅ **Random Number Generation**: PyTorch-compatible RNG API with state management and reproducibility
+- ✅ **Storage Abstraction**: Unified base storage interface for consistent CPU/GPU access patterns
+- ✅ **Enhanced CUDA Ops**: Optimized index operations and memory copy routines for better performance
+- ✅ **Production Stability**: Fast-fail OOM handling, improved memory efficiency, and robust error management
 
 ### Why Genesis?
 
@@ -57,8 +58,10 @@ Genesis is a lightweight yet powerful deep learning framework that combines **ed
 ### Technical Innovations
 - 🏗️ **Dual Backend Architecture**: CPU (PyTorch) + GPU (Pure CUDA/Triton)
 - 🔥 **Triton Kernels**: Hand-optimized GPU kernels for maximum performance
-- 🧮 **Smart Memory Management**: Efficient CUDA memory allocation and tensor views
-- 📊 **Profiling Tools**: Built-in performance profiling and optimization utilities
+- 🧮 **Advanced Memory Management**: Reference-counted memory pools with cache optimization and comprehensive statistics
+- 📊 **Profiling Tools**: Built-in performance profiling, memory usage tracking, and optimization utilities
+- 🎲 **Random State Management**: PyTorch-compatible RNG with thread-safe state handling
+- 🏛️ **Unified Storage**: Abstract storage interface enabling consistent access patterns across devices
 
 ## 📊 Performance
 
@@ -192,6 +195,56 @@ loss.backward()
 optimizer.step()
 ```
 
+### Random Number Generation
+
+```python
+import genesis
+
+# Set global random seed for reproducibility
+genesis.manual_seed(42)
+
+# Create random tensors
+x = genesis.rand(100, 100, device=genesis.device('cuda'))
+y = genesis.randn(50, 50, device=genesis.device('cpu'))
+
+# Advanced RNG state management
+generator = genesis.Generator()
+generator.manual_seed(12345)
+
+# Save and restore RNG states
+state = genesis.get_rng_state()
+# ... some random operations ...
+genesis.set_rng_state(state)  # Restore previous state
+
+# Thread-safe random generation
+with genesis.fork_rng():
+    genesis.manual_seed(999)
+    # Random operations in this context don't affect global state
+```
+
+### Memory Management and Profiling
+
+```python
+import genesis
+
+# Monitor memory usage
+device = genesis.device('cuda')
+print(f"Memory allocated: {device.memory_allocated() / 1e6:.1f} MB")
+print(f"Memory cached: {device.memory_cached() / 1e6:.1f} MB")
+
+# Advanced memory statistics
+stats = device.memory_stats()
+print(f"Cache hit rate: {stats['cache_hit_rate']:.1%}")
+print(f"Peak memory usage: {stats['peak_allocated'] / 1e9:.2f} GB")
+
+# Memory profiling for optimization
+with genesis.profiler.profile() as prof:
+    x = genesis.rand(4096, 4096, device=device)
+    y = genesis.matmul(x, x.T)
+    
+print(prof.memory_summary())
+```
+
 ## 🏗️ Architecture
 
 ```
@@ -201,20 +254,27 @@ genesis/
 │   ├── tensor.py            # Tensor class with grad support
 │   └── functional.py        # Functional operations
 ├── nn/
-│   ├── modules.py           # Neural network modules
-│   ├── functional.py        # NN functional operations
-│   ├── attention.py         # Multi-head attention
-│   └── layer_norm.py        # Normalization layers
+│   ├── modules/             # Neural network modules (modularized)
+│   │   ├── linear.py        # Linear layers
+│   │   ├── activation.py    # Activation functions
+│   │   ├── normalization.py # Normalization layers
+│   │   ├── transformer.py   # Attention and transformer components
+│   │   └── loss.py          # Loss functions
+│   └── functional.py        # NN functional operations
+├── ndarray/
+│   ├── base_storage.py      # Abstract storage interface
+│   ├── cuda_storage.py      # CUDA tensor storage
+│   ├── cuda_memory_manager.py # Advanced memory management
+│   ├── memory_stats_collector.py # Memory profiling & statistics
+│   └── gpu_ops/             # Optimized CUDA operations
 ├── optim/
 │   ├── optimizer.py         # Base optimizer class
 │   ├── adam.py              # Adam and AdamW
 │   ├── sgd.py               # SGD with momentum
 │   └── lr_scheduler.py      # Learning rate schedulers
-├── backends/
-│   ├── cpu/                 # CPU backend (PyTorch)
-│   └── cuda/                # GPU backend (CUDA/Triton)
-│       ├── cuda_tensor.py   # Pure CUDA tensor
-│       └── triton_ops/      # Triton kernels
+├── models/
+│   └── qwen.py              # Qwen LLM implementation
+├── random.py                # PyTorch-compatible RNG API
 └── utils/
     ├── data.py              # Data loading utilities
     └── profile.py           # Performance profiling

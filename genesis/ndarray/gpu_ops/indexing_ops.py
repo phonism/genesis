@@ -314,6 +314,34 @@ def scatter_kernel(
     tl.store(output_ptr + output_offset, src_values, mask=mask)
 
 
+@triton.jit
+def compute_linear_indices_2d_kernel(
+    row_ptr, col_ptr, out_ptr, 
+    n_cols, n_elements, 
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    Compute linear indices for 2D mixed indexing: row_idx * n_cols + col_idx
+    
+    This is a key operation for efficient sparse cross entropy loss and 
+    other advanced indexing patterns.
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load row and column indices
+    row_vals = tl.load(row_ptr + offsets, mask=mask)
+    col_vals = tl.load(col_ptr + offsets, mask=mask)
+    
+    # Compute linear index
+    linear_idx = row_vals * n_cols + col_vals
+    
+    # Store result
+    tl.store(out_ptr + offsets, linear_idx, mask=mask)
+
+
 # =============================================================================
 # GPU OPERATIONS
 # =============================================================================

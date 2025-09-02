@@ -10,6 +10,7 @@ except ImportError:
     from cuda.bindings import driver
 
 import threading
+import os
 from typing import Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 from collections import defaultdict
@@ -525,8 +526,14 @@ class RefCountedMemoryPool:
         # Memory pool: bucket_size -> [RefCountedBlock]
         self.memory_pool = defaultdict(list)
         
+        # Pre-compute bucket lookup table for faster allocation
+        self._bucket_lookup = self._build_bucket_lookup()
+        
         # Active blocks: ptr -> RefCountedBlock (for reference counting)
         self.active_blocks = {}
+        
+        # Thread-local storage for lock-free access
+        self._thread_local = threading.local()
         
         # Stream-level cache - Level 1 (very fast, no events)
         self.stream_cache = defaultdict(lambda: defaultdict(list))  # stream -> bucket -> [RefCountedBlock]
@@ -537,7 +544,10 @@ class RefCountedMemoryPool:
         # Fine-grained locks
         self.stream_locks = defaultdict(threading.Lock)
         self.global_lock = threading.Lock()
-        self.pool_lock = threading.Lock()
+        # Use re-entrant lock to avoid self-deadlock when object destructors
+        # (which may free memory) run during an allocation while the pool lock
+        # is already held in the same thread.
+        self.pool_lock = threading.RLock()
         
         # Configuration with PyTorch-like parameters
         self.max_pool_size = 2 * 1024 * 1024 * 1024  # 2GB pool limit
@@ -568,7 +578,22 @@ class RefCountedMemoryPool:
         bucket = self._get_bucket(size)
         current_time = time.time()
         
-        # Try to get from memory pool first
+        # First try thread-local pool (lock-free, fastest)
+        thread_pool = self._get_thread_pool()
+        if thread_pool[bucket]:
+            block = thread_pool[bucket].pop()
+            block.ref_count = 1
+            block.is_free = False
+            block.last_used_time = current_time
+            block.stream_id = stream
+            # We need to update active_blocks with lock for consistency
+            with self.pool_lock:
+                self.active_blocks[block.ptr] = block
+            self.pool_hits += 1
+            self._thread_local.hits += 1
+            return block
+        
+        # Try to get from global memory pool
         with self.pool_lock:
             if self.memory_pool[bucket]:
                 block = self.memory_pool[bucket].pop(0)
@@ -589,7 +614,8 @@ class RefCountedMemoryPool:
                     block.ref_count = 1
                     block.is_free = False
                     block.last_used_time = current_time
-                    self.active_blocks[block.ptr] = block
+                    with self.pool_lock:
+                        self.active_blocks[block.ptr] = block
                     self.pool_hits += 1
                     return block
         
@@ -629,7 +655,17 @@ class RefCountedMemoryPool:
                 block.is_free = True
                 block.last_used_time = time.time()
                 
-                # Return to memory pool if there's space
+                # First try to return to thread-local pool (fastest)
+                thread_pool = self._get_thread_pool()
+                bucket = block.size
+                thread_pool_limit = 32  # Limit thread-local pool size to prevent memory bloat
+                
+                if len(thread_pool[bucket]) < thread_pool_limit:
+                    thread_pool[bucket].append(block)
+                    self.ref_count_saves += 1
+                    return True
+                
+                # Thread-local pool full, try global pool
                 if self.current_pool_size + block.size <= self.max_pool_size:
                     self.memory_pool[block.size].append(block)
                     self.current_pool_size += block.size
@@ -770,16 +806,47 @@ class RefCountedMemoryPool:
                 except:
                     pass
     
+    def _build_bucket_lookup(self) -> dict:
+        """Pre-compute bucket lookup table for sizes up to 1MB"""
+        lookup = {}
+        
+        # Generate all bucket sizes (power of 2, starting from 64)
+        bucket_sizes = []
+        bucket = 64
+        while bucket <= 1024 * 1024:  # 1MB limit for ref_pool
+            bucket_sizes.append(bucket)
+            bucket *= 2
+        
+        # Build lookup table for all sizes up to 1MB
+        for size in range(1, 1024 * 1024 + 1):
+            # Find smallest bucket >= size
+            for bucket in bucket_sizes:
+                if bucket >= size:
+                    lookup[size] = bucket
+                    break
+        
+        return lookup
+    
+    def _get_thread_pool(self):
+        """Get or create thread-local memory pool for lock-free access"""
+        if not hasattr(self._thread_local, 'pool'):
+            # Initialize thread-local pool
+            self._thread_local.pool = defaultdict(list)  # bucket_size -> [RefCountedBlock]
+            self._thread_local.hits = 0
+            self._thread_local.misses = 0
+        return self._thread_local.pool
+    
     def _get_bucket(self, size: int) -> int:
-        """Get bucket size - align up to 64B, reduce memory waste"""
+        """Get bucket size - optimized with pre-computed lookup"""
+        if size <= 1048576 and size in self._bucket_lookup:  # 1MB
+            return self._bucket_lookup[size]
+        
+        # Fallback for very large sizes (>1MB, shouldn't happen in ref_pool)
         if size <= 64:
             return 64
         
-        # Power of 2 buckets starting from 64
-        bucket = 64
-        while bucket < size:
-            bucket *= 2
-        return bucket
+        # Use bit manipulation for power of 2 (faster than loop)
+        return 1 << (size - 1).bit_length()
     
     def _warmup_pool(self):
         """Warm up pool with common allocation sizes for better cache hit rate."""
@@ -996,8 +1063,11 @@ class CUDAMemoryManager:
         if self.warmup_enabled:
             self._warmup_cache()
         
-        # Initialize default stream (already have current context)
-        self.default_stream = self._create_stream()
+        # Initialize default stream (align with Triton / runtime default stream)
+        # Use CUDA default (legacy) stream 0 to avoid interop issues when PyTorch
+        # initializes CUDA first and Triton launches kernels on the default stream.
+        # A dedicated stream here can cause ordering/visibility surprises across APIs.
+        self.default_stream = 0  # CUstream legacy default
         
         # Initialize reference counting memory pool
         self.ref_pool = RefCountedMemoryPool()
@@ -1438,7 +1508,7 @@ class CUDAMemoryManager:
                     pass
             
             # 3. Destroy default stream
-            if hasattr(self, 'default_stream'):
+            if hasattr(self, 'default_stream') and self.default_stream not in (None, 0):
                 try:
                     _ok(cuda.cuStreamDestroy(self.default_stream))
                 except:

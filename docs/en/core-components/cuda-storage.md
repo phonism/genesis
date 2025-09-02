@@ -16,29 +16,31 @@ Genesis's CUDA Storage (CUDAStorage) is a core component of the framework, provi
 
 ## 🏗️ Architecture Design
 
-### IndexPlan Architecture
+### Modular Indexing Architecture
 
-CUDATensor uses an advanced IndexPlan architecture to handle complex tensor indexing operations:
+Genesis uses a modular approach to handle complex tensor indexing operations through the `CUDAIndexingOps` class:
 
 ```python
-class IndexKind(Enum):
-    VIEW = "view"           # Pure view operation, zero-copy
-    GATHER = "gather"       # Gather operation for advanced indexing  
-    SCATTER = "scatter"     # Scatter operation for assignment
-    COPY = "copy"          # Strided copy
-    FILL = "fill"          # Fill operation
-
-@dataclass
-class IndexPlan:
-    """Unified index plan"""
-    kind: IndexKind
-    result_shape: Optional[Tuple[int, ...]] = None
-    result_strides: Optional[Tuple[int, ...]] = None
-    ptr_offset_bytes: int = 0
-    index_tensor: Optional['CUDATensor'] = None
-    needs_mask_compaction: bool = False
-    temp_memory_bytes: int = 0
+class CUDAIndexingOps:
+    """Centralized indexing operations for CUDA storage"""
+    
+    @staticmethod
+    def parse_index(storage, key):
+        """Parse indexing key and create execution plan"""
+        
+    @staticmethod
+    def execute_getitem(storage, plan):
+        """Execute getitem operation"""
+        
+    @staticmethod  
+    def execute_setitem(storage, plan, value):
+        """Execute setitem operation"""
 ```
+
+**Key Benefits**:
+- **Separation of Concerns**: Indexing logic separated from storage management
+- **Maintainable Code**: Clear organization of complex indexing operations
+- **Performance Optimization**: Specialized implementations for different indexing patterns
 
 ### Memory Management
 

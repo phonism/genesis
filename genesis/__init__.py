@@ -54,3 +54,12 @@ from .random import (
     get_rng_state, set_rng_state, 
     default_generator, fork_rng, Generator
 )
+
+# Device utilities
+def cuda_available() -> bool:
+    """Check if CUDA is available for use.
+    
+    Returns:
+        bool: True if CUDA device is available and enabled, False otherwise.
+    """
+    return device('cuda').enabled()

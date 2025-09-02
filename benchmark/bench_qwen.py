@@ -676,7 +676,7 @@ def parse_args():
     )
     
     parser.add_argument("--size", type=str, default="0.5B",
-                       choices=["0.5B", "1.5B", "3B"],
+                       choices=["0.5B", "1.5B"],
                        help="Model size to benchmark")
     parser.add_argument("--batch-size", type=str, default="1,4",
                        help="Comma-separated batch sizes (e.g., 1,2,4)")

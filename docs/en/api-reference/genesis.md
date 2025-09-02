@@ -10,6 +10,8 @@ Please refer to the specific module documentation for detailed information:
 - [NDArray](../api/ndarray/index.md) - Tensor operations  
 - [Neural Networks](../api/nn/modules.md) - Neural network layers
 - [Optimizers](../api/optim/optimizers.md) - Optimization algorithms
+- [Random Number Generation](random.md) - PyTorch-compatible RNG API
+- [Memory Management](memory.md) - Advanced CUDA memory management
 - [Utilities](../api/utils/index.md) - Helper functions
 
 *This page is under construction. More detailed API documentation will be added soon.*

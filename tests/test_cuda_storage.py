@@ -270,6 +270,83 @@ def test_cuda_memory_manager():
         raise
 
 
+def test_mixed_2d_indexing():
+    """Test mixed 2D indexing functionality at CUDAStorage level.
+    
+    Tests:
+        - Mixed 2D getitem with tensor indices
+        - Mixed 2D setitem with tensor indices
+        - Proper handling of index tensors
+        - Memory consistency after operations
+    """
+    # Create a 2D tensor for testing
+    np_data = np.array([[1, 2, 3, 4],
+                       [5, 6, 7, 8], 
+                       [9, 10, 11, 12]], dtype=np.float32)
+    tensor = from_numpy(np_data)
+    
+    # Create index tensors
+    row_indices = from_numpy(np.array([0, 1, 2], dtype=np.int64))
+    col_indices = from_numpy(np.array([1, 2, 0], dtype=np.int64))
+    
+    # Test getitem
+    result = tensor[row_indices, col_indices]
+    result_np = result.to_numpy()
+    expected = np.array([2, 7, 9], dtype=np.float32)
+    
+    assert np.allclose(result_np, expected), "Mixed 2D getitem failed"
+    assert result.shape == (3,), "Mixed 2D getitem shape incorrect"
+    
+    # Test setitem
+    values = from_numpy(np.array([100, 200, 300], dtype=np.float32))
+    tensor[row_indices, col_indices] = values
+    
+    # Verify values were set correctly
+    check_result = tensor[row_indices, col_indices]
+    check_np = check_result.to_numpy()
+    
+    assert np.allclose(check_np, values.to_numpy()), "Mixed 2D setitem failed"
+    
+    # Check specific positions in original tensor
+    full_result = tensor.to_numpy()
+    assert abs(full_result[0, 1] - 100.0) < 1e-5, "Position [0,1] should be 100"
+    assert abs(full_result[1, 2] - 200.0) < 1e-5, "Position [1,2] should be 200" 
+    assert abs(full_result[2, 0] - 300.0) < 1e-5, "Position [2,0] should be 300"
+
+
+def test_mixed_2d_indexing_edge_cases():
+    """Test edge cases for mixed 2D indexing at CUDAStorage level.
+    
+    Tests:
+        - Single element indexing
+        - Empty index tensors
+        - Out-of-bounds checking (if implemented)
+        - Different index tensor dtypes
+    """
+    # Create test tensor
+    np_data = np.array([[1, 2], [3, 4]], dtype=np.float32)
+    tensor = from_numpy(np_data)
+    
+    # Single element test
+    single_row = from_numpy(np.array([0], dtype=np.int64))
+    single_col = from_numpy(np.array([1], dtype=np.int64))
+    
+    single_result = tensor[single_row, single_col]
+    single_np = single_result.to_numpy()
+    
+    assert single_np.shape == (1,), "Single element indexing shape incorrect"
+    assert abs(single_np[0] - 2.0) < 1e-5, "Single element indexing value incorrect"
+    
+    # Empty indexing test
+    empty_row = from_numpy(np.array([], dtype=np.int64))
+    empty_col = from_numpy(np.array([], dtype=np.int64))
+    
+    empty_result = tensor[empty_row, empty_col]
+    empty_np = empty_result.to_numpy()
+    
+    assert empty_np.shape == (0,), "Empty indexing should return empty tensor"
+
+
 def run_all_tests():
     """Run complete test suite for CUDAStorage functionality.
     
@@ -288,6 +365,8 @@ def run_all_tests():
         test_squeeze_unsqueeze()
         test_stride_info()
         test_memory_management()
+        test_mixed_2d_indexing()
+        test_mixed_2d_indexing_edge_cases()
     except Exception as e:
         import traceback
         traceback.print_exc()

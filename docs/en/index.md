@@ -20,12 +20,15 @@ Genesis is a lightweight deep learning framework developed in Python. The CPU ba
 - **🔄 Automatic Differentiation** - Complete backpropagation and gradient computation system
 - **🧠 Neural Networks** - Rich implementation of neural network layers and optimizers
 - **🔧 Mixed Precision** - Support for FP16/BF16 mixed precision training (AMP)
-- **📊 Distributed Training** - NCCL multi-GPU parallel training support (NEW!)
+- **📊 Distributed Training** - NCCL multi-GPU parallel training support
 - **🎨 Model Library** - Built-in implementations of mainstream LLM models like Qwen
 - **💾 Model Management** - Complete checkpoint save/load system
 - **📈 Learning Rate Scheduling** - Multiple learning rate schedulers and gradient clipping
-- **🔍 Debugging Tools** - Tensor validity checks (isinf, isnan, isfinite)
-- **🚀 Performance Optimization** - Kernel caching, memory pooling, and adaptive configuration
+- **🎲 Random Number Generation** - PyTorch-compatible RNG API with thread-safe state management (NEW!)
+- **🧮 Advanced Memory Management** - Reference-counted memory pools with cache optimization (NEW!)
+- **📊 Performance Monitoring** - Comprehensive memory statistics and profiling tools (NEW!)
+- **🏛️ Unified Storage** - Abstract storage interface for consistent CPU/GPU access patterns (NEW!)
+- **🔍 Production Stability** - Fast-fail OOM handling and robust error management (NEW!)
 
 ### 🏗️ Architecture Highlights
 

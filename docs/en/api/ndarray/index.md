@@ -22,10 +22,12 @@ All computations are device-agnostic through the `Device` abstraction:
 ### Performance Optimization
 
 The ndarray system includes several performance optimizations:
-- **Kernel Caching**: Compiled Triton kernels are cached for reuse
-- **Adaptive Configuration**: Block sizes auto-tune based on tensor dimensions
+- **Kernel Caching**: Compiled Triton kernels are cached for reuse  
+- **Optimized Initialization**: Improved CUDA warmup and kernel compilation process
+- **Modular Operations**: Separated indexing operations for better code organization
 - **Memory Views**: Efficient tensor views without data copying
 - **Broadcast Optimization**: Smart broadcasting for elementwise operations
+- **Streamlined Architecture**: Removed redundant components for better performance
 
 ## Main Classes
 
