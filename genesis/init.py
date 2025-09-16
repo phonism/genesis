@@ -4,24 +4,62 @@ init
 
 import genesis
 import math
+from genesis.storage import Storage
+from genesis.tensor import Tensor
+from genesis.ops.dispatcher import OperationDispatcher
+from genesis.dtypes import get_dtype
 
 def rand(*shape, low=0.0, high=1.0, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate random numbers uniform between low and high """
-    device = genesis.device('cpu') if device is None else device
-    array = device.rand(*shape) * (high - low) + low
-    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+    # Handle string device
+    if device is None:
+        device = genesis.device('cpu')
+    elif isinstance(device, str):
+        device = genesis.device(device)
+
+    # Handle both string and DType for dtype parameter
+    if isinstance(dtype, str):
+        dtype = get_dtype(dtype)
+
+    # Use dispatch_creation for creation operations like randn
+    tensor = OperationDispatcher.dispatch_creation("rand", device, shape, dtype.name, low=low, high=high)
+    tensor.requires_grad = requires_grad
+    return tensor
 
 def randn(*shape, mean=0.0, std=1.0, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate random normal with specified mean and std deviation """
-    device = genesis.device('cpu') if device is None else device
-    array = device.randn(*shape) * std + mean
-    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+    # Handle string device
+    if device is None:
+        device = genesis.device('cpu')
+    elif isinstance(device, str):
+        device = genesis.device(device)
+
+    # Handle both string and DType for dtype parameter
+    if isinstance(dtype, str):
+        dtype = get_dtype(dtype)
+
+    # Use dispatch_creation for creation operations
+    tensor = OperationDispatcher.dispatch_creation("randn", device, shape, dtype.name, mean=mean, std=std)
+    tensor.requires_grad = requires_grad
+    return tensor
 
 def constant(*shape, c=1.0, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate constant Tensor """
-    device = genesis.device('cpu') if device is None else device
-    array = device.full(shape, c, dtype=dtype)  # Remove duplicate multiplication
-    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+    if device is None:
+        device = genesis.device('cpu')
+    elif isinstance(device, str):
+        device = genesis.device(device)
+
+    # Handle both string and DType for dtype parameter
+    if isinstance(dtype, str):
+        dtype = get_dtype(dtype)
+
+    # Use Storage.allocate with shape instead of size
+    storage = Storage.allocate(shape, dtype, device)
+    storage._backend.fill(c)
+    tensor = Tensor(storage, shape)
+    tensor.requires_grad = requires_grad
+    return tensor
 
 def ones(*shape, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate all-ones Tensor """
@@ -41,9 +79,16 @@ def full(shape, fill_value, device=None, dtype=genesis.float32, requires_grad=Fa
 
 def empty(*shape, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate empty Tensor (uninitialized data) """
-    device = genesis.device('cpu') if device is None else device
-    array = device.empty(shape, dtype=dtype)
-    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+    if device is None:
+        device = genesis.device('cpu')
+    elif isinstance(device, str):
+        device = genesis.device(device)
+    
+    # Use Storage.allocate - empty tensor is just allocated storage without initialization
+    storage = Storage.allocate(shape, dtype, device)
+    tensor = Tensor(storage, shape)
+    tensor.requires_grad = requires_grad
+    return tensor
 
 def empty_like(tensor, dtype=None, device=None, requires_grad=None):
     """ Generate empty Tensor with same shape as input tensor """
@@ -54,9 +99,8 @@ def empty_like(tensor, dtype=None, device=None, requires_grad=None):
     if requires_grad is None:
         requires_grad = tensor.requires_grad  # Inherit requires_grad from input tensor
     
-    # Use efficient empty instead of zeros
-    array = device.empty(tensor.shape, dtype=dtype)
-    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+    # Use genesis.empty function 
+    return empty(*tensor.shape, device=device, dtype=dtype, requires_grad=requires_grad)
 
 def zeros_like(tensor, dtype=None, device=None, requires_grad=None):
     """ Generate zeros Tensor with same shape as input tensor """
@@ -71,9 +115,22 @@ def zeros_like(tensor, dtype=None, device=None, requires_grad=None):
 
 def randb(*shape, p=0.5, device=None, dtype="bool", requires_grad=False):
     """ Generate binary random Tensor """
-    device = genesis.device('cpu') if device is None else device
-    array = device.rand(*shape) <= p
-    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+    # Handle string device
+    if device is None:
+        device = genesis.device('cpu')
+    elif isinstance(device, str):
+        device = genesis.device(device)
+
+    # Handle both string and DType for dtype parameter
+    if isinstance(dtype, str):
+        dtype = get_dtype(dtype)
+
+    # Generate random uniform tensor and compare with p
+    uniform_tensor = OperationDispatcher.dispatch_creation("rand", device, shape, "float32", low=0.0, high=1.0)
+    # Convert to boolean: tensor <= p
+    bool_tensor = OperationDispatcher.dispatch("le", uniform_tensor, p)
+    bool_tensor.requires_grad = requires_grad
+    return bool_tensor
 
 def one_hot(n, i, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate one-hot encoding Tensor """
@@ -162,11 +219,20 @@ def randint(low, high, shape, device=None, dtype=genesis.int64, requires_grad=Fa
     elif not isinstance(shape, tuple):
         shape = tuple(shape)
         
-    device = genesis.device('cpu') if device is None else device
-    
-    # Use device-specific randint implementation
-    array = device.randint(low, high, shape, dtype=dtype)
-    return genesis.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+    # Handle string device
+    if device is None:
+        device = genesis.device('cpu')
+    elif isinstance(device, str):
+        device = genesis.device(device)
+
+    # Handle both string and DType for dtype parameter
+    if isinstance(dtype, str):
+        dtype = get_dtype(dtype)
+
+    # Use dispatch_creation for creation operations
+    tensor = OperationDispatcher.dispatch_creation("randint", device, shape, dtype.name, low=low, high=high)
+    tensor.requires_grad = requires_grad
+    return tensor
 
 def from_numpy(array, device=None, dtype=None, requires_grad=False):
     """Create Tensor from numpy array.
@@ -204,6 +270,6 @@ def from_numpy(array, device=None, dtype=None, requires_grad=False):
         else:
             dtype = genesis.float32  # Default fallback
     
-    # Use device-specific from_numpy implementation
-    device_array = device.from_numpy(array, dtype=dtype)
-    return genesis.Tensor(device_array, device=device, dtype=dtype, requires_grad=requires_grad)
+    # Create tensor directly using make_tensor (already imported via genesis.tensor module)
+    tensor = genesis.tensor(array, dtype=dtype, device=device, requires_grad=requires_grad)
+    return tensor

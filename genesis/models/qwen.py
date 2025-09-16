@@ -189,7 +189,7 @@ class QwenModel(nn.Module):
         Returns:
             Logits tensor of shape (batch_size, sequence_length, vocab_size)
         """
-        batch_size, sequence_length = idx.size()
+        batch_size, sequence_length = idx.shape
         
         if position_ids is None:
             position_ids = genesis.arange(0, sequence_length, device=idx.device)
@@ -282,9 +282,9 @@ class RotaryEmbedding(genesis.nn.Module):
         base: float = 10000
     ) -> None:
         super().__init__()
-        self.inv_freq = genesis.Tensor(1.0 / (base ** (np.arange(0, dim, 2).astype(np.float32) / dim))) 
+        self.inv_freq = genesis.tensor(1.0 / (base ** (np.arange(0, dim, 2).astype(np.float32) / dim)))
         self.max_seq_len_cached = max_position_embeddings
-        t = genesis.Tensor(np.arange(self.max_seq_len_cached, dtype="float32"))
+        t = genesis.tensor(np.arange(self.max_seq_len_cached, dtype="float32"))
         t = t.reshape(t.shape[0], 1)
         self.inv_freq = self.inv_freq.reshape(1, self.inv_freq.shape[0])
         freqs = t @ self.inv_freq

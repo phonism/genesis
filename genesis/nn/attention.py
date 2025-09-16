@@ -3,11 +3,10 @@
 from numbers import Number
 from typing import Optional, List
 import numpy as np
-from ..autograd import Function, NDArray, Tensor
+from ..function import Function
+from ..tensor import Tensor
 from genesis import init
 import genesis
-
-from ..backend import array_api, NDArray
 
 import triton
 import triton.language as tl
@@ -411,14 +410,15 @@ class FusedAttention(Function):
         # shape constraints
         device = qq.device
         causal = True
-        q = qq.data.data
-        k = kk.data.data
-        v = vv.data.data
-        if q.is_contiguous() is False:
+        # Use Genesis tensors directly - no need for .data.data
+        q = qq
+        k = kk
+        v = vv
+        if not q.is_contiguous():
             q = q.contiguous()
-        if k.is_contiguous() is False:
+        if not k.is_contiguous():
             k = k.contiguous()
-        if v.is_contiguous() is False:
+        if not v.is_contiguous():
             v = v.contiguous()
         HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
         # when v is in float8_e5m2 it is transposed.
@@ -432,7 +432,8 @@ class FusedAttention(Function):
         sm_scale = 1 / np.sqrt(HEAD_DIM_K)
 
         grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
-        M = genesis.empty((q.shape[0], q.shape[1], q.shape[2]), dtype=genesis.float32, device=device)
+        # Initialize M tensor properly - it stores max logit values for attention softmax
+        M = genesis.zeros((q.shape[0], q.shape[1], q.shape[2]), dtype=genesis.float32, device=device)
 
         _attn_fwd[grid](
                 q, k, v, sm_scale, M, o,
@@ -476,9 +477,9 @@ class FusedAttention(Function):
             M = M.contiguous()
 
         # Use Genesis tensors instead of PyTorch
-        dq = genesis.empty(q.shape, dtype=genesis.float32, device=device)
-        dk = genesis.empty(k.shape, dtype=genesis.float32, device=device)
-        dv = genesis.empty(v.shape, dtype=genesis.float32, device=device)
+        dq = genesis.zeros(q.shape, dtype=genesis.float32, device=device)
+        dk = genesis.zeros(k.shape, dtype=genesis.float32, device=device)
+        dv = genesis.zeros(v.shape, dtype=genesis.float32, device=device)
         BATCH, N_HEAD, N_CTX = q.shape[:3]
         NUM_WARPS, NUM_STAGES = 4, 5
         BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 32, 32, 32
@@ -489,7 +490,7 @@ class FusedAttention(Function):
         PRE_BLOCK = 32
         assert N_CTX % PRE_BLOCK == 0
         pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-        delta = genesis.empty(M.shape, dtype=genesis.float32, device=device)
+        delta = genesis.zeros(M.shape, dtype=genesis.float32, device=device)
         _attn_bwd_preprocess[pre_grid](
                 o, do,
                 delta,

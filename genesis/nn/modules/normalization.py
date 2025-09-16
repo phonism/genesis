@@ -3,7 +3,7 @@
 from typing import Optional
 import genesis
 from genesis import init
-from ...autograd import Tensor
+from genesis.tensor import Tensor
 import genesis.nn.functional as F
 from .module import Module, Parameter
 

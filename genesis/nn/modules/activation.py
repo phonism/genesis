@@ -1,7 +1,7 @@
 """Activation function modules."""
 
 import genesis
-from ...autograd import Tensor
+from genesis.tensor import Tensor
 import genesis.nn.functional as F
 from .module import Module
 

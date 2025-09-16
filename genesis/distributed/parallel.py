@@ -103,15 +103,17 @@ class DistributedDataParallel(genesis.nn.Module):
             if grad is not None:
                 # Average gradients across all processes
                 all_reduce(grad, ReduceOp.SUM)
-                grad.data = grad.data / self.world_size
+                # Average by dividing by world size
+                # Return the averaged gradient (creates new tensor but that's ok for hook)
+                grad = grad / self.world_size
             return grad
         return gradient_hook
         
     def _broadcast_parameters(self):
         """Broadcast parameters from rank 0 to all other ranks."""
         for param in self.model.parameters():
-            # Broadcast from rank 0
-            broadcast(param.data, src=0)
+            # Broadcast from rank 0 - use param directly, not .data
+            broadcast(param, src=0)
             
     def _broadcast_buffers(self):
         """Broadcast model buffers from rank 0 to all other ranks.""" 

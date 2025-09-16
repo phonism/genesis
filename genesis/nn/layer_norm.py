@@ -6,9 +6,9 @@ import numpy
 import genesis
 import triton
 import triton.language as tl
-from ..autograd import Function, NDArray, Tensor
+from ..function import Function
+from ..tensor import Tensor
 from genesis import init
-from ..backend import array_api, NDArray
 
 @triton.jit
 def _layer_norm_fwd_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK_SIZE: tl.constexpr,):
@@ -142,7 +142,7 @@ class FusedLayerNormFunction(Function):
         # Pass Genesis tensors directly to Triton kernel!
         _layer_norm_fwd_kernel[(M,)](
             x_reshaped, y, weight, bias, mean, rstd,
-            x_reshaped.stride(0), N, eps,  # Use new method
+            x_reshaped.stride[0], N, eps,  # Use stride as property, not method
             BLOCK_SIZE=BLOCK_SIZE, num_warps=8
         )
         
@@ -155,48 +155,52 @@ class FusedLayerNormFunction(Function):
     def backward(ctx, out_grad):
         # Can also use Genesis tensors directly
         x, w, b, m, v = ctx.saved_tensors
-        
+
         # heuristics for amount of parallel reduction stream for DW/DB
         N = w.shape[0]
         GROUP_SIZE_M = 64
-        if N <= 8192: 
+        if N <= 8192:
             GROUP_SIZE_M = 96
-        if N <= 4096: 
+        if N <= 4096:
             GROUP_SIZE_M = 128
-        if N <= 1024: 
+        if N <= 1024:
             GROUP_SIZE_M = 256
-            
-        # Pass directly to backward kernels, inherit requires_grad=False for gradient computation
-        dx = genesis.empty_like(x, requires_grad=False)
-        dw = genesis.empty_like(w, requires_grad=False)
-        db = genesis.empty_like(b, requires_grad=False)
-        
-        # Create temporary buffers for parallel reduction
-        # Use safer way to create buffers, avoid mul_scalar issues
-        from genesis.ndarray.cuda_tensor import zeros
-        locks = zeros((2 * GROUP_SIZE_M,), "int32")
-        _dw = zeros((GROUP_SIZE_M, N), x.dtype)
-        _db = zeros((GROUP_SIZE_M, N), x.dtype)
-        
-        # Get reshaped dimensions
+
+        # Get reshaped dimensions - same as forward pass
         x_reshaped = x.reshape(-1, x.shape[-1])
         M, N = x_reshaped.shape
-        
-        # Launch backward dx kernel
+
+        # Reshape out_grad to match kernel expectations
+        out_grad_reshaped = out_grad.reshape(-1, out_grad.shape[-1])
+
+        # Create dx in reshaped format first, then reshape back
+        dx_reshaped = genesis.zeros_like(x_reshaped, requires_grad=False)
+        dw = genesis.zeros_like(w, requires_grad=False)
+        db = genesis.zeros_like(b, requires_grad=False)
+
+        # Create temporary buffers for parallel reduction
+        locks = genesis.zeros((2 * GROUP_SIZE_M,), dtype=genesis.int32, device=x.device)
+        _dw = genesis.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=x.device)
+        _db = genesis.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=x.device)
+
+        # Launch backward dx kernel with reshaped tensors
         _layer_norm_bwd_dx_kernel[(M,)](
-            dx, out_grad, _dw, _db, x, w, m, v, locks,
-            x_reshaped.stride(0), N, 
+            dx_reshaped, out_grad_reshaped, _dw, _db, x_reshaped, w, m, v, locks,
+            x_reshaped.stride[0], N,
             BLOCK_SIZE_N=ctx.BLOCK_SIZE,
             GROUP_SIZE_M=GROUP_SIZE_M,
             num_warps=ctx.num_warps)
-        
+
         # Launch backward dw/db kernel
         grid = (triton.cdiv(N, 128),)
         _layer_norm_bwd_dwdb_kernel[grid](
             _dw, _db, dw, db, min(GROUP_SIZE_M, M), N,
             BLOCK_SIZE_M=32,
             BLOCK_SIZE_N=128)
-        
+
+        # Reshape dx back to original shape
+        dx = dx_reshaped.reshape(x.shape)
+
         return dx, dw, db
 
 def fused_layer_norm(x, weight, bias, eps=1e-6):

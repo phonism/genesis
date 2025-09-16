@@ -1,31 +1,35 @@
-"""Operatpr table."""
+"""Operator table with new dispatcher integration."""
 # Global operator table.
 from functools import reduce as functools_reduce
 import operator
 from numbers import Number
 from typing import Optional, List
-from ..autograd import Function, NDArray, Tensor
+from ..function import Function
+from genesis.tensor import Tensor
 import genesis
 from genesis import init
 import math
-from ..backend import array_api, NDArray
-#try:
-if True:
+# Import new dispatcher system
+from genesis.ops import OperationDispatcher, DeviceType
+try:
     # import fused ops
     from .layer_norm import (
             FusedLayerNormFunction, fused_layer_norm,
     )
     from .attention import FusedAttention, fused_attention, scaled_dot_product_attention
-    from .triton_ops import dropout, softmax, safe_softmax
-#except:
-    #print("Triton layers do not imported!")
-    #pass
+    from .triton_ops import dropout, safe_softmax
+    from .triton_ops.softmax import softmax as triton_softmax
+except Exception as e:
+    print(f"Triton layers do not imported! Error: {e}")
+    import traceback
+    traceback.print_exc()
+    pass
 
 def sum_to_shape(data, shape):
     """Sum the array `data` to match the target `shape`."""
     # Calculate which axes need to be summed
     while len(data.shape) > len(shape):
-        data = data.sum(axis=0)
+        data = data.sum(dim=0)
     
     # Collect axes that need to be summed (where target is 1 but current is not)
     axes_to_sum = []
@@ -35,7 +39,7 @@ def sum_to_shape(data, shape):
     
     # Sum over all collected axes at once, keeping dimensions
     if axes_to_sum:
-        data = data.sum(axis=tuple(axes_to_sum), keepdims=True)
+        data = data.sum(dim=tuple(axes_to_sum), keepdim=True)
     
     return data
 
@@ -44,70 +48,141 @@ class EWiseAdd(Function):
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
         requires_grad = a.requires_grad or b.requires_grad
-        return Tensor(a.data + b.data, requires_grad=requires_grad, dtype=a.dtype)
+        # Use new dispatcher system - pass tensors, get tensor back
+        result_tensor = OperationDispatcher.dispatch("add", a, b)
+        result_tensor.requires_grad = requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
         a, b = ctx.saved_tensors
-        grad_a = out_grad.data
-        grad_b = out_grad.data
-        grad_a = sum_to_shape(grad_a, a.shape)
-        grad_b = sum_to_shape(grad_b, b.shape)
-        return (Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype), Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype))
+        
+        # Create new tensors for gradients by copying data
+        grad_a = out_grad.clone()
+        grad_b = out_grad.clone()
+        
+        # Sum to shape to handle broadcasting
+        if grad_a.shape != a.shape:
+            grad_a = sum_to_shape(grad_a, a.shape)
+        if grad_b.shape != b.shape:
+            grad_b = sum_to_shape(grad_b, b.shape)
+            
+        return (grad_a, grad_b)
 
 def add(a, b):
-    return EWiseAdd.apply(a, b)
+    if isinstance(b, Tensor):
+        return EWiseAdd.apply(a, b)
+    else:
+        # b is a scalar
+        return add_scalar(a, b)
 
 class EWiseSub(Function):
     @staticmethod
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
         requires_grad = a.requires_grad or b.requires_grad
-        return Tensor(a.data - b.data, requires_grad=requires_grad, dtype=a.dtype)
+        # Use new dispatcher system - pass tensors, get tensor back
+        result_tensor = OperationDispatcher.dispatch("sub", a, b)
+        result_tensor.requires_grad = requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
         a, b = ctx.saved_tensors
-        grad_a = out_grad.data
-        grad_b = -out_grad.data  # Gradient for subtraction: d/da(a-b) = 1, d/db(a-b) = -1
-        grad_a = sum_to_shape(grad_a, a.shape)
-        grad_b = sum_to_shape(grad_b, b.shape)
-        return (Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype), Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype))
+        # Gradients for subtraction: d/da(a-b) = 1, d/db(a-b) = -1
+        grad_a = out_grad.clone()
+        grad_b = OperationDispatcher.dispatch("neg", out_grad)  # Use dispatcher for negation
+        
+        # Sum to shape to handle broadcasting
+        if grad_a.shape != a.shape:
+            grad_a = sum_to_shape(grad_a, a.shape)
+        if grad_b.shape != b.shape:
+            grad_b = sum_to_shape(grad_b, b.shape)
+            
+        return (grad_a, grad_b)
 
 def sub(a, b):
-    return EWiseSub.apply(a, b)
+    if isinstance(b, Tensor):
+        return EWiseSub.apply(a, b)
+    else:
+        # b is a scalar
+        return sub_scalar(a, b)
 
 
 class AddScalar(Function):
     @staticmethod
     def forward(ctx, a, scalar):
         ctx.save_for_backward(a)
-        return Tensor(a.data + scalar, requires_grad=a.requires_grad, dtype=a.dtype)
+        # Use dispatcher for scalar addition 
+        result_tensor = OperationDispatcher.dispatch("add", a, scalar)
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
-        grad = Tensor(out_grad.data, requires_grad=False, dtype=out_grad.dtype)
+        # Gradient for tensor is just out_grad cloned, no gradient for scalar
+        grad = out_grad.clone()
         return (grad,)
 
 def add_scalar(a, scalar):
     return AddScalar.apply(a, scalar)
 
 
+class SubScalar(Function):
+    @staticmethod
+    def forward(ctx, a, scalar, reverse=False):
+        ctx.save_for_backward(a, scalar)
+        ctx.reverse = reverse
+        if reverse:
+            # For reverse subtraction (scalar - tensor), use rsub operation
+            result_tensor = OperationDispatcher.dispatch("rsub", a, scalar)
+        else:
+            # Use dispatcher for tensor - scalar
+            result_tensor = OperationDispatcher.dispatch("sub", a, scalar)
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        a, scalar = ctx.saved_tensors
+        reverse = ctx.reverse
+        if reverse:
+            # Gradient of scalar - x is -out_grad
+            grad = OperationDispatcher.dispatch("neg", out_grad)
+        else:
+            # Gradient of x - scalar is out_grad
+            grad = out_grad.clone()
+        grad.requires_grad = False
+        return (grad, None)
+
+
+def sub_scalar(a, scalar, reverse=False):
+    return SubScalar.apply(a, scalar, reverse=reverse)
+
+
 class Negate(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.negative(a.data), requires_grad=a.requires_grad, dtype=a.dtype)
+        result_data = OperationDispatcher.dispatch("neg", a)
+        result_data.requires_grad = a.requires_grad
+        return result_data
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        grad = Tensor(out_grad.data * (-1), requires_grad=False, dtype=out_grad.dtype)
+        # Use neg operation instead of .data * (-1)
+        grad = OperationDispatcher.dispatch("mul", out_grad, -1)
+        grad.requires_grad = False
         return (grad,)
 
 
 def negate(a):
     return Negate.apply(a)
+
+def neg(a):
+    """Alias for negate function - PyTorch compatibility."""
+    return negate(a)
 
 
 class EWiseMul(Function):
@@ -115,34 +190,57 @@ class EWiseMul(Function):
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
         requires_grad = a.requires_grad or b.requires_grad
-        result = Tensor(a.data * b.data, requires_grad=requires_grad, dtype=a.dtype)
-        return result
+        # Use new dispatcher system - pass tensors, get tensor back
+        result_tensor = OperationDispatcher.dispatch("mul", a, b)
+        result_tensor.requires_grad = requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
         a, b = ctx.saved_tensors
-        grad_a = out_grad.data * b.data
-        grad_b = out_grad.data * a.data
-
-        grad_a = sum_to_shape(grad_a, a.shape)
-        grad_b = sum_to_shape(grad_b, b.shape)
-        return (Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype), Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype))
+        # Gradients for multiplication: d/da(a*b) = b, d/db(a*b) = a
+        # Use dispatcher to avoid creating computation graph in backward
+        grad_a = OperationDispatcher.dispatch("mul", out_grad, b)
+        grad_b = OperationDispatcher.dispatch("mul", out_grad, a)
+        
+        # Sum to shape to handle broadcasting
+        if grad_a.shape != a.shape:
+            grad_a = sum_to_shape(grad_a, a.shape)
+        if grad_b.shape != b.shape:
+            grad_b = sum_to_shape(grad_b, b.shape)
+            
+        return (grad_a, grad_b)
 
 
 def multiply(a, b):
     return EWiseMul.apply(a, b)
+
+def mul(a, b):
+    if isinstance(b, Tensor):
+        return EWiseMul.apply(a, b)
+    else:
+        # b is a scalar
+        return mul_scalar(a, b)
+
+def div(a, b):
+    return EWiseDiv.apply(a, b)
 
 
 class MulScalar(Function):
     @staticmethod
     def forward(ctx, a, scalar):
         ctx.save_for_backward(a, scalar)
-        return Tensor(a.data * scalar, requires_grad=a.requires_grad, dtype=a.dtype)
+        # Use dispatcher for scalar multiplication 
+        result_tensor = OperationDispatcher.dispatch("mul", a, scalar)
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, scalar = ctx.saved_tensors
-        grad = Tensor(out_grad.data * scalar, requires_grad=False, dtype=out_grad.dtype)
+        # Use dispatcher for scalar multiplication in backward pass
+        grad = OperationDispatcher.dispatch("mul", out_grad, scalar)
+        grad.requires_grad = False
         return (grad, )
 
 
@@ -155,22 +253,50 @@ class EWiseDiv(Function):
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
         requires_grad = a.requires_grad or b.requires_grad
-        return Tensor(a.data / b.data, requires_grad=requires_grad, dtype=a.dtype)
+        # Use new dispatcher system - pass tensors, get tensor back
+        result_tensor = OperationDispatcher.dispatch("div", a, b)
+        result_tensor.requires_grad = requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, b = ctx.saved_tensors
-        grad_a = out_grad.data / b.data
-        grad_b = out_grad.data * (-1) * a.data / b.data / b.data
-        grad_a = sum_to_shape(grad_a, a.shape)
-        grad_b = sum_to_shape(grad_b, b.shape)
-        return (
-            Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype), 
-            Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype)
-        )
+        
+        # Compute gradients using dispatcher operations
+        # grad_a = out_grad / b
+        grad_a = OperationDispatcher.dispatch("div", out_grad, b)
+        
+        # grad_b = -out_grad * a / (b * b)
+        temp1 = OperationDispatcher.dispatch("mul", out_grad, a)
+        temp2 = OperationDispatcher.dispatch("mul", b, b)
+        temp3 = OperationDispatcher.dispatch("div", temp1, temp2)
+        grad_b = OperationDispatcher.dispatch("neg", temp3)
+        
+        # Sum to shape to handle broadcasting
+        if grad_a.shape != a.shape:
+            grad_a = sum_to_shape(grad_a, a.shape)
+        if grad_b.shape != b.shape:
+            grad_b = sum_to_shape(grad_b, b.shape)
+            
+        return (grad_a, grad_b)
 
 def divide(a, b):
     return EWiseDiv.apply(a, b)
+
+def truediv(a, b):
+    """True division - alias for divide."""
+    if isinstance(b, Tensor):
+        return EWiseDiv.apply(a, b)
+    else:
+        # b is a scalar
+        return divide_scalar(a, b)
+
+def floordiv(a, b):
+    """Floor division - divide and cast to integer."""
+    # First do regular division
+    result = truediv(a, b)
+    # Cast to int64 for floor division behavior
+    return result.to(genesis.int64)
 
 class DivScalar(Function):
     @staticmethod
@@ -178,19 +304,29 @@ class DivScalar(Function):
         ctx.save_for_backward(a, scalar)
         ctx.reverse = reverse
         if reverse:
-            result_data = scalar / a.data
+            # For reverse division (scalar / tensor), use rdiv operation
+            result_tensor = OperationDispatcher.dispatch("rdiv", a, scalar)
         else:
-            result_data = a.data / scalar
-        return Tensor(result_data, requires_grad=a.requires_grad, dtype=a.dtype)
+            # Use dispatcher for tensor / scalar 
+            result_tensor = OperationDispatcher.dispatch("div", a, scalar)
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, scalar = ctx.saved_tensors
         reverse = ctx.reverse
         if reverse:
-            grad = Tensor(-scalar * out_grad.data / (a.data ** 2), requires_grad=False, dtype=out_grad.dtype)
+            # Gradient of scalar/x is -scalar/x^2 * out_grad
+            # First compute x^2
+            x_squared = OperationDispatcher.dispatch("mul", a, a)
+            # Then compute -scalar/x^2 * out_grad
+            neg_scalar_over_x2 = OperationDispatcher.dispatch("rdiv", x_squared, -scalar)
+            grad = OperationDispatcher.dispatch("mul", neg_scalar_over_x2, out_grad)
         else:
-            grad = Tensor(out_grad.data / scalar, requires_grad=False, dtype=out_grad.dtype)
+            # Gradient of x/scalar is out_grad/scalar
+            grad = OperationDispatcher.dispatch("div", out_grad, scalar)
+        grad.requires_grad = False
         return (grad, None)
 
 def divide_scalar(a, scalar, reverse=False):
@@ -200,41 +336,75 @@ class PowScalar(Function):
     @staticmethod
     def forward(ctx, a, scalar, reverse=False):
         ctx.save_for_backward(a, scalar)
-        if reverse:
-            result_data = array_api.power(scalar, a.data)
-        else:
-            result_data = array_api.power(a.data, scalar)
         ctx.reverse = reverse
-        ctx.result_data = result_data
-        return Tensor(result_data, requires_grad=a.requires_grad, dtype=a.dtype)
+        if reverse:
+            # For reverse power (scalar ** tensor), use rpower operation
+            result_tensor = OperationDispatcher.dispatch("rpower", a, scalar)
+        else:
+            # Use dispatcher for tensor ** scalar 
+            result_tensor = OperationDispatcher.dispatch("pow", a, scalar)
+        result_tensor.requires_grad = a.requires_grad
+        ctx.result_tensor = result_tensor  # Save for backward
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, scalar = ctx.saved_tensors
         reverse = ctx.reverse
+        result_tensor = ctx.result_tensor
         if reverse:
-            grad = Tensor(out_grad.data * ctx.result_data * math.log(scalar), requires_grad=False, dtype=out_grad.dtype)
+            # Gradient of scalar^x is scalar^x * ln(scalar) * out_grad
+            ln_scalar = math.log(scalar)
+            grad = OperationDispatcher.dispatch("mul", result_tensor, ln_scalar)
+            grad = OperationDispatcher.dispatch("mul", grad, out_grad)
         else:
-            grad = Tensor(scalar * out_grad.data * pow_scalar(a, scalar - 1).data, requires_grad=False, dtype=out_grad.dtype)
-        return (grad, )
+            # Gradient of x^scalar is scalar * x^(scalar-1) * out_grad
+            if scalar == 0:
+                grad = genesis.zeros_like(a)
+            else:
+                x_pow_s_minus_1 = OperationDispatcher.dispatch("pow", a, scalar - 1)
+                grad = OperationDispatcher.dispatch("mul", x_pow_s_minus_1, scalar)
+                grad = OperationDispatcher.dispatch("mul", grad, out_grad)
+        grad.requires_grad = False
+        return (grad, None)
 
 
 def pow_scalar(a, scalar, reverse=False):
     return PowScalar.apply(a, scalar, reverse=reverse)
 
+
+def pow(a, b):
+    """Power operation - supports both tensor and scalar exponents."""
+    if isinstance(b, Tensor):
+        # For tensor-tensor power, we need to implement EWisePow
+        # For now, just raise NotImplementedError
+        raise NotImplementedError("Tensor-tensor power not implemented yet")
+    else:
+        # b is a scalar
+        return pow_scalar(a, b)
+
 class Sin(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
+        # Use new dispatcher system - pass tensor, get tensor back
+        result_tensor = OperationDispatcher.dispatch("sin", a)
         if genesis.upgrade:
-            return Tensor(array_api.sin(a.data).float(), requires_grad=a.requires_grad, dtype=genesis.float32)
+            # Convert to float32 for upgrade mode
+            result_tensor = result_tensor.to(genesis.float32)
+            result_tensor.requires_grad = a.requires_grad
+            return result_tensor
         else:
-            return Tensor(array_api.sin(a.data), requires_grad=a.requires_grad, dtype=a.dtype)
+            result_tensor.requires_grad = a.requires_grad
+            return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        grad = Tensor(out_grad.data * array_api.cos(a.data), requires_grad=False, dtype=out_grad.dtype)
+        # Gradient of sin(x) is cos(x)
+        cos_a = OperationDispatcher.dispatch("cos", a)
+        grad = OperationDispatcher.dispatch("mul", out_grad, cos_a)
+        grad.requires_grad = False
         return (grad, )
 
 def sin(a):
@@ -246,15 +416,25 @@ class Cos(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
+        # Use new dispatcher system - pass tensor, get tensor back
+        result_tensor = OperationDispatcher.dispatch("cos", a)
         if genesis.upgrade:
-            return Tensor(array_api.cos(a.data).float(), requires_grad=a.requires_grad, dtype=genesis.float32)
+            # Convert to float32 for upgrade mode
+            result_tensor = result_tensor.to(genesis.float32)
+            result_tensor.requires_grad = a.requires_grad
+            return result_tensor
         else:
-            return Tensor(array_api.cos(a.data), requires_grad=a.requires_grad, dtype=a.dtype)
+            result_tensor.requires_grad = a.requires_grad
+            return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        grad = Tensor(out_grad.data * (-1) * array_api.sin(a.data), requires_grad=False, dtype=out_grad.dtype)
+        # Gradient of cos(x) is -sin(x)
+        sin_a = OperationDispatcher.dispatch("sin", a)
+        neg_sin_a = OperationDispatcher.dispatch("neg", sin_a)
+        grad = OperationDispatcher.dispatch("mul", out_grad, neg_sin_a)
+        grad.requires_grad = False
         return (grad, )
 
 def cos(a):
@@ -267,15 +447,23 @@ class Log(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
+        # Use new dispatcher system - pass tensor, get tensor back
+        result_tensor = OperationDispatcher.dispatch("log", a)
         if genesis.upgrade:
-            return Tensor(array_api.log(a.data).float(), requires_grad=a.requires_grad, dtype=genesis.float32)
+            # Convert to float32 for upgrade mode
+            result_tensor = result_tensor.to(genesis.float32)
+            result_tensor.requires_grad = a.requires_grad
+            return result_tensor
         else:
-            return Tensor(array_api.log(a.data), requires_grad=a.requires_grad, dtype=a.dtype)
+            result_tensor.requires_grad = a.requires_grad
+            return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        grad = Tensor(out_grad.data / a.data, requires_grad=False, dtype=out_grad.dtype)
+        # Gradient of log(x) is 1/x
+        grad = OperationDispatcher.dispatch("div", out_grad, a)
+        grad.requires_grad = False
         return (grad, )
 
 def log(a):
@@ -288,15 +476,24 @@ class Exp(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
+        # Use new dispatcher system - pass tensor, get tensor back
+        result_tensor = OperationDispatcher.dispatch("exp", a)
         if genesis.upgrade:
-            return Tensor(array_api.exp(a.data).float(), requires_grad=a.requires_grad, dtype=genesis.float32)
+            # Convert to float32 for upgrade mode
+            result_tensor = result_tensor.to(genesis.float32)
+            result_tensor.requires_grad = a.requires_grad
+            return result_tensor
         else:
-            return Tensor(array_api.exp(a.data), requires_grad=a.requires_grad, dtype=a.dtype)
+            result_tensor.requires_grad = a.requires_grad
+            return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        grad = Tensor(out_grad.data * array_api.exp(a.data), requires_grad=False, dtype=out_grad.dtype)
+        # Gradient of exp(x) is exp(x)
+        exp_a = OperationDispatcher.dispatch("exp", a)
+        grad = OperationDispatcher.dispatch("mul", out_grad, exp_a)
+        grad.requires_grad = False
         return (grad, )
 
 def exp(a):
@@ -308,29 +505,59 @@ class Sqrt(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.sqrt(a.data), requires_grad=a.requires_grad, dtype=a.dtype)
+        # Use new dispatcher system - pass tensor, get tensor back
+        result_tensor = OperationDispatcher.dispatch("sqrt", a)
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        grad = Tensor(out_grad.data / (2 * array_api.sqrt(a.data)), requires_grad=False, dtype=out_grad.dtype)
+        # Gradient of sqrt(x) is 1/(2*sqrt(x))
+        sqrt_a = OperationDispatcher.dispatch("sqrt", a)
+        two_sqrt_a = OperationDispatcher.dispatch("mul", sqrt_a, 2)
+        grad = OperationDispatcher.dispatch("div", out_grad, two_sqrt_a)
+        grad.requires_grad = False
         return (grad, )
 
 def sqrt(a):
     return Sqrt.apply(a)
 
+
+class Equal(Function):
+    @staticmethod
+    def forward(ctx, a, b):
+        # Use new dispatcher system - pass tensors, get tensor back
+        result_tensor = OperationDispatcher.dispatch("eq", a, b)
+        result_tensor.requires_grad = False  # Boolean tensors don't need gradients
+        return result_tensor
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        # Equality comparison is not differentiable
+        return (None, None)
+
+
+def eq(a, b):
+    """Element-wise equality comparison."""
+    return Equal.apply(a, b)
+
 class Abs(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.abs(a.data), requires_grad=a.requires_grad, dtype=a.dtype)
+        # Use new dispatcher system - pass tensor, get tensor back
+        result_tensor = OperationDispatcher.dispatch("abs", a)
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
         # Gradient of abs(x) is sign(x), but undefined at x=0
         # We use the convention that sign(0) = 0
-        grad = Tensor(array_api.sign(a.data) * out_grad.data, requires_grad=False, dtype=out_grad.dtype)
+        sign_result = OperationDispatcher.dispatch("sign", a)
+        grad = OperationDispatcher.dispatch("mul", sign_result, out_grad)
         return (grad, )
 
 def abs(a):
@@ -340,18 +567,21 @@ class Clamp(Function):
     @staticmethod
     def forward(ctx, a, min_val=None, max_val=None):
         ctx.save_for_backward(a, min_val, max_val)
-        return Tensor(array_api.clamp(a.data, min_val, max_val), requires_grad=a.requires_grad, dtype=a.dtype)
+        result = OperationDispatcher.dispatch("clamp", a, min_val, max_val)
+        result.requires_grad = a.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
         a, min_val, max_val = ctx.saved_tensors
         # Gradient of clamp: 1 where min_val <= x <= max_val, 0 otherwise
-        mask = array_api.ones(a.shape, device=a.device, dtype=a.dtype)
+        mask = genesis.ones(a.shape, device=a.device, dtype=a.dtype)
         if min_val is not None:
-            mask = mask * array_api.greater_equal(a.data, min_val)
+            mask = mask * (a >= min_val)
         if max_val is not None:
-            mask = mask * array_api.less_equal(a.data, max_val)
-        grad = Tensor(mask * out_grad.data, requires_grad=False, dtype=out_grad.dtype)
+            mask = mask * (a <= max_val)
+        grad = mask * out_grad
+        grad.requires_grad = False
         return (grad,)
 
 def clamp(a, min_val=None, max_val=None):
@@ -365,7 +595,9 @@ class Where(Function):
     def forward(ctx, condition, x, y):
         """Element-wise selection of values from x or y based on condition."""
         ctx.save_for_backward(condition, x, y)
-        return Tensor(array_api.where(condition.data, x.data, y.data), requires_grad=(x.requires_grad or y.requires_grad), dtype=x.dtype)
+        result = OperationDispatcher.dispatch("where", condition, x, y)
+        result.requires_grad = x.requires_grad or y.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -393,8 +625,9 @@ class Argmax(Function):
     def forward(ctx, a, dim=None, keepdim=False):
         """Find indices of maximum values along dimension."""
         ctx.save_for_backward(a, dim, keepdim)
-        result_data = array_api.argmax(a.data, dim=dim, keepdim=keepdim)
-        return Tensor(result_data, requires_grad=False, dtype=genesis.int64)
+        result_data = OperationDispatcher.dispatch("argmax", a, dim=dim, keepdim=keepdim)
+        result_data.requires_grad = False
+        return result_data
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -406,8 +639,9 @@ class Argmin(Function):
     def forward(ctx, a, dim=None, keepdim=False):
         """Find indices of minimum values along dimension."""
         ctx.save_for_backward(a, dim, keepdim)
-        result_data = array_api.argmin(a.data, dim=dim, keepdim=keepdim)
-        return Tensor(result_data, requires_grad=False, dtype=genesis.int64)
+        result_data = OperationDispatcher.dispatch("argmin", a, dim=dim, keepdim=keepdim)
+        result_data.requires_grad = False
+        return result_data
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -427,8 +661,9 @@ class Permute(Function):
     def forward(ctx, a, dims):
         """Permute the dimensions of the input tensor."""
         ctx.save_for_backward(a, dims)
-        result_data = array_api.permute(a.data, dims)
-        return Tensor(result_data, requires_grad=a.requires_grad, dtype=a.dtype)
+        result_data = OperationDispatcher.dispatch("permute", a, dims)
+        result_data.requires_grad = a.requires_grad
+        return result_data
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -453,8 +688,9 @@ class Gather(Function):
     def forward(ctx, input, dim, index):
         """Gather values along dimension using indices."""
         ctx.save_for_backward(input, dim, index)
-        result_data = array_api.gather(input.data, dim, index.data)
-        return Tensor(result_data, requires_grad=input.requires_grad, dtype=input.dtype)
+        result_data = OperationDispatcher.dispatch("gather", input, dim, index)
+        result_data.requires_grad = input.requires_grad
+        return result_data
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -467,9 +703,10 @@ class Gather(Function):
             # Create tensor of zeros with same shape as input but same dtype as out_grad
             input_grad = genesis.zeros(input.shape, dtype=out_grad.dtype, device=input.device, requires_grad=False)
             
-            # Use array_api.scatter directly to avoid triggering autograd
-            result_data = array_api.scatter(input_grad.data, dim, index.data, out_grad.data)
-            input_grad = Tensor(result_data, requires_grad=False, dtype=out_grad.dtype, device=input.device)
+            # Use dispatcher directly to avoid triggering autograd
+            result_data = OperationDispatcher.dispatch("scatter", input_grad, dim, index, out_grad)
+            result_data.requires_grad = False
+            input_grad = result_data
         
         # Dim gradient: always None (scalar, not a tensor)
         dim_grad = None
@@ -477,8 +714,9 @@ class Gather(Function):
         # Index gradient: always zero tensor with same shape as index
         index_grad = None
         if index.requires_grad:
-            zeros_data = array_api.zeros_like(index.data)
-            index_grad = Tensor(zeros_data, requires_grad=False, dtype=index.dtype, device=index.device)
+            zeros_data = OperationDispatcher.dispatch("zeros_like", index)
+            zeros_data.requires_grad = False
+            index_grad = zeros_data
         
         return (input_grad, index_grad)
 
@@ -487,8 +725,9 @@ class Scatter(Function):
     def forward(ctx, input, dim, index, src):
         """Scatter values from src along dimension using indices."""
         ctx.save_for_backward(input, dim, index, src)
-        result_data = array_api.scatter(input.data, dim, index.data, src.data)
-        return Tensor(result_data, requires_grad=(input.requires_grad or src.requires_grad), dtype=input.dtype)
+        result_data = OperationDispatcher.dispatch("scatter", input, dim, index, src)
+        result_data.requires_grad = input.requires_grad or src.requires_grad
+        return result_data
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -501,9 +740,10 @@ class Scatter(Function):
             # Create tensor of zeros with same shape as src but same dtype as out_grad  
             zeros_at_indices = genesis.zeros(src.shape, dtype=out_grad.dtype, device=src.device, requires_grad=False)
             
-            # Use array_api.scatter directly to avoid triggering autograd
-            result_data = array_api.scatter(out_grad.data, dim, index.data, zeros_at_indices.data)
-            input_grad = Tensor(result_data, requires_grad=False, dtype=out_grad.dtype, device=input.device)
+            # Use dispatcher directly to avoid triggering autograd
+            result_data = OperationDispatcher.dispatch("scatter", out_grad, dim, index, zeros_at_indices)
+            result_data.requires_grad = False
+            input_grad = result_data
         
         # Dim gradient: always None (scalar, not a tensor)
         dim_grad = None
@@ -511,14 +751,16 @@ class Scatter(Function):
         # Index gradient: always zero tensor with same shape as index
         index_grad = None
         if index.requires_grad:
-            zeros_data = array_api.zeros_like(index.data)
-            index_grad = Tensor(zeros_data, requires_grad=False, dtype=index.dtype, device=index.device)
+            zeros_data = OperationDispatcher.dispatch("zeros_like", index)
+            zeros_data.requires_grad = False
+            index_grad = zeros_data
         
         # Source gradient: gather from out_grad using same indices
         src_grad = None
         if src.requires_grad:
-            result_data = array_api.gather(out_grad.data, dim, index.data)
-            src_grad = Tensor(result_data, requires_grad=False, dtype=src.dtype, device=src.device)
+            result_data = OperationDispatcher.dispatch("gather", out_grad, dim, index)
+            result_data.requires_grad = False
+            src_grad = result_data
         
         return (input_grad, index_grad, src_grad)
 
@@ -533,18 +775,24 @@ def scatter(input, dim, index, src):
 class Transpose(Function):
     @staticmethod
     def forward(ctx, a, axis=None):
-        ctx.save_for_backward(a, axis)
+        ctx.save_for_backward(a)
+        ctx.axis = axis
         if axis is None:
-            return Tensor(array_api.swapaxes(a.data, -1, -2), requires_grad=a.requires_grad, dtype=a.dtype)
-        return Tensor(array_api.swapaxes(a.data, axis[0], axis[1]), requires_grad=a.requires_grad, dtype=a.dtype)
+            result = OperationDispatcher.dispatch("transpose", a, -1, -2)
+            result.requires_grad = a.requires_grad
+            return result
+        result = OperationDispatcher.dispatch("transpose", a, axis[0], axis[1])
+        result.requires_grad = a.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
-        a, axis = ctx.saved_tensors
+        a, = ctx.saved_tensors
+        axis = ctx.axis
         if axis is None:
-            grad = Tensor(array_api.swapaxes(out_grad.data, -1, -2), requires_grad=False, dtype=out_grad.dtype)
+            grad = OperationDispatcher.dispatch("transpose", out_grad, -1, -2)
         else:
-            grad = Tensor(array_api.swapaxes(out_grad.data, axis[0], axis[1]), requires_grad=False, dtype=out_grad.dtype)
+            grad = OperationDispatcher.dispatch("transpose", out_grad, axis[0], axis[1])
         return (grad, )
 
 
@@ -556,34 +804,69 @@ class Reshape(Function):
     @staticmethod
     def forward(ctx, a, shape):
         ctx.save_for_backward(a)
-        return Tensor(array_api.reshape(a.data, shape), device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        result = OperationDispatcher.dispatch("reshape", a, shape)
+        result.requires_grad = a.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        grad = Tensor(array_api.reshape(out_grad.data, a.shape), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        grad = OperationDispatcher.dispatch("reshape", out_grad, a.shape)
+        return (grad,)
         return (grad, )
 
-def reshape(a, shape):
-    return Reshape.apply(a, shape)
+def reshape(a, *shape):
+    """Reshape tensor to new shape - PyTorch compatible API.
+
+    Args:
+        a: Input tensor
+        *shape: New shape as multiple arguments or single tuple/list
+
+    Examples:
+        reshape(tensor, 3, 4)      # Multiple arguments
+        reshape(tensor, (3, 4))    # Tuple argument
+        reshape(tensor, -1)        # Single dimension
+    """
+    # Handle different argument patterns like PyTorch
+    if len(shape) == 1:
+        # Single argument - could be tuple, list, or single int
+        if isinstance(shape[0], (tuple, list)):
+            new_shape = tuple(shape[0])
+        else:
+            new_shape = (shape[0],)
+    else:
+        # Multiple arguments
+        new_shape = shape
+
+    return Reshape.apply(a, new_shape)
 
 class Expand(Function):
     @staticmethod
     def forward(ctx, a, new_shape):
         ctx.a_shape = a.shape
         ctx.new_shape = new_shape
-        return Tensor(array_api.expand(a.data, new_shape), requires_grad=a.requires_grad, device=a.device, dtype=a.dtype)
+        result = OperationDispatcher.dispatch("expand", a, new_shape)
+        result.requires_grad = a.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
         grad_input = out_grad 
         for i, (a_dim, new_dim) in enumerate(zip(ctx.a_shape, ctx.new_shape)):
             if a_dim == 1 and new_dim > 1:
-                grad_input = array_api.reduce_sum(grad_input.data, axis=i, keepdims=True) 
-        grad_input = Tensor(grad_input.view(ctx.a_shape), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
-        return grad_input, None
+                grad_input = OperationDispatcher.dispatch("sum", grad_input, axis=i, keepdims=True) 
+        grad_input = grad_input.view(ctx.a_shape)
+        grad_input.requires_grad = False
+        return (grad_input,)
 
-def expand(a, shape):
+def expand(a, *shape):
+    # Handle both expand(tensor, (2, 3, 4)) and expand(tensor, 2, 3, 4) like PyTorch
+    if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+        shape = shape[0]
+    elif len(shape) > 1:
+        shape = tuple(shape)
+    else:
+        shape = shape[0] if shape else ()
     return Expand.apply(a, shape)
 
 
@@ -592,14 +875,21 @@ class View(Function):
     def forward(ctx, a, shape):
         ctx.save_for_backward(a)
         ctx.original_shape = a.shape
-        return Tensor(a.data.view(shape), requires_grad=a.requires_grad, device=a.device, dtype=a.dtype)
+        result = a.view(shape)
+        result.requires_grad = a.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
-        return (Tensor(out_grad.data.view(ctx.original_shape), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype),)
+        reshaped_grad = OperationDispatcher.dispatch("reshape", out_grad, ctx.original_shape)
+        reshaped_grad.requires_grad = False
+        return (reshaped_grad,)
 
 # TODO for now, view use reshape
-def view(a, shape):
+def view(a, *shape):
+    # Handle both view(tensor, (shape,)) and view(tensor, dim1, dim2, ...)
+    if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+        shape = shape[0]
     return Reshape.apply(a, shape)
 
 class Flatten(Function):
@@ -608,12 +898,16 @@ class Flatten(Function):
         ctx.original_shape = a.shape
         ctx.start_dim = start_dim
         ctx.end_dim = end_dim if end_dim is not None else len(a.shape) - 1
-        new_shape = a.shape[:start_dim] + (-1,) + a.shape[ctx.end_dim + 1:] 
-        return Tensor(a.data.view(new_shape), device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
-    
+        new_shape = a.shape[:start_dim] + (-1,) + a.shape[ctx.end_dim + 1:]
+        result = a.view(new_shape)
+        result.requires_grad = a.requires_grad
+        return result
+
     @staticmethod
     def backward(ctx, out_grad):
-        return (Tensor(out_grad.data.view(ctx.original_shape), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype),) 
+        reshaped_grad = OperationDispatcher.dispatch("reshape", out_grad, ctx.original_shape)
+        reshaped_grad.requires_grad = False
+        return (reshaped_grad,) 
 
 def flatten(a, start_dim=0, end_dim=None):
     return Flatten.apply(a, start_dim, end_dim)
@@ -646,17 +940,9 @@ class SetItem(Function):
         # Determine indexing type
         ctx.is_basic = _is_basic_indexing(index)
         
-        # Convert index to proper format for NDArray layer
-        if isinstance(index, Tensor):
-            index_data = index.data
-        else:
-            index_data = index
-            
-        if isinstance(value, Tensor):
-            a.data[index_data] = value.data
-        else:
-            a.data[index_data] = value
-        return a 
+        # Use dispatcher for setitem operation
+        result = OperationDispatcher.dispatch("setitem", a, index, value)
+        return result 
     
     @staticmethod
     def backward(ctx, out_grad):
@@ -678,12 +964,10 @@ class GetItemView(Function):
         ctx.save_for_backward(a)
         ctx.index = index
         
-        # Basic indexing returns a view
-        result_data = a.data[index]
-        
-        tensor = Tensor.__new__(Tensor)
-        tensor.init([], data=result_data, requires_grad=a.requires_grad)
-        return tensor
+        # Use dispatcher for indexing - like EWiseAdd does
+        result_tensor = OperationDispatcher.dispatch("getitem", a, index)
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
     
     @staticmethod
     def backward(ctx, out_grad):
@@ -694,7 +978,7 @@ class GetItemView(Function):
         grad = genesis.zeros(*a.shape, dtype=out_grad.dtype, device=out_grad.device, requires_grad=False)
         
         # For view indexing, gradient flows back to original positions
-        grad.data[index] = out_grad.data
+        grad = OperationDispatcher.dispatch("setitem", grad, index, out_grad)
         return (grad, None)
 
 class GetItemGather(Function):
@@ -705,18 +989,17 @@ class GetItemGather(Function):
         ctx.original_shape = a.shape
         
         if isinstance(index, Tensor):
-            # Tensor indexing
-            result_data = a.data[index.data]
+            # Tensor indexing - use OperationDispatcher
+            result_tensor = OperationDispatcher.dispatch("getitem", a, index)
             ctx.tensor_index = True
         else:
-            # Other advanced indexing (list, array, etc.)
-            result_data = a.data[index]
+            # Other advanced indexing (list, array, etc.) - use OperationDispatcher
+            result_tensor = OperationDispatcher.dispatch("getitem", a, index)
             ctx.tensor_index = False
             ctx.index = index
         
-        tensor = Tensor.__new__(Tensor)
-        tensor.init([], data=result_data, requires_grad=a.requires_grad)
-        return tensor
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
     
     @staticmethod  
     def backward(ctx, out_grad):
@@ -728,14 +1011,8 @@ class GetItemGather(Function):
         
         if ctx.tensor_index:
             index = saved[1]
-            # Handle mixed indexing case where index is a tuple  
-            if isinstance(index.data, tuple) and len(index.data) == 2:
-                # Mixed 2D indexing: need to scatter 1D out_grad to 2D grad tensor
-                row_idx, col_idx = index.data
-                # Use the existing CUDAStorage mixed indexing setitem
-                grad.data[index.data] = out_grad.data
-            else:
-                grad.data[index.data] = out_grad.data
+            # Use OperationDispatcher for setitem
+            grad = OperationDispatcher.dispatch("setitem", grad, index, out_grad)
         else:
             # Use saved index for other cases
             if isinstance(ctx.index, list):
@@ -746,7 +1023,8 @@ class GetItemGather(Function):
                     out_grad_row = out_grad[i]
                     grad[idx] = grad_row + out_grad_row
             else:
-                grad.data[ctx.index] = out_grad.data
+                # Use OperationDispatcher for other index types
+                grad = OperationDispatcher.dispatch("setitem", grad, ctx.index, out_grad)
         
         return (grad, None)
 
@@ -768,7 +1046,9 @@ class BroadcastTo(Function):
     @staticmethod
     def forward(ctx, a, shape):
         ctx.save_for_backward(a, shape)
-        return Tensor(array_api.broadcast_to(a.data, shape), device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        result = OperationDispatcher.dispatch("broadcast_to", a, shape)
+        result.requires_grad = a.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -779,8 +1059,8 @@ class BroadcastTo(Function):
         for i in range(len(base_shape)):
             if base_shape[i] != shape[i]:
                 axis.append(i)
-        grad = array_api.sum(out_grad.data, axis=tuple(axis))
-        grad = Tensor(array_api.reshape(grad, input_shape), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        grad = OperationDispatcher.dispatch("sum", out_grad, axis=tuple(axis))
+        grad = OperationDispatcher.dispatch("reshape", grad, input_shape)
         return (grad, )
 
 
@@ -800,14 +1080,15 @@ class Summation(Function):
         # For bool tensors, sum should return int64 (like PyTorch)
         result_dtype = genesis.int64 if a.dtype == genesis.bool else a.dtype
         
-        # Get the sum result
-        sum_result = array_api.sum(a.data, axis=axis, keepdims=keepdims)
+        # Get the sum result using dispatcher
+        sum_result = OperationDispatcher.dispatch("sum", a, axis=axis, keepdims=keepdims)
         
         # For bool tensors, the GPU ops already converted to int64, so we need to update the dtype
         if a.dtype == genesis.bool and hasattr(sum_result, 'dtype'):
             sum_result._dtype = result_dtype
         
-        output = Tensor(sum_result, device=a.device, requires_grad=a.requires_grad, dtype=result_dtype)
+        sum_result.requires_grad = a.requires_grad
+        output = sum_result
         return output
 
     @staticmethod
@@ -828,8 +1109,11 @@ class Summation(Function):
             for x in sorted(new_axis):
                 grad_shape.insert(x, 1)
 
-        grad = Tensor(array_api.broadcast_to(
-            array_api.reshape(out_grad.data, grad_shape), hs.shape), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        # Reshape gradient to handle keepdims=False case
+        reshaped_grad = OperationDispatcher.dispatch("reshape", out_grad, new_shape=grad_shape)
+        # Broadcast to original input shape
+        grad = OperationDispatcher.dispatch("broadcast_to", reshaped_grad, new_shape=hs.shape)
+        grad.requires_grad = False
         return (grad, )
 
 def summation(a, axis=None, keepdims=False):
@@ -861,10 +1145,10 @@ class Mean(Function):
             normalized_axis = tuple(ax if ax >= 0 else ax + ndim for ax in axis)
             ctx.num_elements = functools_reduce(operator.mul, [shape[ax] for ax in normalized_axis], 1)
         
-        # Use sum + divide approach directly with array_api (like PyTorch)
-        sum_data = array_api.sum(a.data, axis=axis, keepdims=keepdims)
-        mean_data = sum_data / ctx.num_elements
-        output = Tensor(mean_data, device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        # Use sum + divide approach directly with dispatcher (like PyTorch)
+        sum_result = OperationDispatcher.dispatch("sum", a, axis=axis, keepdims=keepdims)
+        output = OperationDispatcher.dispatch("truediv", sum_result, ctx.num_elements)
+        output.requires_grad = a.requires_grad
         return output
 
     @staticmethod
@@ -893,10 +1177,9 @@ class Mean(Function):
                 grad_shape.insert(x, 1)
 
         # Scale gradient by 1/num_elements (since mean = sum/num_elements)
-        scaled_grad = out_grad.data / num_elements
-        grad = Tensor(array_api.broadcast_to(
-            array_api.reshape(scaled_grad, grad_shape), hs.shape), 
-            device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        scaled_grad = OperationDispatcher.dispatch("truediv", out_grad, num_elements)
+        reshaped_grad = OperationDispatcher.dispatch("reshape", scaled_grad, grad_shape)
+        grad = OperationDispatcher.dispatch("broadcast_to", reshaped_grad, hs.shape)
         return (grad, )
 
 def mean(a, axis=None, keepdims=False):
@@ -917,26 +1200,31 @@ class Matmul(Function):
     @staticmethod
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
-        c = a.data @ b.data
         requires_grad = a.requires_grad or b.requires_grad
-        return Tensor(c, device=a.device, requires_grad=requires_grad, dtype=a.dtype)
+        # Use new dispatcher system - pass tensors, get tensor back
+        result_tensor = OperationDispatcher.dispatch("matmul", a, b)
+        result_tensor.requires_grad = requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
         a, b = ctx.saved_tensors
-        a_grad = out_grad.data @ array_api.transpose(b.data, (-1, -2))
-        b_grad = array_api.transpose(a.data, (-1, -2)) @ out_grad.data
+        # Use dispatcher for transpose and matmul operations
+        b_transposed = OperationDispatcher.dispatch("transpose", b, -1, -2)
+        a_grad = OperationDispatcher.dispatch("matmul", out_grad, b_transposed)
+        
+        a_transposed = OperationDispatcher.dispatch("transpose", a, -1, -2)
+        b_grad = OperationDispatcher.dispatch("matmul", a_transposed, out_grad)
 
         dim1 = len(a.shape)
         dim2 = len(b.shape)
         dim3 = len(out_grad.shape)
 
         if dim3 > dim1:
-            a_grad = array_api.sum(a_grad, tuple(range(dim3 - dim1)))
+            a_grad = OperationDispatcher.dispatch("sum", a_grad, axis=tuple(range(dim3 - dim1)))
         if dim3 > dim2:
-            b_grad = array_api.sum(b_grad, tuple(range(dim3 - dim2)))
-        a_grad = Tensor(a_grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
-        b_grad = Tensor(b_grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+            b_grad = OperationDispatcher.dispatch("sum", b_grad, axis=tuple(range(dim3 - dim2)))
+        
         return (a_grad, b_grad)
 
     def get_total_time(self):
@@ -950,13 +1238,18 @@ class ReLU(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.maximum(a.data, 0), device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        # Use new dispatcher system - pass tensor, get tensor back
+        result_tensor = OperationDispatcher.dispatch("maximum", a, 0)
+        result_tensor.requires_grad = a.requires_grad
+        return result_tensor
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
-        input_relu = array_api.maximum(a.data, 0)
-        grad = Tensor(out_grad.data * (input_relu > 0), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        # Gradient is out_grad where input > 0, 0 elsewhere
+        relu_mask = OperationDispatcher.dispatch("gt", a, 0)
+        grad = OperationDispatcher.dispatch("mul", out_grad, relu_mask)
+        grad.requires_grad = False
         return (grad, )
 
 def relu(a):
@@ -966,37 +1259,41 @@ class LogSumExp(Function):
     @staticmethod
     def forward(ctx, a, axis=None):
         ctx.save_for_backward(a)
-        Z = a.data
         ctx.axis = axis
-        ctx.max_value = Z.max(axis, keepdims=True)
-        max_z = array_api.broadcast_to(ctx.max_value, Z.shape)
-        if genesis.upgrade:
-            Z = array_api.exp(Z - max_z).float()
-        else:
-            Z = array_api.exp(Z - max_z)
-        Z = array_api.sum(Z, axis)
-        Z = array_api.log(Z)
-        if genesis.upgrade:
-            return Tensor(Z + array_api.reshape(ctx.max_value, Z.shape), device=a.device, requires_grad=a.requires_grad, dtype=genesis.float32)
-        else:
-            return Tensor(Z + array_api.reshape(ctx.max_value, Z.shape), device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        max_value = OperationDispatcher.dispatch("max", a, axis=axis, keepdims=True)
+        ctx.max_value = max_value
+        max_z = OperationDispatcher.dispatch("broadcast_to", max_value, a.shape)
+        Z_minus_max = OperationDispatcher.dispatch("sub", a, max_z)
+        Z_exp = OperationDispatcher.dispatch("exp", Z_minus_max)
+        Z_sum = OperationDispatcher.dispatch("sum", Z_exp, axis=axis)
+        Z_log = OperationDispatcher.dispatch("log", Z_sum)
+        reshaped_max = OperationDispatcher.dispatch("reshape", max_value, Z_log.shape)
+        result = OperationDispatcher.dispatch("add", Z_log, reshaped_max)
+        result.requires_grad = a.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
         hs, = ctx.saved_tensors
         input_shape = hs.shape
-        max_z = array_api.broadcast_to(ctx.max_value, input_shape)
+        max_z = OperationDispatcher.dispatch("broadcast_to", ctx.max_value, input_shape)
         base_shape = list(input_shape)
         if isinstance(ctx.axis, int): 
             ctx.axis = (ctx.axis,)
         axis = list(range(len(base_shape))) if ctx.axis is None else ctx.axis
         for ax in axis:
             base_shape[ax] = 1
-        out_grad = out_grad.data / array_api.sum(array_api.exp(hs.data - max_z), ctx.axis)
-        out_grad = array_api.reshape(out_grad, base_shape)
-        out_grad = array_api.broadcast_to(out_grad, input_shape)
-        out_grad = out_grad * array_api.exp(hs.data - max_z)
-        grad = Tensor(out_grad, device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        
+        # Compute exp(hs - max_z) and sum
+        hs_minus_max = OperationDispatcher.dispatch("sub", hs, max_z)
+        exp_hs = OperationDispatcher.dispatch("exp", hs_minus_max)
+        sum_exp = OperationDispatcher.dispatch("sum", exp_hs, axis=ctx.axis)
+        
+        # Scale out_grad
+        scaled_grad = OperationDispatcher.dispatch("truediv", out_grad, sum_exp)
+        reshaped_grad = OperationDispatcher.dispatch("reshape", scaled_grad, base_shape)
+        broadcasted_grad = OperationDispatcher.dispatch("broadcast_to", reshaped_grad, input_shape)
+        grad = OperationDispatcher.dispatch("mul", broadcasted_grad, exp_hs)
         return (grad, )
 
 def logsumexp(a, axis=None):
@@ -1012,7 +1309,9 @@ class Max(Function):
             axis = (axis,)
         ctx.axis = axis
         ctx.keepdims = keepdims
-        return Tensor(array_api.max(a.data, axis, keepdims=keepdims), device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        result = OperationDispatcher.dispatch("max", a, axis=axis, keepdims=keepdims)
+        result.requires_grad = a.requires_grad
+        return result
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -1032,12 +1331,13 @@ class Max(Function):
         if ctx.keepdims is False:
             for x in sorted(new_axis):
                 grad_shape.insert(x, 1)
-        mask = (hs.data == (array_api.broadcast_to(
-            array_api.max(hs.data, axis=ctx.axis, keepdims=True), hs.shape)))
-        grad = Tensor(array_api.broadcast_to(
-            array_api.reshape(out_grad.data, grad_shape), hs.shape) * mask,
-            device=out_grad.device,
-            requires_grad=False, dtype=out_grad.dtype)
+        max_vals = OperationDispatcher.dispatch("max", hs, axis=ctx.axis, keepdims=True)
+        broadcasted_max = OperationDispatcher.dispatch("broadcast_to", max_vals, hs.shape)
+        mask = OperationDispatcher.dispatch("eq", hs, broadcasted_max)
+        
+        reshaped_grad = OperationDispatcher.dispatch("reshape", out_grad, grad_shape)
+        broadcasted_grad = OperationDispatcher.dispatch("broadcast_to", reshaped_grad, hs.shape)
+        grad = OperationDispatcher.dispatch("mul", broadcasted_grad, mask)
         return (grad,)
 
 def max(a, axis=None, keepdims=False):
@@ -1061,36 +1361,38 @@ class Stack(Function):
         requires_grad = any(t.requires_grad for t in tensors)
         
         # Get the output shape: insert len(tensors) at position dim
-        base_shape = list(tensors[0].data.shape)
+        base_shape = list(tensors[0].shape)
         output_shape = base_shape[:dim] + [len(tensors)] + base_shape[dim:]
         
-        # Create output array
-        stacked_data = array_api.empty(tuple(output_shape), device=device, dtype=tensors[0].dtype)
+        # Expand each tensor along the stack dimension and then concatenate
+        expanded_tensors = []
+        for t in tensors:
+            # Add a new dimension at position dim with size 1
+            new_shape = list(t.shape)
+            new_shape.insert(dim, 1)
+            # Use reshape to add the dimension (this should work since it's just a view)
+            expanded = t.view(new_shape)
+            expanded_tensors.append(expanded)
         
-        # Fill the output array by placing each tensor at the correct position
-        for i, t in enumerate(tensors):
-            # Create index to place this tensor at position i in dimension dim
-            indices = [slice(None)] * len(output_shape)
-            indices[dim] = i
-            stacked_data[tuple(indices)] = t.data
-        
-        return Tensor(stacked_data, device=device, requires_grad=requires_grad, dtype=tensors[0].dtype)
+        # Now concatenate along the dimension we just created
+        result = cat(expanded_tensors, dim)
+        result.requires_grad = requires_grad
+        return result
     
     @staticmethod
     def backward(ctx, out_grad):
         # Split into ctx.num_tensors parts along ctx.dim dimension
-        # Clean abstraction: use NDArray operations only
+        # Use dispatcher for indexing
         result = []
         
         # Extract individual slices from the stacked tensor
         for i in range(ctx.num_tensors):
-            # Use NDArray's indexing to extract slice i from dimension ctx.dim
-            indices = [slice(None)] * len(out_grad.data.shape)
+            # Use dispatcher getitem to extract slice i from dimension ctx.dim
+            indices = [slice(None)] * len(out_grad.shape)
             indices[ctx.dim] = i
-            slice_data = out_grad.data[tuple(indices)]
-            
-            # Create tensor from the slice
-            result.append(Tensor.make_const(slice_data, requires_grad=False))
+            slice_tensor = OperationDispatcher.dispatch("getitem", out_grad, tuple(indices))
+            slice_tensor.requires_grad = False
+            result.append(slice_tensor)
         
         return tuple(result)
 
@@ -1106,28 +1408,26 @@ class Cat(Function):
         ctx.dim = dim
         ctx.save_for_backward(*tensors)
         
-        # Extract NDArray objects from tensors
-        ndarrays = [t.data for t in tensors]
-        
-        # Use array_api.cat for GPU-native concatenation
-        result_ndarray = array_api.cat(ndarrays, dim=dim)
+        # Use dispatcher for concatenation
+        result = OperationDispatcher.dispatch("cat", tensors, dim=dim)
         
         requires_grad = any(t.requires_grad for t in tensors)
-        return Tensor(result_ndarray, device=tensors[0].device, 
-                     requires_grad=requires_grad, dtype=tensors[0].dtype) 
+        result.requires_grad = requires_grad
+        return result 
     
     @staticmethod
     def backward(ctx, out_grad):
         # Get sizes from saved tensors
-        sizes = [t.data.shape[ctx.dim] for t in ctx.saved_tensors]
+        sizes = [t.shape[ctx.dim] for t in ctx.saved_tensors]
         
-        # Use NDArray split method directly
-        grad_splits = out_grad.data.split(sizes, dim=ctx.dim)
+        # Use dispatcher for split operation (returns tuple)
+        grad_splits = OperationDispatcher.dispatch_tuple("split", out_grad, sizes, dim=ctx.dim)
         
-        # Convert split results to Tensors
+        # grad_splits should be a tuple of tensors with requires_grad=False
         result = []
-        for grad_ndarray in grad_splits:
-            result.append(Tensor.make_const(grad_ndarray, requires_grad=False))
+        for grad_tensor in grad_splits:
+            grad_tensor.requires_grad = False
+            result.append(grad_tensor)
         
         return tuple(result) 
 
@@ -1138,15 +1438,17 @@ class Squeeze(Function):
     @staticmethod
     def forward(ctx, tensor, dim):
         ctx.dim = dim
-        # Use NDArray squeeze method directly
-        squeezed_ndarray = tensor.data.squeeze(dim)
-        return Tensor(squeezed_ndarray, device=tensor.device, requires_grad=tensor.requires_grad, dtype=tensor.dtype)
+        # Use dispatcher for squeeze operation
+        result = OperationDispatcher.dispatch("squeeze", tensor, dim)
+        result.requires_grad = tensor.requires_grad
+        return result
     
     @staticmethod
     def backward(ctx, out_grad):
-        # Use NDArray unsqueeze method directly
-        unsqueezed_ndarray = out_grad.data.unsqueeze(ctx.dim)
-        return (Tensor.make_const(unsqueezed_ndarray, requires_grad=False), ) 
+        # Use dispatcher for unsqueeze operation
+        unsqueezed = OperationDispatcher.dispatch("unsqueeze", out_grad, ctx.dim)
+        unsqueezed.requires_grad = False
+        return (unsqueezed,) 
 
 def squeeze(tensor, dim):
     return Squeeze.apply(tensor, dim)
@@ -1155,15 +1457,17 @@ class Unsqueeze(Function):
     @staticmethod
     def forward(ctx, tensor, dim):
         ctx.dim = dim
-        # Use NDArray unsqueeze method directly
-        unsqueezed_ndarray = tensor.data.unsqueeze(dim)
-        return Tensor(unsqueezed_ndarray, device=tensor.device, requires_grad=tensor.requires_grad, dtype=tensor.dtype)
+        # Use dispatcher for unsqueeze operation
+        result = OperationDispatcher.dispatch("unsqueeze", tensor, dim)
+        result.requires_grad = tensor.requires_grad
+        return result
     
     @staticmethod
     def backward(ctx, out_grad):
-        # Use NDArray squeeze method directly
-        squeezed_ndarray = out_grad.data.squeeze(ctx.dim)
-        return (Tensor.make_const(squeezed_ndarray, requires_grad=False), )
+        # Use dispatcher for squeeze operation
+        squeezed = OperationDispatcher.dispatch("squeeze", out_grad, ctx.dim)
+        squeezed.requires_grad = False
+        return (squeezed,)
 
 def unsqueeze(tensor, dim):
     return Unsqueeze.apply(tensor, dim)
@@ -1175,16 +1479,17 @@ class Split(Function):
         if dim < 0:
             dim = dim + len(x.shape)
         ctx.dim = dim
-        results = []
         
-        # Split along the dim dimension - each split should have size 1 in that dimension
-        for i in range(x.shape[dim]):
-            # Create slice for index i (using slice to preserve dimension)
-            indices = [slice(None)] * len(x.shape)
-            indices[dim] = slice(i, i+1)  # Use slice(i, i+1) instead of i to preserve dimension
-            slice_tensor = x.data[tuple(indices)]
-            results.append(Tensor(slice_tensor, device=x.device, dtype=x.dtype, requires_grad=x.requires_grad))
-        return tuple(results)
+        # Use registered split operation via dispatch_tuple
+        # Split into individual elements along dimension (size 1 splits)
+        split_sizes = [1] * x.shape[dim]  # Each split has size 1
+        results = OperationDispatcher.dispatch_tuple("split", x, split_sizes, dim=dim)
+        
+        # Set requires_grad for all result tensors
+        for result in results:
+            result.requires_grad = x.requires_grad
+        
+        return results
 
     @staticmethod
     def backward(ctx, out_grad, idx):
@@ -1192,7 +1497,10 @@ class Split(Function):
         result = genesis.zeros_like(x, requires_grad=False)
         slices = [slice(None)] * len(x.shape)
         slices[ctx.dim] = slice(idx, idx+1)
-        result.data[tuple(slices)] = out_grad.data
+        
+        # Use dispatcher setitem operation (equivalent to result.data[slices] = out_grad.data)
+        result = OperationDispatcher.dispatch("setitem", result, tuple(slices), out_grad)
+        result.requires_grad = False
         return (result,)
 
 def split(a, dim):
@@ -1202,7 +1510,9 @@ class Norm(Function):
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
-        return Tensor(array_api.negative(a.data), device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        result_data = OperationDispatcher.dispatch("neg", a)
+        result_data.requires_grad = a.requires_grad
+        return result_data
 
     @staticmethod
     def backward(ctx, out_grad):
@@ -1218,15 +1528,24 @@ class Sigmoid(Function):
     def forward(ctx, a):
         ctx.save_for_backward(a)
         # sigmoid(x) = 1 / (1 + exp(-x))
-        sigmoid_out = 1 / (1 + array_api.exp(-a.data))
-        return Tensor(sigmoid_out, device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        neg_a = OperationDispatcher.dispatch("neg", a)
+        exp_neg_a = OperationDispatcher.dispatch("exp", neg_a)
+        one_plus_exp = OperationDispatcher.dispatch("add", 1, exp_neg_a)
+        sigmoid_out = OperationDispatcher.dispatch("truediv", 1, one_plus_exp)
+        sigmoid_out.requires_grad = a.requires_grad
+        return sigmoid_out
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
         # derivative of sigmoid: sigmoid(x) * (1 - sigmoid(x))
-        sigmoid_out = 1 / (1 + array_api.exp(-a.data))
-        grad = Tensor(out_grad.data * sigmoid_out * (1 - sigmoid_out), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        neg_a = OperationDispatcher.dispatch("neg", a)
+        exp_neg_a = OperationDispatcher.dispatch("exp", neg_a)
+        one_plus_exp = OperationDispatcher.dispatch("add", 1, exp_neg_a)
+        sigmoid_out = OperationDispatcher.dispatch("truediv", 1, one_plus_exp)
+        one_minus_sigmoid = OperationDispatcher.dispatch("sub", 1, sigmoid_out)
+        grad_temp = OperationDispatcher.dispatch("mul", sigmoid_out, one_minus_sigmoid)
+        grad = OperationDispatcher.dispatch("mul", out_grad, grad_temp)
         return (grad,)
 
 def sigmoid(a):
@@ -1242,17 +1561,26 @@ class Tanh(Function):
         ctx.save_for_backward(a)
         # tanh(x) = (exp(x) - exp(-x)) / (exp(x) + exp(-x))
         # More numerically stable: tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
-        exp_2x = array_api.exp(2 * a.data)
-        tanh_out = (exp_2x - 1) / (exp_2x + 1)
-        return Tensor(tanh_out, device=a.device, requires_grad=a.requires_grad, dtype=a.dtype)
+        two_a = OperationDispatcher.dispatch("mul", 2, a)
+        exp_2x = OperationDispatcher.dispatch("exp", two_a)
+        exp_2x_minus_1 = OperationDispatcher.dispatch("sub", exp_2x, 1)
+        exp_2x_plus_1 = OperationDispatcher.dispatch("add", exp_2x, 1)
+        tanh_out = OperationDispatcher.dispatch("truediv", exp_2x_minus_1, exp_2x_plus_1)
+        tanh_out.requires_grad = a.requires_grad
+        return tanh_out
 
     @staticmethod
     def backward(ctx, out_grad):
         a, = ctx.saved_tensors
         # derivative of tanh: 1 - tanh^2(x)
-        exp_2x = array_api.exp(2 * a.data)
-        tanh_out = (exp_2x - 1) / (exp_2x + 1)
-        grad = Tensor(out_grad.data * (1 - tanh_out * tanh_out), device=out_grad.device, requires_grad=False, dtype=out_grad.dtype)
+        two_a = OperationDispatcher.dispatch("mul", 2, a)
+        exp_2x = OperationDispatcher.dispatch("exp", two_a)
+        exp_2x_minus_1 = OperationDispatcher.dispatch("sub", exp_2x, 1)
+        exp_2x_plus_1 = OperationDispatcher.dispatch("add", exp_2x, 1)
+        tanh_out = OperationDispatcher.dispatch("truediv", exp_2x_minus_1, exp_2x_plus_1)
+        tanh_squared = OperationDispatcher.dispatch("mul", tanh_out, tanh_out)
+        one_minus_tanh_sq = OperationDispatcher.dispatch("sub", 1, tanh_squared)
+        grad = OperationDispatcher.dispatch("mul", out_grad, one_minus_tanh_sq)
         return (grad,)
 
 def tanh(a):
@@ -1265,9 +1593,9 @@ class ScatterAddFunction(Function):
     def forward(ctx, input, dim, index, src):
         ctx.dim = dim
         ctx.save_for_backward(index, src)
-        result_data = array_api.scatter_add(input.data, dim, index.data, src.data)
-        # Create tensor with proper requires_grad
-        result = Tensor(result_data, device=input.device, requires_grad=input.requires_grad or src.requires_grad)
+        result = OperationDispatcher.dispatch("scatter_add", input, dim, index, src)
+        # Set proper requires_grad
+        result.requires_grad = input.requires_grad or src.requires_grad
         return result
     
     @staticmethod  
@@ -1281,9 +1609,8 @@ class ScatterAddFunction(Function):
         # Gradient w.r.t. src: gather the out_grad at the scattered positions
         src_grad = None
         if src.requires_grad and out_grad is not None:
-            # Use array_api.gather to get gradients from the scattered positions
-            src_grad_data = array_api.gather(out_grad.data, dim, index.data)
-            src_grad = Tensor(src_grad_data, device=src.device, requires_grad=False)
+            # Use dispatcher to gather gradients from the scattered positions
+            src_grad = OperationDispatcher.dispatch("gather", out_grad, dim, index)
             
         # Return gradients for: input, index, src (dim is not a tensor input)
         # index doesn't need gradients (integer indices)
@@ -1318,7 +1645,8 @@ def repeat_interleave(input, repeats, dim=None):
     Returns:
         Tensor with repeated elements
     """
-    return Tensor.make_const(array_api.repeat_interleave(input.data, repeats, dim))
+    result = OperationDispatcher.dispatch("repeat_interleave", input, repeats, dim)
+    return result
 
 
 def one_hot(indices, num_classes):
@@ -1354,6 +1682,20 @@ def log_softmax(input, dim=-1):
     return shifted - log_sum_exp
 
 
+def softmax(input, dim=-1):
+    """
+    Softmax function with proper CPU fallback.
+
+    Args:
+        input: Input tensor
+        dim: Dimension to apply softmax along
+
+    Returns:
+        Softmax of input
+    """
+    return triton_softmax(input, dim)
+
+
 def maximum(input, other):
     """
     Element-wise maximum of tensors.
@@ -1375,9 +1717,9 @@ class Maximum(Function):
     @staticmethod
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
-        result_data = array_api.maximum(a.data, b.data)
-        requires_grad = a.requires_grad or b.requires_grad
-        return Tensor(result_data, requires_grad=requires_grad, dtype=a.dtype)
+        result_data = OperationDispatcher.dispatch("maximum", a, b)
+        result_data.requires_grad = a.requires_grad or b.requires_grad
+        return result_data
     
     @staticmethod
     def backward(ctx, out_grad):

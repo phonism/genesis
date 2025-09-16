@@ -10,7 +10,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-from genesis.ndarray.cuda_storage import (
+from genesis.backends.cuda import (
     CUDAStorage, empty, zeros, ones, from_numpy,
     check_cuda_error
 )
@@ -245,7 +245,7 @@ def test_cuda_memory_manager():
         - Error handling for invalid operations
     """
     try:
-        from genesis.ndarray.cuda_memory_manager import get_memory_manager
+        from genesis.backends.cuda_memory import get_memory_manager
         
         # Test initialization - this should work without cuCtxCreate error
         manager = get_memory_manager()

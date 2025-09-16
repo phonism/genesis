@@ -82,7 +82,9 @@ class SGD(Optimizer):
                 self.u[idx] = 0
             # Update momentum buffer and apply update
             self.u[idx] = (self.momentum * self.u[idx] + (1 - self.momentum) * grad).detach()
-            self.params[idx].data = p.data - self.lr * self.u[idx]
+            # Update parameter in-place using subtract operation
+            updated_param = p - self.lr * self.u[idx]
+            self.params[idx] = updated_param
 
 
 class Adam(Optimizer):
@@ -134,7 +136,10 @@ class Adam(Optimizer):
             self.v[theta_id] = v_cur.detach()
             m_next_hat = m_cur / (1 - self.beta1 ** self.t)
             v_next_hat = v_cur / (1 - self.beta2 ** self.t)
-            theta.data -= self.lr * m_next_hat.data / ((v_next_hat.data ** 0.5) + self.eps)
+            # Update parameter using tensor operations, not .data attribute
+            update = self.lr * m_next_hat / ((v_next_hat ** 0.5) + self.eps)
+            updated_param = theta - update
+            self.params[theta_id] = updated_param
 
 
 class AdamW(Optimizer):

@@ -1,9 +1,10 @@
-from ...autograd import Function, NDArray, Tensor
-from ...backend import array_api, NDArray
+from ...function import Function
+from ...tensor import Tensor
 import genesis
 import torch
 import triton
 import triton.language as tl
+import numpy as np
 
 @triton.autotune(
         configs=[
@@ -35,7 +36,7 @@ def _safe_softmax_forward_kernel(
     m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     n_offset = tl.arange(0, BLOCK_N)
     offset = m_offset[:, None] * N * K + n_offset[None, :] * K + pid_k
-    mask = m_offset[:, None] < M and n_offset[None, :] < N
+    mask = (m_offset[:, None] < M) & (n_offset[None, :] < N)
     input_ptrs = input_ptr + offset
     inp = tl.load(input_ptrs, mask=mask, other=-float("inf"))
     row_minus_max = inp - tl.max(inp, axis=1)[:, None]
@@ -46,56 +47,43 @@ def _safe_softmax_forward_kernel(
     tl.store(output_ptrs, softmax_output, mask=mask)
 
 
-@triton.autotune(
-        configs=[
-            triton.Config({"BLOCK_M": 1}, num_stages=4),
-            triton.Config({"BLOCK_M": 1}, num_stages=5),
-            triton.Config({"BLOCK_M": 2}, num_stages=4),
-            triton.Config({"BLOCK_M": 2}, num_stages=5),
-            triton.Config({"BLOCK_M": 4}, num_stages=4),
-            triton.Config({"BLOCK_M": 4}, num_stages=5),
-            triton.Config({"BLOCK_M": 8}, num_stages=4),
-            triton.Config({"BLOCK_M": 8}, num_stages=5),
-        ],
-        key=[
-            "M",
-            "N",
-        ],
-)
-@triton.heuristics(
-        values={
-            "BLOCK_N": lambda args: triton.next_power_of_2(args["N"]),
-            "num_warps": lambda args: 4 if args["N"] <= 1024 else (8 if args["N"] <= 2048 else 16),
-        },
-)
 @triton.jit
 def _safe_softmax_backward_kernel(
-        out_ptr, out_grad_ptr, in_grad_ptr, 
-        M, N, K, 
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,):
+        out_ptr, out_grad_ptr, in_grad_ptr,
+        M, N, K,
+        BLOCK_N: tl.constexpr):
+    """Simplified softmax backward kernel - one row per block"""
     pid_m = tl.program_id(0)
     pid_k = tl.program_id(1)
-    m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    n_offset = tl.arange(0, BLOCK_N)
-    offsets = m_offset[:, None] * N * K + n_offset[None, :] * K + pid_k
-    mask = m_offset[:, None] < M and n_offset[None, :] < N
-    out_ptrs = out_ptr + offsets
-    out = tl.load(out_ptrs, mask=mask)
-    out_grad_ptrs = out_grad_ptr + offsets
-    out_grad = tl.load(out_grad_ptrs, mask=mask)
 
-    scale = tl.sum(out * out_grad, 1)
-    in_grad = out * (out_grad - scale[:, None])
+    # Skip if beyond bounds
+    if pid_m >= M:
+        return
 
-    in_grad_ptrs = in_grad_ptr + offsets
-    tl.store(in_grad_ptrs, in_grad, mask=mask)
+    # Calculate row offset
+    row_start = pid_m * N * K + pid_k
+
+    # Load the row
+    n_offsets = tl.arange(0, BLOCK_N)
+    mask = n_offsets < N
+
+    # Load output and output gradient for this row
+    out = tl.load(out_ptr + row_start + n_offsets * K, mask=mask, other=0.0)
+    out_grad = tl.load(out_grad_ptr + row_start + n_offsets * K, mask=mask, other=0.0)
+
+    # Compute scale = dot(out, out_grad) for this row
+    scale = tl.sum(out * out_grad, 0)
+
+    # Compute input gradient for this row
+    in_grad = out * (out_grad - scale)
+
+    # Store the result for this row
+    tl.store(in_grad_ptr + row_start + n_offsets * K, in_grad, mask=mask)
 
 
 class SafeSoftmaxFunction(Function):
     @staticmethod
     def forward(ctx, x, dim, dtype):
-        ox = x
-        x = x.data.data
         assert dim >= -x.ndim and dim < x.ndim, "Invalid dim"
         dim = dim % x.ndim
         M = 1
@@ -105,38 +93,37 @@ class SafeSoftmaxFunction(Function):
         inp = x.contiguous()
         if dtype is None:
             dtype = x.dtype
-        out_tensor = genesis.empty_like(ox, dtype=dtype, requires_grad=ox.requires_grad)
-        out = out_tensor.data.data
+        out = genesis.empty_like(x, dtype=dtype, requires_grad=x.requires_grad)
         K = inp.numel() // M // N
 
         grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]), K)
         _safe_softmax_forward_kernel[grid](out, inp, M, N, K,)
-        ctx.save_for_backward(out_tensor)
+        ctx.save_for_backward(out)
         ctx.dim = dim
-        return out_tensor
+        return out
 
     @staticmethod
     def backward(ctx, out_grad):
         dim = ctx.dim
         (out,) = ctx.saved_tensors
 
-        out_data = out.data.data
-        assert dim >= -out_data.ndim and dim < out_data.ndim, "Invalid dim"
-        dim = dim % out_data.ndim
+        assert dim >= -out.ndim and dim < out.ndim, "Invalid dim"
+        dim = dim % out.ndim
         M = 1
-        N = out_data.shape[dim]
+        N = out.shape[dim]
         for i in range(dim):
-            M *= out_data.shape[i]
+            M *= out.shape[i]
 
-        ori_out_grad = out_grad
-        out_grad = out_grad.data.data.contiguous()
-        in_grad_tensor = genesis.empty_like(ori_out_grad, dtype=ori_out_grad.dtype, requires_grad=False)
-        in_grad = in_grad_tensor.data.data
-        K = out_data.numel() // M // N
+        out_contiguous = out.contiguous()
+        out_grad_contiguous = out_grad.contiguous()
+        in_grad = genesis.zeros_like(out, dtype=out.dtype, requires_grad=False)
+        K = out.numel() // M // N
 
-        grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]), K,)
-        _safe_softmax_backward_kernel[grid](out_data, out_grad, in_grad, M, N, K,)
-        return in_grad_tensor, None, None
+        # Use simplified kernel with fixed BLOCK_N
+        BLOCK_N = triton.next_power_of_2(N)
+        grid = (M, K)
+        _safe_softmax_backward_kernel[grid](out_contiguous, out_grad_contiguous, in_grad, M, N, K, BLOCK_N=BLOCK_N)
+        return in_grad, None, None
 
 
 def safe_softmax(x, dim=-1, dtype=None):
@@ -403,7 +390,8 @@ def _online_softmax_backward_kernel_non_inner(
 
 
 def heru_tile_m(args):
-    return max(1, 1024 // args["TILE_N"])
+    # Force TILE_M=1 to ensure each row is processed separately
+    return 1
 
 
 @triton.autotune(
@@ -433,8 +421,8 @@ def _online_softmax_backward_kernel_inner(
         n_offsets = tl.arange(0, TILE_N)
         offsets = m_offsets[:, None] * N + n_offsets
         mask = (m_offsets[:, None] < M) & (n_offsets < N)
-        out_tile = tl.load(out_ptr + offsets, mask=mask)
-        out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask)
+        out_tile = tl.load(out_ptr + offsets, mask=mask, other=0.0)
+        out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask, other=0.0)
         scale = tl.sum(out_tile * out_grad_tile, 1)
         in_grad_tile = out_tile * (out_grad_tile - scale[:, None])
         tl.store(in_grad_ptr + offsets, in_grad_tile, mask=mask)
@@ -446,9 +434,9 @@ def _online_softmax_backward_kernel_inner(
         for _ in range(0, N, TILE_N):
             mask = (m_offsets[:, None] < M) & (n_offsets < N)
             out_tile = tl.load(
-                out_ptr + offsets, mask=mask, eviction_policy="evict_last"
+                out_ptr + offsets, mask=mask, other=0.0, eviction_policy="evict_last"
             )
-            out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask)
+            out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask, other=0.0)
             scale += out_tile * out_grad_tile
             n_offsets += TILE_N
             offsets += TILE_N
@@ -459,9 +447,9 @@ def _online_softmax_backward_kernel_inner(
         for _ in range(0, N, TILE_N):
             mask = (m_offsets[:, None] < M) & (n_offsets < N)
             out_tile = tl.load(
-                out_ptr + offsets, mask=mask, eviction_policy="evict_first"
+                out_ptr + offsets, mask=mask, other=0.0, eviction_policy="evict_first"
             )
-            out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask)
+            out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask, other=0.0)
             in_grad_tile = out_tile * (out_grad_tile - scale[:, None])
             tl.store(in_grad_ptr + offsets, in_grad_tile, mask=mask)
             n_offsets += TILE_N
@@ -470,8 +458,6 @@ def _online_softmax_backward_kernel_inner(
 class OnlineSoftmaxFunction(Function):
     @staticmethod
     def forward(ctx, x, dim, dtype):
-        ox = x
-        x = x.data.data
         assert dim >= -x.ndim and dim < x.ndim, "Invalid dim"
         dim = dim % x.ndim
         M = 1
@@ -481,8 +467,7 @@ class OnlineSoftmaxFunction(Function):
         inp = x.contiguous()
         if dtype is None:
             dtype = x.dtype
-        out_tensor = genesis.empty_like(ox, dtype=dtype, requires_grad=ox.requires_grad)
-        out = out_tensor.data.data
+        out = genesis.empty_like(x, dtype=dtype, requires_grad=x.requires_grad)
         K = inp.numel() // M // N  # post_dim
 
         # Execute kernels without torch device context since Genesis manages devices
@@ -492,38 +477,34 @@ class OnlineSoftmaxFunction(Function):
         else:
             grid = (M, 1, 1)
             _online_softmax_kernel_inner[grid](out, inp, M, N)
-        ctx.save_for_backward(out_tensor)
+        ctx.save_for_backward(out)
         ctx.dim = dim
-        return out_tensor
+        return out
 
     @staticmethod
     def backward(ctx, out_grad):
         dim = ctx.dim
         (out,) = ctx.saved_tensors
 
-        ori_out_grad = out_grad
-        out_grad = out_grad.data.data
-        out_data = out.data.data
-        assert dim >= -out_data.ndim and dim < out_data.ndim, "Invalid dim"
-        dim = dim % out_data.ndim
-        M = 1
-        N = out_data.shape[dim]
-        for i in range(dim):
-            M *= out_data.shape[i]
+        # Simple CPU implementation of softmax backward
+        # For softmax: d_input = output * (d_output - dot(output, d_output))
 
-        out_grad = out_grad.contiguous()
-        in_grad_tensor = genesis.empty_like(out, dtype=out.dtype, requires_grad=False)
-        in_grad = in_grad_tensor.data.data
-        K = out_data.numel() // M // N
+        out_np = out.numpy()
+        out_grad_np = out_grad.numpy()
 
-        with torch.cuda.device(in_grad.device):
-            if K > 1:
-                grid = lambda meta: (M, triton.cdiv(K, meta["TILE_K"]), 1)
-                _online_softmax_backward_kernel_non_inner[grid](out_data, out_grad, in_grad, M, N, K)
-            else:
-                grid = lambda meta: (triton.cdiv(M, meta["TILE_M"]), 1, 1)
-                _online_softmax_backward_kernel_inner[grid](out_data, out_grad, in_grad, M, N)
-        return in_grad_tensor, None, None
+        # Compute gradient
+        if dim == -1 or dim == len(out.shape) - 1:
+            # Last dimension - most common case
+            dot_product = np.sum(out_np * out_grad_np, axis=-1, keepdims=True)
+            in_grad_np = out_np * (out_grad_np - dot_product)
+        else:
+            # General case for any dimension
+            dot_product = np.sum(out_np * out_grad_np, axis=dim, keepdims=True)
+            in_grad_np = out_np * (out_grad_np - dot_product)
+
+        # Convert back to genesis tensor
+        in_grad = genesis.tensor(in_grad_np, device=out.device, requires_grad=False)
+        return in_grad, None, None
 
 
 def softmax(x, dim=-1, dtype=None):

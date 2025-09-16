@@ -15,18 +15,18 @@ import triton.language as tl
 from functools import reduce
 import operator
 from math import prod
-from ..dtypes import get_dtype
+from genesis.dtypes import get_dtype, DType
 from dataclasses import dataclass
 from enum import Enum
 
-from .cuda_memory_manager import (
+from genesis.backends.cuda_memory import (
     allocate_memory, free_memory, memory_stats, get_memory_manager,
     increase_ref_count, decrease_ref_count, trigger_gc
 )
-from .base_storage import BaseStorage
+from genesis.backends.base import Storage
 
 # Import new indexing operations module
-from .cuda_indexing_ops import CUDAIndexingOps
+from genesis.backends.cuda_kernels import CUDAIndexingOps
 
 # ============= Index Plan Architecture =============
 
@@ -115,7 +115,7 @@ def _fill_kernel(
     
     tl.store(output_ptr + offsets, fill_value, mask=mask)
 
-class CUDAStorage(BaseStorage):
+class CUDAStorage(Storage):
     """Pure CUDA implementation of Tensor class"""
     
     def __init__(
@@ -147,7 +147,8 @@ class CUDAStorage(BaseStorage):
         self.base = base
         
         # Data type setup
-        self.dtype_obj = get_dtype(dtype)
+        # Always expect dtype to be either a DType object or convertible
+        self.dtype_obj = dtype if isinstance(dtype, DType) else get_dtype(dtype)
         self._dtype = self.dtype_obj.name
         self._numpy_dtype = self.dtype_obj.numpy_dtype
         self.itemsize = self.dtype_obj.itemsize
@@ -158,8 +159,10 @@ class CUDAStorage(BaseStorage):
         # Compute strides (default to C-contiguous)
         if strides is None:
             self.strides = self._compute_strides(self._shape)
+            self._is_contiguous = True  # If we computed strides, it's contiguous!
         else:
             self.strides = strides
+            self._is_contiguous = None  # Will compute lazily when needed
         
         # Stream management
         self.alloc_stream = stream if stream is not None else _ensure_stream()
@@ -184,16 +187,41 @@ class CUDAStorage(BaseStorage):
                 ptr_value = int(self.ptr)
                 if ptr_value != 0:
                     stream = getattr(self, 'last_stream', None)
-                    
+
                     # Use reference counting for better memory pooling
                     if not decrease_ref_count(self.ptr, stream):
                         # If not in ref pool, fall back to direct free
                         nbytes = getattr(self, 'nbytes', 0)
                         free_memory(self.ptr, nbytes, stream)
-                    
+
                     self.ptr = None
             except:
                 pass
+
+    @classmethod
+    def from_cpu_storage(cls, cpu_storage, device_index=0):
+        """Create CUDAStorage from CPUStorage by copying data to GPU.
+
+        Args:
+            cpu_storage: CPUStorage object (a PyTorch tensor)
+            device_index: CUDA device index
+
+        Returns:
+            CUDAStorage: New CUDA storage with copied data
+        """
+        # Get numpy data from CPU storage
+        numpy_data = cpu_storage.detach().cpu().numpy()
+
+        # Create CUDA storage with same shape and dtype
+        cuda_storage = cls(
+            shape=numpy_data.shape,
+            dtype=str(cpu_storage.dtype).split('.')[-1]  # Convert torch dtype to string
+        )
+
+        # Copy data from numpy to GPU
+        cuda_storage.from_numpy(numpy_data)
+
+        return cuda_storage
     
     def record_stream(self, stream: int):
         """Record tensor usage on specified stream to prevent premature deallocation"""
@@ -256,6 +284,19 @@ class CUDAStorage(BaseStorage):
         return genesis.device("cuda")
     
     @property
+    def size_bytes(self) -> int:
+        """Return size in bytes"""
+        from genesis.dtypes import get_dtype
+        dtype_obj = get_dtype(self._dtype)
+        return self.size * dtype_obj.itemsize
+
+    def element_size(self) -> int:
+        """Return bytes per element"""
+        from genesis.dtypes import get_dtype
+        dtype_obj = get_dtype(self._dtype)
+        return dtype_obj.itemsize
+    
+    @property
     def data(self):
         """Data property - returns self for compatibility"""
         return self
@@ -264,9 +305,12 @@ class CUDAStorage(BaseStorage):
     
     
     def is_contiguous(self) -> bool:
-        """Check if tensor has contiguous memory"""
-        expected_strides = self._compute_strides(self.shape)
-        return self.strides == expected_strides
+        """Check if tensor has contiguous memory - optimized with caching"""
+        if self._is_contiguous is None:
+            # Compute only once and cache the result
+            expected_strides = self._compute_strides(self.shape)
+            self._is_contiguous = (self.strides == expected_strides)
+        return self._is_contiguous
     
     def contiguous(self) -> 'CUDAStorage':
         """Return contiguous version of tensor"""
@@ -274,7 +318,7 @@ class CUDAStorage(BaseStorage):
             return self
             
         # Create new contiguous tensor
-        new_tensor = CUDAStorage(self.shape, self.dtype)
+        new_tensor = CUDAStorage(self.shape, self.dtype_obj)
         
         # Use Triton kernel to copy data
         copy_strided_kernel(self, new_tensor)
@@ -315,7 +359,7 @@ class CUDAStorage(BaseStorage):
         
         # If contiguous memory, can create new view directly
         if self.is_contiguous():
-            return CUDAStorage(new_shape, self.dtype, self.ptr, None, base=self)
+            return CUDAStorage(new_shape, self.dtype_obj, self.ptr, None, base=self)
         else:
             # Need to make contiguous first
             contig = self.contiguous()
@@ -342,7 +386,7 @@ class CUDAStorage(BaseStorage):
             elif old_dim != new_dim:
                 raise ValueError(f"Cannot expand dimension {i} from {old_dim} to {new_dim}")
         
-        return CUDAStorage(new_shape, self.dtype, self.ptr, tuple(new_strides), base=self)
+        return CUDAStorage(new_shape, self.dtype_obj, self.ptr, tuple(new_strides), base=self)
     
     def permute(self, dims: Tuple[int, ...]) -> 'CUDAStorage':
         """Permute operation (transpose)"""
@@ -353,7 +397,12 @@ class CUDAStorage(BaseStorage):
         new_shape = tuple(self.shape[i] for i in dims)
         new_strides = tuple(self.strides[i] for i in dims)
         
-        return CUDAStorage(new_shape, self.dtype, self.ptr, new_strides, base=self)
+        # Create new storage - it's likely not contiguous after permute
+        result = CUDAStorage(new_shape, self.dtype_obj, self.ptr, new_strides, base=self)
+        # Mark as likely non-contiguous (unless it's a no-op permute)
+        if dims != tuple(range(len(dims))):
+            result._is_contiguous = False
+        return result
     
     def transpose(self, dim0: int, dim1: int) -> 'CUDAStorage':
         """Swap two dimensions"""
@@ -718,35 +767,10 @@ class CUDAStorage(BaseStorage):
         else:
             # Strided copy - copy element by element
             for i in range(size):
-                src_ptr = value.ptr + i * value_stride
-                dst_ptr = target_view.ptr + i * target_stride
+                src_ptr = cuda.CUdeviceptr(int(value.ptr) + i * value_stride)
+                dst_ptr = cuda.CUdeviceptr(int(target_view.ptr) + i * target_stride)
                 result = cuda.cuMemcpyDtoD(dst_ptr, src_ptr, itemsize)
                 check_cuda_error(result)
-    
-    def _gpu_2d_strided_copy(self, target_view, value):
-        """GPU 2D strided copy using cuMemcpy2D"""
-        height, width = target_view.shape
-        
-        # Calculate strides in bytes
-        target_pitch = target_view.stride()[0] * target_view.itemsize
-        value_pitch = value.stride()[0] * value.itemsize
-        width_bytes = width * target_view.itemsize
-        
-        # Use cuMemcpy2D for efficient 2D copy
-        copy_params = cuda.CUDA_MEMCPY2D()
-        copy_params.srcMemoryType = cuda.CUmemorytype.CU_MEMORYTYPE_DEVICE
-        copy_params.srcDevice = value.ptr
-        copy_params.srcPitch = value_pitch
-        
-        copy_params.dstMemoryType = cuda.CUmemorytype.CU_MEMORYTYPE_DEVICE
-        copy_params.dstDevice = target_view.ptr
-        copy_params.dstPitch = target_pitch
-        
-        copy_params.WidthInBytes = width_bytes
-        copy_params.Height = height
-        
-        result = cuda.cuMemcpy2D(copy_params)
-        check_cuda_error(result)
     
     def _gpu_flattened_copy(self, target_view, value):
         """GPU copy by flattening tensors"""
@@ -756,7 +780,7 @@ class CUDAStorage(BaseStorage):
             value_flat = value.reshape((-1,))
             self._gpu_1d_strided_copy(target_flat, value_flat)
         else:
-            # Non-contiguous case: use optimized strided copy
+            # Non-contiguous case: use optimized strided copy (old architecture)
             self._gpu_strided_copy_fast(target_view, value)
     
     def _gpu_strided_copy_fast(self, target_view, value):
@@ -782,7 +806,7 @@ class CUDAStorage(BaseStorage):
         """Decompose high-dimensional copy into lower-dimensional operations"""
         # For non-contiguous tensors, we can't safely reshape to 2D
         # Instead, decompose recursively along dimensions
-        
+
         if target_view.ndim == 3 and value.ndim == 3:
             # Handle 3D tensors by iterating over the first dimension
             for i in range(target_view.shape[0]):
@@ -794,7 +818,7 @@ class CUDAStorage(BaseStorage):
                     check_cuda_error(result)
                 else:
                     self._gpu_2d_strided_copy(target_2d, value_2d)
-                    
+
         elif target_view.ndim == 4 and value.ndim == 4:
             # Handle 4D tensors by iterating over the first dimension
             for i in range(target_view.shape[0]):
@@ -802,30 +826,99 @@ class CUDAStorage(BaseStorage):
                 value_3d = value[i]
                 # Recursively handle 3D case
                 self._gpu_decompose_to_2d_copy(target_3d, value_3d)
-                
+
         elif target_view.ndim > 4:
             # For higher dimensions, iterate over the first dimension
             for i in range(target_view.shape[0]):
                 target_sub = target_view[i]
                 value_sub = value[i]
                 self._gpu_decompose_to_2d_copy(target_sub, value_sub)
-                
+
+        else:
+            # For other cases, use old architecture logic
+            if target_view.size <= 1000:
+                # Small tensors: use element-wise copy
+                self._gpu_elementwise_copy(target_view, value)
+            else:
+                # Large tensors: try to decompose into 2D operations (old architecture)
+                self._gpu_decompose_to_2d_copy(target_view, value)
+
+    def _gpu_2d_strided_copy(self, target_view, value):
+        """GPU 2D strided copy using cuMemcpy2D - restored from old architecture"""
+        height, width = target_view.shape
+
+        # Special case: if height=1, this is essentially a 1D copy operation
+        if height == 1:
+            # Flatten to 1D and use 1D copy
+            target_1d = target_view.reshape((-1,))
+            value_1d = value.reshape((-1,))
+            self._gpu_1d_strided_copy(target_1d, value_1d)
+            return
+
+        # Calculate strides in bytes
+        target_pitch = target_view.stride()[0] * target_view.itemsize
+        value_pitch = value.stride()[0] * value.itemsize
+        width_bytes = width * target_view.itemsize
+
+        # Handle broadcasted tensors (stride = 0) - fallback to elementwise copy
+        if value_pitch == 0 or any(s == 0 for s in value.stride()):
+            # This is a broadcasted tensor, use elementwise copy instead
+            return self._gpu_elementwise_copy(target_view, value)
+
+        # Use cuMemcpy2D for efficient 2D copy
+        copy_params = cuda.CUDA_MEMCPY2D()
+        copy_params.srcMemoryType = cuda.CUmemorytype.CU_MEMORYTYPE_DEVICE
+        copy_params.srcDevice = value.ptr
+        copy_params.srcPitch = value_pitch
+
+        copy_params.dstMemoryType = cuda.CUmemorytype.CU_MEMORYTYPE_DEVICE
+        copy_params.dstDevice = target_view.ptr
+        copy_params.dstPitch = target_pitch
+
+        copy_params.WidthInBytes = width_bytes
+        copy_params.Height = height
+
+        result = cuda.cuMemcpy2D(copy_params)
+        check_cuda_error(result)
+
+    def _gpu_decompose_to_2d_copy(self, target_view, value):
+        """Decompose high-dimensional copy into lower-dimensional operations - pixel-level copy from old arch"""
+        # For non-contiguous tensors, we can't safely reshape to 2D
+        # Instead, decompose recursively along dimensions
+
+        if target_view.ndim == 3 and value.ndim == 3:
+            # Handle 3D tensors by iterating over the first dimension
+            for i in range(target_view.shape[0]):
+                target_2d = target_view[i]
+                value_2d = value[i]
+                if target_2d.is_contiguous() and value_2d.is_contiguous():
+                    # Both contiguous: direct copy
+                    result = cuda.cuMemcpyDtoD(target_2d.ptr, value_2d.ptr, target_2d.nbytes)
+                    check_cuda_error(result)
+                else:
+                    self._gpu_2d_strided_copy(target_2d, value_2d)
+
+        elif target_view.ndim == 4 and value.ndim == 4:
+            # Handle 4D tensors by iterating over the first dimension
+            for i in range(target_view.shape[0]):
+                target_3d = target_view[i]
+                value_3d = value[i]
+                # Recursively handle 3D case
+                self._gpu_decompose_to_2d_copy(target_3d, value_3d)
+
+        elif target_view.ndim > 4:
+            # For higher dimensions, iterate over the first dimension
+            for i in range(target_view.shape[0]):
+                target_sub = target_view[i]
+                value_sub = value[i]
+                self._gpu_decompose_to_2d_copy(target_sub, value_sub)
+
         else:
             # For other cases, fallback to element-wise copy
             self._gpu_elementwise_copy(target_view, value)
-    
+
     def _gpu_elementwise_copy(self, target_view, value):
-        """Optimized copy for small tensors with special case handling"""
-        # TODO: Re-enable last-dimension slicing optimization after fixing correctness issues
-        # Temporarily disabled to ensure all tests pass
-        # See: https://github.com/anthropics/genesis/issues/lastdim-optimization
-        if False:  # Disabled for now
-            # Special optimization for last-dimension slicing (common in attention/RoPE)
-            # This optimization is currently disabled due to correctness issues with complex strided patterns
-            self._gpu_lastdim_slice_copy(target_view, value)
-            return
-        
-        # Fallback to original implementation for other cases
+        """Element-wise copy for small tensors - restored from old architecture"""
         value_flat = value.reshape((-1,))
         for i in range(value_flat.size):
             # Convert linear index to multi-dimensional indices
@@ -835,10 +928,10 @@ class CUDAStorage(BaseStorage):
                 indices.append(remaining % dim_size)
                 remaining //= dim_size
             indices.reverse()
-            
+
             # Set individual element
             target_view[tuple(indices)] = float(value_flat[i].to_numpy().item())
-    
+
     def _gpu_lastdim_slice_copy(self, target_view, value):
         """Optimized copy for last-dimension slicing (e.g., x[..., :n])"""
         # Calculate number of "rows" (all dimensions except the last)
@@ -949,6 +1042,12 @@ class CUDAStorage(BaseStorage):
         plan = CUDAIndexingOps.parse_index(self, key)
         return CUDAIndexingOps.execute_setitem(self, plan, value)
     
+    def item(self):
+        """Return the value of a single-element tensor as a Python scalar."""
+        if self.size != 1:
+            raise ValueError("only one element tensors can be converted to Python scalars")
+        # Copy to CPU and get scalar value
+        return self.to_numpy().item()
     
     def float(self):
         """Convert tensor to float32 type using GPU-native conversion"""
@@ -1013,6 +1112,9 @@ class CUDAStorage(BaseStorage):
         elif isinstance(target_dtype, np.dtype):
             # Convert numpy dtype to string
             target_dtype_str = self._get_triton_compatible_dtype(target_dtype)
+        elif isinstance(target_dtype, DType):
+            # Genesis DType object
+            target_dtype_str = target_dtype.name
         else:
             # Assume it's already string or convertible
             target_dtype_str = str(target_dtype)
@@ -1335,9 +1437,11 @@ def _copy_strided_to_contig_optimized(
             coord3 = linear % size3
             src_off += coord3 * stride3
     
-    # Vectorized read/write with prefetch hint
-    data = tl.load(src_ptr + src_off, mask=mask)
-    tl.store(dst_ptr + offs, data, mask=mask)
+    # Vectorized read/write with prefetch hint and bounds check
+    # Ensure src_off is within valid range
+    valid_src_mask = mask & (src_off >= 0)
+    data = tl.load(src_ptr + src_off, mask=valid_src_mask)
+    tl.store(dst_ptr + offs, data, mask=valid_src_mask)
 
 @triton.jit
 def _copy_strided_to_contig_general(
@@ -1722,4 +1826,9 @@ def copy_strided_reverse_kernel(src: CUDAStorage, dst: CUDAStorage):
             BLOCK=BLOCK,
             num_warps=num_warps
         )
+
+
+# Set up factory function for cuda_utils to avoid circular import
+from . import cuda_utils
+cuda_utils.set_cuda_storage_factory(CUDAStorage)
 

@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import genesis
-from genesis.ndarray.cuda_storage import CUDAStorage
+from genesis.backends.cuda import CUDAStorage
 
 
 def test_cuda_empty_cache():

@@ -133,8 +133,8 @@ class NCCLBackend:
             
         if self.communicator is None:
             # Single process - copy tensor to all positions
-            for out_tensor in tensor_list:
-                out_tensor.data = tensor.data.clone()
+            for i, out_tensor in enumerate(tensor_list):
+                tensor_list[i] = tensor.clone()
             return None
             
         # For now, implement using multiple broadcast operations

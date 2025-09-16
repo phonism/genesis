@@ -1,5 +1,4 @@
 """
-PyTorch-aligned dtype system for Genesis
 Provides dtype objects similar to torch.dtype
 """
 
@@ -37,7 +36,7 @@ class DType:
         return hash(self.name)
 
 
-# Predefined dtype objects - aligned with PyTorch
+# Predefined dtype objects
 float32 = DType("float32", 4, np.float32)
 float16 = DType("float16", 2, np.float16) 
 float64 = DType("float64", 8, np.float64)
@@ -50,6 +49,9 @@ bool = DType("bool", 1, np.bool_, is_floating_point=False)
 
 # bfloat16 special handling - Triton supports but numpy doesn't natively
 bfloat16 = DType("bfloat16", 2, np.float32, "bfloat16", is_floating_point=True)
+
+# Default dtype - uses float32 as default
+default_dtype = float32
 
 # Mapping from dtype names to objects
 _name_to_dtype = {

@@ -2,17 +2,17 @@
 # Global operator table.
 import genesis
 import math
-from .autograd import Tensor
-from .backend import array_api, NDArray
+from genesis.tensor import Tensor
+from genesis.ops import OperationDispatcher as Dispatcher
 from .nn.functional import *
 
 def triu(a: Tensor, k: int, device=None):
-    return Tensor.make_const(array_api.triu(a.data, k))
+    return Dispatcher.dispatch('triu', a, k)
 
-def empty(*shape, device=None, dtype="float32", requires_grad=False):
+def empty(*shape, device=None, dtype=genesis.float32, requires_grad=False):
     return genesis.init.zeros(*shape, device=device, dtype=dtype, requires_grad=requires_grad)
 
-def arange(*args, dtype=None, device=genesis.device("cuda")):
+def arange(*args, dtype=None, device=None):
     if len(args) == 1:
         start, end, step = 0, args[0], 1
     elif len(args) == 2:
@@ -22,11 +22,16 @@ def arange(*args, dtype=None, device=genesis.device("cuda")):
         start, end, step = args
     else:
         raise ValueError("arange requires 1 to 3 positional arguments")
-    
-    # Delegate to device-specific implementation
+
+    # Handle default device - use CPU by default for better compatibility
+    if device is None:
+        device = genesis.device("cpu")
+
+    # Use OperationDispatcher for device-specific implementation
     dtype_str = "float32" if dtype is None else dtype.name if hasattr(dtype, 'name') else str(dtype)
-    result_data = device.arange(start, end, step, dtype_str)
-    return genesis.Tensor(result_data, device=device, dtype=dtype, requires_grad=False)
+    result_data = Dispatcher.dispatch_creation("arange", device, start, end, step, dtype=dtype_str)
+    result_data.requires_grad = False
+    return result_data
 
 
 def topk(input: Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True):
@@ -43,10 +48,7 @@ def topk(input: Tensor, k: int, dim: int = -1, largest: bool = True, sorted: boo
     Returns:
         Tuple of (values, indices) tensors
     """
-    values_data, indices_data = array_api.topk(input.data, k, dim, largest, sorted)
-    values = genesis.Tensor(values_data, device=input.device, dtype=input.dtype, requires_grad=False)
-    indices = genesis.Tensor(indices_data, device=input.device, dtype=genesis.int64, requires_grad=False)
-    return values, indices
+    return Dispatcher.dispatch_tuple('topk', input, k, dim, largest, sorted)
 
 
 def isinf(input: Tensor):
@@ -59,8 +61,7 @@ def isinf(input: Tensor):
     Returns:
         A tensor of the same shape as input with boolean values
     """
-    result_data = input.data.isinf()
-    return genesis.Tensor(result_data, device=input.device, dtype=genesis.bool, requires_grad=False)
+    return Dispatcher.dispatch('isinf', input)
 
 
 def isnan(input: Tensor):
@@ -73,8 +74,7 @@ def isnan(input: Tensor):
     Returns:
         A tensor of the same shape as input with boolean values
     """
-    result_data = input.data.isnan()
-    return genesis.Tensor(result_data, device=input.device, dtype=genesis.bool, requires_grad=False)
+    return Dispatcher.dispatch('isnan', input)
 
 
 def isfinite(input: Tensor):
@@ -87,8 +87,7 @@ def isfinite(input: Tensor):
     Returns:
         A tensor of the same shape as input with boolean values
     """
-    result_data = input.data.isfinite()
-    return genesis.Tensor(result_data, device=input.device, dtype=genesis.bool, requires_grad=False)
+    return Dispatcher.dispatch('isfinite', input)
 
 
 def argsort(input: Tensor, dim: int = -1, descending: bool = False):
@@ -103,8 +102,7 @@ def argsort(input: Tensor, dim: int = -1, descending: bool = False):
     Returns:
         Tensor of indices
     """
-    indices_data = array_api.argsort(input.data, dim, descending)
-    return genesis.Tensor(indices_data, device=input.device, dtype=genesis.int64, requires_grad=False)
+    return Dispatcher.dispatch('argsort', input, dim, descending)
 
 
 def bincount(input: Tensor, weights=None, minlength: int = 0):
@@ -119,10 +117,7 @@ def bincount(input: Tensor, weights=None, minlength: int = 0):
     Returns:
         Tensor containing counts
     """
-    weights_data = weights.data if weights is not None else None
-    result_data = array_api.bincount(input.data, weights_data, minlength)
-    dtype = weights.dtype if weights is not None else genesis.int64
-    return genesis.Tensor(result_data, device=input.device, dtype=dtype, requires_grad=False)
+    return Dispatcher.dispatch('bincount', input, weights, minlength)
 
 
 def allclose(input: Tensor, other: Tensor, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False):
@@ -151,3 +146,28 @@ def allclose(input: Tensor, other: Tensor, rtol: float = 1e-05, atol: float = 1e
         close_elements = close_elements | (input_nan & other_nan)
     
     return close_elements.all()
+
+def eq(input: Tensor, other):
+    """Element-wise equality comparison."""
+    return Dispatcher.dispatch("eq", input, other)
+
+def ne(input: Tensor, other):
+    """Element-wise not-equal comparison."""  
+    return Dispatcher.dispatch("ne", input, other)
+
+def gt(input: Tensor, other):
+    """Element-wise greater-than comparison."""
+    return Dispatcher.dispatch("gt", input, other)
+
+def ge(input: Tensor, other):
+    """Element-wise greater-than-or-equal comparison."""
+    return Dispatcher.dispatch("ge", input, other)
+
+def lt(input: Tensor, other):
+    """Element-wise less-than comparison."""
+    return Dispatcher.dispatch("lt", input, other)
+
+def le(input: Tensor, other):
+    """Element-wise less-than-or-equal comparison."""
+    return Dispatcher.dispatch("le", input, other)
+

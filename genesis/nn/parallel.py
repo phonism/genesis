@@ -1,5 +1,4 @@
 import genesis
-import torch
 import torch.distributed as dist
 
 class DistributedDataParallel(genesis.nn.Module):

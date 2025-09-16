@@ -15,7 +15,7 @@ import genesis
 import genesis.distributed as dist
 
 # Distributed training only supports CUDA
-_CUDA_AVAILABLE = genesis.device("cuda").enabled()
+_CUDA_AVAILABLE = genesis.cuda.is_available()
 
 # Skip all tests if CUDA is not available
 pytestmark = pytest.mark.skipif(not _CUDA_AVAILABLE, reason="Distributed training requires CUDA")
@@ -101,25 +101,25 @@ def test_collective_ops_single_process(device):
         
         # Test all_reduce with SUM
         tensor = genesis.ones([4], dtype=genesis.float32, device=device)
-        original_data = tensor.data.clone()
+        original_data = tensor.clone()
         
         dist.all_reduce(tensor, dist.ReduceOp.SUM)
         # In single process, tensor should remain unchanged
-        assert genesis.allclose(tensor, original_data, atol=atol, rtol=rtol)
+        assert genesis.allclose(tensor, original_data, atol=atol, rtol=rtol).item()
         
         # Test all_reduce with different operations
         for op in [dist.ReduceOp.MAX, dist.ReduceOp.MIN]:
             test_tensor = genesis.ones([4], dtype=genesis.float32, device=device) * 2.5
             dist.all_reduce(test_tensor, op)
-            assert genesis.allclose(test_tensor, genesis.ones([4], device=device) * 2.5, 
-                                  atol=atol, rtol=rtol)
+            assert genesis.allclose(test_tensor, genesis.ones([4], device=device) * 2.5,
+                                  atol=atol, rtol=rtol).item()
         
         # Test broadcast
         broadcast_tensor = genesis.randn([8], dtype=genesis.float32, device=device)
-        original_broadcast = broadcast_tensor.data.clone()
+        original_broadcast = broadcast_tensor.clone()
         
         dist.broadcast(broadcast_tensor, src=0)
-        assert genesis.allclose(broadcast_tensor, original_broadcast, atol=atol, rtol=rtol)
+        assert genesis.allclose(broadcast_tensor, original_broadcast, atol=atol, rtol=rtol).item()
         
         # Test barrier
         dist.barrier()  # Should complete without hanging
@@ -155,7 +155,7 @@ def test_all_gather_single_process(device):
         dist.all_gather(output_list, input_tensor)
         
         # In single process, output should be same as input
-        assert genesis.allclose(output_list[0], input_tensor, atol=atol, rtol=rtol)
+        assert genesis.allclose(output_list[0], input_tensor, atol=atol, rtol=rtol).item()
         
         dist.destroy_process_group()
         
@@ -212,7 +212,7 @@ def test_ddp_single_process(model_size, device):
         for param in ddp_model.parameters():
             if param.requires_grad:
                 assert param.grad is not None
-                assert genesis.isfinite(param.grad).all()
+                assert genesis.isfinite(param.grad).all().item()
         
         # Test state dict operations
         state_dict = ddp_model.state_dict()
@@ -268,7 +268,7 @@ def test_ddp_gradient_synchronization(device):
         for name, param in ddp_model.named_parameters():
             if param.requires_grad:
                 assert param.grad is not None
-                assert not genesis.isnan(param.grad).any()
+                assert not genesis.isnan(param.grad).any().item()
                 
         dist.destroy_process_group()
         
@@ -303,17 +303,17 @@ def test_reduce_operations_dtypes(device, dtype):
         # Test SUM
         sum_tensor = tensor.clone()
         dist.all_reduce(sum_tensor, dist.ReduceOp.SUM)
-        assert genesis.allclose(sum_tensor, tensor, atol=atol, rtol=rtol)
+        assert genesis.allclose(sum_tensor, tensor, atol=atol, rtol=rtol).item()
         
         # Test MAX  
         max_tensor = tensor.clone()
         dist.all_reduce(max_tensor, dist.ReduceOp.MAX)
-        assert genesis.allclose(max_tensor, tensor, atol=atol, rtol=rtol)
+        assert genesis.allclose(max_tensor, tensor, atol=atol, rtol=rtol).item()
         
         # Test MIN
         min_tensor = tensor.clone()
         dist.all_reduce(min_tensor, dist.ReduceOp.MIN)
-        assert genesis.allclose(min_tensor, tensor, atol=atol, rtol=rtol)
+        assert genesis.allclose(min_tensor, tensor, atol=atol, rtol=rtol).item()
         
         dist.destroy_process_group()
         
@@ -375,7 +375,7 @@ def test_multi_process_all_reduce(world_size):
     expected_sum = sum(range(world_size))
     expected_tensor = genesis.ones([4], dtype=genesis.float32, device=device) * expected_sum
     
-    assert genesis.allclose(tensor, expected_tensor, atol=atol, rtol=rtol)
+    assert genesis.allclose(tensor, expected_tensor, atol=atol, rtol=rtol).item()
     
     dist.destroy_process_group()
 
@@ -395,7 +395,7 @@ if __name__ == "__main__":
         print("✅ Error handling test passed")
         
         # Test with CUDA if available
-        if genesis.device("cuda").enabled():
+        if genesis.cuda.is_available():
             cuda_device = genesis.device("cuda")
             
             test_single_process_init(cuda_device)

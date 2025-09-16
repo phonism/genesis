@@ -1,8 +1,7 @@
-from ...autograd import Function, NDArray, Tensor
-from ...backend import array_api, NDArray
+from ...function import Function
+from ...tensor import Tensor
 
 import genesis
-import torch
 import triton
 import triton.language as tl
 import time

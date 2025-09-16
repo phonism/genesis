@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 import numpy as np
 import genesis
 from genesis import init
-from ...autograd import Tensor
+from genesis.tensor import Tensor
 import genesis.nn.functional as F
 from .module import Module, Parameter
 
@@ -37,19 +37,21 @@ class RotaryEmbedding(Module):
     Rotary embedding layer.
     """
     def __init__(
-        self, 
-        dim, 
-        max_position_embeddings: int = 2048, 
+        self,
+        dim,
+        max_position_embeddings: int = 2048,
         base: int = 10000
     ):
         super().__init__()
-        self.inv_freq = genesis.Tensor(1.0 / (base ** (np.arange(0, dim, 2).astype(np.float32) / dim)))
+        inv_freq_data = 1.0 / (base ** (np.arange(0, dim, 2).astype(np.float32) / dim))
+        self.inv_freq = genesis.tensor(inv_freq_data)
         self.max_seq_len_cached = max_position_embeddings
-        t = genesis.Tensor(np.arange(self.max_seq_len_cached, dtype="float32"))
+        t_data = np.arange(self.max_seq_len_cached, dtype=np.float32)
+        t = genesis.tensor(t_data)
         t = t.reshape(t.shape[0], 1)
         self.inv_freq = self.inv_freq.reshape(1, self.inv_freq.shape[0])
         freqs = t @ self.inv_freq
-        emb = F.stack((freqs, freqs), dim=-1).transpose().reshape(freqs.shape[0], freqs.shape[1] * 2)
+        emb = F.stack((freqs, freqs), dim=-1).transpose(-1, -2).reshape(freqs.shape[0], freqs.shape[1] * 2)
         self.cos_cached = emb.cos().reshape((1, 1) + (emb.shape))
         self.sin_cached = emb.sin().reshape((1, 1) + (emb.shape))
 
