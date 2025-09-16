@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 from collections import defaultdict
 import time
-from .memory_stats_collector import get_stats_collector
+from genesis.backends.memory_stats_collector import get_stats_collector
 
 
 def _ok(ret):

@@ -8,6 +8,8 @@ and memory operations, organized similarly to torch.cuda.
 import os
 from typing import Dict, Optional, List, Any
 
+import threading
+
 try:
     from cuda import cuda
     from cuda.bindings import driver
@@ -16,19 +18,49 @@ except ImportError:
     from cuda.bindings import driver
 
 # Import device class for type hints
-from ..ndarray import Device
+from ..device import Device
 
 # Import memory management functions
-from ..ndarray.cuda_memory_manager import (
-    get_memory_manager, trigger_gc, get_memory_info, 
-    defragment_memory, analyze_memory_fragmentation, 
+from ..backends.cuda_memory import (
+    get_memory_manager, trigger_gc, get_memory_info,
+    defragment_memory, analyze_memory_fragmentation,
     get_fragmentation_stats, set_memory_config
 )
+
+# CUDA initialization state
+_cuda_initialized = False
+_cuda_available = False
+_init_lock = threading.Lock()
+
+
+def _ensure_cuda_initialized():
+    """Ensure CUDA is initialized. Thread-safe and lazy."""
+    global _cuda_initialized, _cuda_available
+
+    if _cuda_initialized:
+        return _cuda_available
+
+    with _init_lock:
+        # Double-check after acquiring lock
+        if _cuda_initialized:
+            return _cuda_available
+
+        try:
+            result = cuda.cuInit(0)
+            _cuda_available = (result[0] == cuda.CUresult.CUDA_SUCCESS)
+        except Exception:
+            _cuda_available = False
+        finally:
+            _cuda_initialized = True
+
+    return _cuda_available
 
 
 # Device management functions
 def device_count() -> int:
     """Get the number of available CUDA devices."""
+    if not _ensure_cuda_initialized():
+        return 0
     device_count = cuda.cuDeviceGetCount()
     return device_count[1] if device_count[0] == cuda.CUresult.CUDA_SUCCESS else 0
 

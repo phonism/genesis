@@ -147,7 +147,7 @@ def log_system_info():
     # CUDA info if available
     try:
         import genesis
-        if genesis.device("cuda").enabled():
+        if genesis.cuda.is_available():
             test_logger.info(f"  CUDA: Available")
         else:
             test_logger.info(f"  CUDA: Not available")

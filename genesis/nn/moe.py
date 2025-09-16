@@ -9,14 +9,14 @@ and shared experts. The implementation includes:
 """
 
 import math
-import torch
 from typing import Optional, Tuple, List
 import genesis
 from genesis import Tensor
 import genesis.nn as nn
 import genesis.nn.functional as F
+from ..function import Function
 from .modules import Module, Parameter
-from .modules.transformer import MultiheadAttention  
+from .modules.transformer import MultiheadAttention
 from .modules.normalization import RMSNorm
 
 
@@ -177,7 +177,7 @@ class MoEExpert(Module):
         return self.down_proj(intermediate)
 
 
-class AddAuxiliaryLoss(genesis.autograd.Function):
+class AddAuxiliaryLoss(Function):
     """
     Custom autograd function to add auxiliary loss during backpropagation.
     
@@ -347,10 +347,10 @@ class MoELayer(Module):
         # Process each expert's tokens in batch
         start_idx = 0
         for expert_id, count in enumerate(expert_counts):
-            if count == 0:
+            if count.item() == 0:
                 continue
-                
-            end_idx = start_idx + count
+
+            end_idx = start_idx + count.item()
             token_indices = sorted_indices[start_idx:end_idx] // self.top_k
             
             # Get tokens for this expert
@@ -360,10 +360,10 @@ class MoELayer(Module):
             # Apply weights and accumulate
             weights = expert_weights[sorted_indices[start_idx:end_idx]]
             weighted_output = expert_output * weights
-            
+
             # Scatter results back to original positions
             expert_cache[token_indices] += weighted_output
-            
+
             start_idx = end_idx
             
         return expert_cache

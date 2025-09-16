@@ -12,14 +12,14 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import genesis
-from genesis.ndarray.cuda_memory_manager import (
+from genesis.backends.cuda_memory import (
     get_memory_manager, memory_stats, trigger_gc,
     get_memory_info, check_memory_pressure, set_memory_config,
     increase_ref_count, decrease_ref_count,
     defragment_memory, get_fragmentation_stats, analyze_memory_fragmentation,
     RefCountedBlock
 )
-from genesis.ndarray.cuda_storage import CUDAStorage
+from genesis.backends.cuda import CUDAStorage
 
 def test_ref_counting_basic():
     """Test basic reference counting functionality"""

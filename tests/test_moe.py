@@ -97,7 +97,7 @@ class TestMoEGate:
         expected_ones = genesis.ones(weight_sums.shape, device=genesis.device('cuda'))
         
         # Allow small numerical errors
-        assert genesis.allclose(weight_sums, expected_ones, atol=1e-6)
+        assert genesis.allclose(weight_sums, expected_ones, atol=1e-6).item()
 
 
 class TestMoEExpert:
@@ -144,7 +144,7 @@ class TestMoEExpert:
         
         # Compare with expert forward
         actual_output = expert(input_tensor)
-        assert genesis.allclose(actual_output, expected_output, atol=1e-5)
+        assert genesis.allclose(actual_output, expected_output, atol=1e-5).item()
 
 
 class TestMoELayer:
@@ -287,7 +287,7 @@ class TestMoEFunctionality:
         
         expected = genesis.tensor([1.0, 1.0, 2.0, 2.0, 3.0, 3.0])
         assert result.shape == expected.shape
-        assert genesis.allclose(result, expected)
+        assert genesis.allclose(result, expected).item()
         
     def test_bincount_function(self):
         """Test bincount function works correctly.""" 
@@ -296,7 +296,7 @@ class TestMoEFunctionality:
         
         expected = genesis.tensor([1, 2, 3])  # 0 appears 1 time, 1 appears 2 times, 2 appears 3 times
         assert result.shape == expected.shape
-        assert genesis.allclose(result.float(), expected.float())
+        assert genesis.allclose(result.float(), expected.float()).item()
         
     def test_argsort_function(self):
         """Test argsort function works correctly."""

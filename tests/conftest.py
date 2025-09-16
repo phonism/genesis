@@ -17,7 +17,7 @@ from tests.test_logger import test_logger, log_test_start, log_test_end, log_han
 def cuda_warmup(pytestconfig):
     """Session-level CUDA warmup to avoid reinitialization for each test"""
     try:
-        if genesis.device("cuda").enabled():
+        if genesis.cuda.is_available():
             # Warm up common Triton kernels that are used in tests
             warmup_tensor = genesis.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], device=genesis.device("cuda"), requires_grad=True)
             
@@ -48,7 +48,7 @@ def device_info():
     """Fixture providing device information"""
     return {
         'cpu_available': True,
-        'cuda_available': genesis.device("cuda").enabled()
+        'cuda_available': genesis.cuda.is_available()
     }
 
 # Memory manager reset removed - let it persist across tests for better performance

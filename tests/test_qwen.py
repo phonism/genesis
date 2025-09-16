@@ -74,7 +74,10 @@ def copy_weights_torch_to_genesis(torch_model, genesis_model):
     converted_count = 0
     for key, torch_tensor in torch_state_dict.items():
         try:
-            genesis_state_dict[key] = torch_tensor
+            # Convert PyTorch tensor to Genesis tensor
+            numpy_data = torch_tensor.detach().cpu().numpy()
+            genesis_tensor = genesis.tensor(numpy_data, device=genesis.device('cpu'))
+            genesis_state_dict[key] = genesis_tensor
             converted_count += 1
         except Exception as e:
             print(f"⚠️  Failed to convert parameter {key}: {e}")
@@ -83,7 +86,7 @@ def copy_weights_torch_to_genesis(torch_model, genesis_model):
     
     # load to Genesis model
     try:
-        result = genesis_model.load_state_dict(torch_state_dict, strict=False)
+        result = genesis_model.load_state_dict(genesis_state_dict, strict=False)
         if result is not None and len(result) == 2:
             missing_keys, unexpected_keys = result
             if missing_keys:
@@ -181,7 +184,7 @@ def _test_qwen_consistency(use_cuda: bool = False):
     # Genesis forward pass
     import genesis
     device = genesis.device("cuda") if use_cuda else genesis.device('cpu')
-    genesis_input = genesis.Tensor(input_ids.astype(np.int64), device=device, requires_grad=False).long()
+    genesis_input = genesis.tensor(input_ids.astype(np.int64), device=device, requires_grad=False).long()
     
     genesis_model.eval() 
     genesis_output = genesis_model(genesis_input)
@@ -269,7 +272,7 @@ def test_qwen_basic_functionality():
             input_tensor = torch.tensor(input_ids, dtype=torch.long)
         else:
             import genesis
-            input_tensor = genesis.Tensor(input_ids.astype(np.int64), requires_grad=False).long()
+            input_tensor = genesis.tensor(input_ids.astype(np.int64), requires_grad=False).long()
         
         # forward pass
         model.eval()
@@ -380,8 +383,8 @@ def _test_qwen_backward(use_cuda: bool = False):
     # Genesis forward and backward pass  
     import genesis
     device = genesis.device("cuda") if use_cuda else genesis.device('cpu')
-    genesis_input = genesis.Tensor(input_ids.astype(np.int64), device=device, requires_grad=False).long()
-    genesis_target = genesis.Tensor(target_ids.astype(np.int64), device=device, requires_grad=False).long()
+    genesis_input = genesis.tensor(input_ids.astype(np.int64), device=device, requires_grad=False).long()
+    genesis_target = genesis.tensor(target_ids.astype(np.int64), device=device, requires_grad=False).long()
     
     genesis_model.train()  # Enable gradient computation
     genesis_output = genesis_model(genesis_input)
@@ -508,8 +511,8 @@ def test_qwen_gradient_computation():
             target_tensor = torch.tensor(target_ids, dtype=torch.long)
         else:
             import genesis
-            input_tensor = genesis.Tensor(input_ids.astype(np.int64), requires_grad=False).long()
-            target_tensor = genesis.Tensor(target_ids.astype(np.int64), requires_grad=False).long()
+            input_tensor = genesis.tensor(input_ids.astype(np.int64), requires_grad=False).long()
+            target_tensor = genesis.tensor(target_ids.astype(np.int64), requires_grad=False).long()
         
         # forward pass
         output = model(input_tensor)
@@ -582,8 +585,8 @@ def test_qwen_training_step():
     input_ids = np.random.randint(0, config_dict["vocab_size"], (batch_size, seq_len))
     target_ids = np.random.randint(0, config_dict["vocab_size"], (batch_size, seq_len))
     
-    input_tensor = genesis.Tensor(input_ids.astype(np.int64), requires_grad=False).long()
-    target_tensor = genesis.Tensor(target_ids.astype(np.int64), requires_grad=False).long()
+    input_tensor = genesis.tensor(input_ids.astype(np.int64), requires_grad=False).long()
+    target_tensor = genesis.tensor(target_ids.astype(np.int64), requires_grad=False).long()
     
     # Store initial weights for comparison
     initial_weights = {}

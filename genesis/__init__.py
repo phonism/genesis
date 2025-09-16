@@ -36,17 +36,23 @@ from .serialization import (
         save, load, 
         save_checkpoint, load_checkpoint
 )
-from .autograd import Tensor
-tensor = Tensor  # PyTorch-style lowercase alias
+from .tensor import Tensor, tensor
 from . import nn
 from . import init
 from . import optim
 from . import utils
 from . import amp  # Automatic mixed precision training
 from . import distributed  # Distributed training
-from .backend import *
+from . import ops  # Import ops to register all operations
+from .function import Function
+from .backends import *
 from .functional import *
 from . import cuda  # CUDA memory management utilities
+
+# Bind tensor methods
+from .api import bind_tensor_methods, bind_nn_functional_methods
+bind_tensor_methods()
+bind_nn_functional_methods()
 
 # Random number generation - PyTorch-compatible RNG API
 from .random import (
@@ -55,6 +61,9 @@ from .random import (
     default_generator, fork_rng, Generator
 )
 
+# Device management - import our new Device system
+from .device import device
+
 # Device utilities
 def cuda_available() -> bool:
     """Check if CUDA is available for use.
@@ -62,4 +71,4 @@ def cuda_available() -> bool:
     Returns:
         bool: True if CUDA device is available and enabled, False otherwise.
     """
-    return device('cuda').enabled()
+    return cuda.is_available()

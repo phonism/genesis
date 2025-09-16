@@ -1,7 +1,7 @@
 """Dropout layers."""
 
 from genesis import init
-from ...autograd import Tensor
+from genesis.tensor import Tensor
 from .module import Module
 
 

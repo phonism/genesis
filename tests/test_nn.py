@@ -18,7 +18,7 @@ _DEVICES = [
         genesis.device('cpu'),
         pytest.param(
                 genesis.device("cuda"), 
-                marks=pytest.mark.skipif(not genesis.device("cuda").enabled(), reason="No GPU"))]
+                marks=pytest.mark.skipif(not genesis.cuda.is_available(), reason="No GPU"))]
 
 
 SOFTMAX_SHAPES = [
@@ -41,7 +41,7 @@ def test_softmax(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     C = genesis.nn.Softmax(dim=-1)(A)
@@ -72,7 +72,7 @@ def test_batchnorm1d(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     norm = genesis.nn.BatchNorm1d(shape[1])
@@ -101,7 +101,7 @@ def test_linear(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     T_linear = torch.nn.Linear(shape[1], 10)
@@ -137,7 +137,7 @@ def test_layernorm(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     norm = genesis.nn.LayerNorm(shape[-1])
@@ -172,7 +172,7 @@ def test_fusedlayernorm(shape, device):
     if device == genesis.device('cpu'):
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     norm = genesis.nn.FusedLayerNorm(shape[-1])
@@ -200,7 +200,7 @@ def test_relu(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     C = genesis.nn.ReLU()(A)
@@ -231,7 +231,7 @@ def test_onehead_attention(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
 
@@ -278,7 +278,7 @@ def test_multihead_attention(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
 
@@ -325,7 +325,7 @@ def test_fused_multihead_attention(shape, device):
     if device == genesis.device('cpu'):
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     heads = 16
@@ -333,23 +333,44 @@ def test_fused_multihead_attention(shape, device):
     attn = genesis.nn.FusedMultiheadAttention(dim=shape[2], heads=heads)
 
     torch_attn = torch.nn.MultiheadAttention(shape[2], heads, bias=False, batch_first=True)
-    attn.w_qkv = genesis.nn.Parameter(torch_attn.in_proj_weight.detach().T.numpy())
-    attn.w_out = genesis.nn.Parameter(torch_attn.out_proj.weight.detach().numpy().T)
-    M = torch.triu(-float("inf") * torch.ones(shape[1], shape[1]), 1)
+
+    # Create weights on the correct device
+    qkv_weight = genesis.tensor(torch_attn.in_proj_weight.detach().T.numpy(), device=device)
+    out_weight = genesis.tensor(torch_attn.out_proj.weight.detach().numpy().T, device=device)
+    attn.w_qkv = genesis.nn.Parameter(qkv_weight)
+    attn.w_out = genesis.nn.Parameter(out_weight)
 
     if device == genesis.device("cuda"):
         attn.cuda()
+        TA = TA.cuda()
+        torch_attn.cuda()
+
     genesis_out = attn(A)
-    torch_out = torch_attn(TA, TA, TA, attn_mask=M)
+
+    # Use PyTorch's causal attention to match Genesis implementation
+    # Extract Q, K, V from PyTorch MultiheadAttention weights
+    q_proj = torch_attn.in_proj_weight[:shape[2]]  # First third for Q
+    k_proj = torch_attn.in_proj_weight[shape[2]:2*shape[2]]  # Second third for K
+    v_proj = torch_attn.in_proj_weight[2*shape[2]:]  # Last third for V
+
+    # Compute Q, K, V
+    q = torch.nn.functional.linear(TA, q_proj).view(TA.shape[0], TA.shape[1], heads, shape[2]//heads).transpose(1, 2)
+    k = torch.nn.functional.linear(TA, k_proj).view(TA.shape[0], TA.shape[1], heads, shape[2]//heads).transpose(1, 2)
+    v = torch.nn.functional.linear(TA, v_proj).view(TA.shape[0], TA.shape[1], heads, shape[2]//heads).transpose(1, 2)
+
+    # Use causal scaled dot product attention
+    attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
+    attn_output = attn_output.transpose(1, 2).contiguous().view(TA.shape[0], TA.shape[1], shape[2])
+    torch_out = (torch.nn.functional.linear(attn_output, torch_attn.out_proj.weight, torch_attn.out_proj.bias),)
 
     np.testing.assert_allclose(
-            genesis_out[0].detach().numpy(), 
-            torch_out[0].detach().numpy(), 
+            genesis_out[0].detach().numpy(),
+            torch_out[0].detach().cpu().numpy(),
             atol=1e-2, rtol=1e-2)
 
     genesis_out[0].sum().backward()
     torch_out[0].sum().backward()
-    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=1e-2, rtol=1e-2)
+    np.testing.assert_allclose(TA.grad.cpu().numpy(), A.grad.numpy(), atol=1e-2, rtol=1e-2)
 
 QKV_SHAPES = [
     (1, 16, 12, 64),
@@ -371,15 +392,15 @@ def test_scaled_dot_product_attention(shape, device):
     if device == genesis.device('cpu'):
         pytest.skip("Skipping CPU tests, only testing CUDA")
     _Q = np.random.randn(*shape).astype(np.float32)
-    Q = genesis.Tensor(_Q, device=device)
+    Q = genesis.tensor(_Q, device=device)
     TQ = torch.Tensor(_Q)
     TQ.requires_grad = True
     _K = np.random.randn(*shape).astype(np.float32)
-    K = genesis.Tensor(_K, device=device)
+    K = genesis.tensor(_K, device=device)
     TK = torch.Tensor(_K)
     TK.requires_grad = True
     _V = np.random.randn(*shape).astype(np.float32)
-    V = genesis.Tensor(_V, device=device)
+    V = genesis.tensor(_V, device=device)
     TV = torch.Tensor(_V)
     TV.requires_grad = True
 
@@ -408,7 +429,7 @@ def test_embedding(device):
     embedding_dim = 32
 
     _A = np.array([[5, 6], [3, 4]]).astype(np.int64)
-    A = genesis.Tensor(_A, device=device, requires_grad=False).long()
+    A = genesis.tensor(_A, device=device, requires_grad=False).long()
     TA = torch.LongTensor(_A)
 
     embed = genesis.nn.Embedding(num_embeddings, embedding_dim)
@@ -501,7 +522,7 @@ def test_rotary_embedding(device):
             rotary_embed.sin_cached.detach().numpy(), atol=1e-5, rtol=1e-5)
 
     _A = np.random.randn(2, 3, 4, 5).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     torch_res = torch_rotary_embed(TA)
@@ -527,7 +548,7 @@ def test_silu(shape, device):
         - Backward gradients match PyTorch implementation
     """
     _A = np.random.randn(*shape).astype(np.float32)
-    A = genesis.Tensor(_A, device=device, requires_grad=True)
+    A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)
     TA.requires_grad = True
     C = genesis.nn.SiLU()(A)

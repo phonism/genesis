@@ -20,6 +20,7 @@ except ImportError:
     from cuda import cuda, nvrtc
 
 from ..dtypes import get_dtype
+from . import cuda_utils
 
 
 class IndexKind(Enum):
@@ -457,13 +458,32 @@ class CUDAIndexingOps:
     
     @staticmethod
     def _copy_data_to_view(storage, target_view, value):
-        """Copy data to view - placeholder implementation"""
-        # This would be moved from the original implementation
-        # For now, use a simple fallback
-        if hasattr(storage, '_copy_data_to_view'):
-            return storage._copy_data_to_view(target_view, value)
+        """Copy data to target view - pixel-level copy from old architecture"""
+        # Import CUDA
+        try:
+            from cuda.bindings import driver as cuda
+        except ImportError:
+            from cuda import cuda
+        from ..backends.cuda import check_cuda_error
+
+        # Pixel-level copy of old architecture logic (line 688-706 from cuda_storage.py)
+        if hasattr(value, 'shape') and hasattr(value, 'ptr'):  # CUDAStorage check
+            # Tensor to Tensor copy
+            if target_view.shape != value.shape:
+                raise ValueError(f"Shape mismatch: {target_view.shape} vs {value.shape}")
+
+            if target_view.is_contiguous() and value.is_contiguous():
+                # Both contiguous: direct memcpy
+                result = cuda.cuMemcpyDtoD(target_view.ptr, value.ptr, target_view.nbytes)
+                check_cuda_error(result)
+            else:
+                # GPU strided copy using cuMemcpy2D
+                storage._gpu_strided_copy(target_view, value)
+        elif isinstance(value, (int, float)):
+            # Scalar assignment: use fill operation
+            storage._fill_view(target_view, value)
         else:
-            raise NotImplementedError("Copy data to view not yet moved")
+            raise TypeError(f"Cannot assign {type(value)} to CUDAStorage")
     
     @staticmethod
     def _setitem_scatter_linear(storage, linear_indices, value):
@@ -571,15 +591,10 @@ class CUDAIndexingOps:
 
         N = flat.size
         # Pre-allocate index buffer of max length N (using int32)  
-        from .cuda_storage import empty
-        idx_buf_i32 = empty((N,), np.int32)
+        idx_buf_i32 = cuda_utils.empty((N,), np.int32)
         # Counter (int32)
-        counter = empty((1,), np.int32)
+        counter = cuda_utils.empty((1,), np.int32)
         # Zero the counter
-        try:
-            from cuda.bindings import driver as cuda
-        except ImportError:
-            from cuda import cuda
         cuda.cuMemsetD8(counter.ptr, 0, 4)
 
         BLOCK = 1024
@@ -593,7 +608,7 @@ class CUDAIndexingOps:
         k = int(k_host[0])
 
         # Convert int32 indices to int64
-        idx_buf_i64 = empty((k,), np.int64)
+        idx_buf_i64 = cuda_utils.empty((k,), np.int64)
         
         @triton.jit
         def i32_to_i64_kernel(src, dst, n, BLOCK_SIZE: tl.constexpr):
@@ -670,8 +685,7 @@ class CUDAIndexingOps:
             src = src.contiguous()
 
         N = int(idx.size)
-        from .cuda_storage import empty
-        out = empty((N,), src._numpy_dtype)
+        out = cuda_utils.empty((N,), src._numpy_dtype)
 
         BLOCK = 1024
         grid  = (triton.cdiv(N, BLOCK),)

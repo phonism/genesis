@@ -8,21 +8,56 @@ from typing import (
     List, Callable, Any, Optional, Dict, Iterator, Tuple
 )
 import genesis
-from ...autograd import Tensor
+from genesis.tensor import Tensor
 import numpy as np
 
 
 class Parameter(Tensor):
     """A tensor subclass that represents trainable parameters.
-    
+
     Parameters are automatically tracked for gradient computation and
     optimization during training.
     """
-    
-    def __init__(self, data, **kwargs):
-        """Initialize a Parameter with requires_grad=True by default."""
-        kwargs.setdefault('requires_grad', True)
-        super().__init__(data, **kwargs)
+
+    def __new__(cls, data, requires_grad=True):
+        """Create a Parameter from a Tensor using __new__ like PyTorch."""
+        # Always convert to tensor first if needed
+        if not isinstance(data, Tensor):
+            data = genesis.tensor(data, requires_grad=requires_grad)
+
+        # Use Tensor.__new__ to create the instance properly
+        instance = Tensor.__new__(cls)
+        # Store the tensor data for __init__ to use
+        instance._init_data = data
+        instance._init_requires_grad = requires_grad
+        return instance
+
+    def __init__(self, data, requires_grad=True):
+        """Initialize the Parameter from a Tensor."""
+        # Use the stored data from __new__
+        if hasattr(self, '_init_data'):
+            data = self._init_data
+            requires_grad = self._init_requires_grad
+            delattr(self, '_init_data')
+            delattr(self, '_init_requires_grad')
+
+        # Now data is guaranteed to be a Tensor
+        if isinstance(data, Tensor):
+            # Initialize using parent class with tensor's attributes
+            super().__init__(data.storage, data.shape, data.stride, data.offset)
+            self.requires_grad = requires_grad
+            if self.requires_grad:
+                self.grad = None
+        else:
+            # This should never happen now
+            raise ValueError("Parameter expects a Tensor")
+
+    def to(self, device):
+        """Move parameter to device and return a Parameter (not Tensor)."""
+        # Use parent Tensor.to() to get moved tensor
+        moved_tensor = super().to(device)
+        # Create new Parameter from moved tensor
+        return Parameter(moved_tensor, requires_grad=self.requires_grad)
 
 
 def _unpack_params(value: object) -> List[Tensor]:
@@ -220,8 +255,8 @@ class Module:
         state_dict = destination
         for name, param in self.__dict__.items():
             if isinstance(param, genesis.Tensor):
-                # TODO: we need to dump genesis.Tensor
-                state_dict[prefix + name] = param.data.data
+                # Use tensor directly, not internal data attributes
+                state_dict[prefix + name] = param
             elif isinstance(param, Module):
                 param.state_dict(state_dict, prefix + name + ".")
             elif isinstance(param, (list, tuple)):
@@ -246,7 +281,15 @@ class Module:
 
                 if isinstance(param, genesis.Tensor):
                     if full_name in state_dict:
-                        param.data.data.copy_(state_dict[full_name])
+                        # Preserve Parameter type when loading state dict
+                        source_tensor = state_dict[full_name]
+                        if isinstance(param, Parameter):
+                            # If original was a Parameter, create a new Parameter with the loaded data
+                            new_param = Parameter(source_tensor, requires_grad=param.requires_grad)
+                            module.__dict__[name] = new_param
+                        else:
+                            # If original was just a Tensor, replace directly
+                            module.__dict__[name] = source_tensor
                         unexpected_keys.remove(full_name)
                     elif strict:
                         missing_keys.append(full_name)
@@ -300,9 +343,9 @@ class Module:
         # Move parameters and buffers in this module (not recursively)
         for name, value in self.__dict__.items():
             if isinstance(value, Parameter):
-                self.__dict__[name] = value.to_device(device)
+                self.__dict__[name] = value.to(device)
             elif isinstance(value, Tensor) and not isinstance(value, Parameter):
-                self.__dict__[name] = value.to_device(device)
+                self.__dict__[name] = value.to(device)
         
         # Recursively move child modules
         for child in self._children():
@@ -314,10 +357,25 @@ class Module:
         """
         Move the module to the specified cuda device.
         """
-        for idx in range(len(self.parameters())):
-            self.parameters()[idx].set_device(device_name)
-        for idx in range(len(self.vars())):
-            self.vars()[idx].set_device(device_name)
+        # Move all parameters and buffers to CUDA
+        # We need to replace the parameter objects, not modify them in-place
+        for name, param in self.named_parameters():
+            # Find the parent module and attribute name
+            *parent_names, attr_name = name.split('.')
+            parent_module = self
+            for parent_name in parent_names:
+                # Handle ModuleList case where we need to use indexing instead of getattr
+                if hasattr(parent_module, '_modules') and parent_name.isdigit():
+                    # This is a ModuleList with numeric index access
+                    parent_module = parent_module[int(parent_name)]
+                else:
+                    parent_module = getattr(parent_module, parent_name)
+
+            # Move parameter to device and replace
+            moved_param = param.to(device_name)
+            if isinstance(param, Parameter):
+                moved_param = Parameter(moved_param, requires_grad=param.requires_grad)
+            setattr(parent_module, attr_name, moved_param)
         
         # Also move buffers registered with register_buffer
         for name, value in self.__dict__.items():
@@ -329,8 +387,8 @@ class Module:
                 else:
                     self.__dict__[name] = value.to(device_name)
         
-        for idx in range(len(self._children())):
-            self._children()[idx].cuda(device_name)
+        for child_module in self._children():
+            child_module.cuda(device_name)
         return self
 
     def forward(self, *args, **kwargs) -> Tensor:

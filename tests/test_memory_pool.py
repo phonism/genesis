@@ -10,8 +10,8 @@ from typing import List, Dict, Any
 import random
 
 try:
-    from genesis.ndarray.cuda_memory_manager import (
-        CUDAMemoryManager, 
+    from genesis.backends.cuda_memory import (
+        CUDAMemoryManager,
         get_memory_manager,
         allocate_memory,
         free_memory,
@@ -42,7 +42,7 @@ class TestCUDAMemoryManager:
             pytest.skip("CUDA not available")
         
         # Clear any existing manager to start fresh
-        import genesis.ndarray.cuda_memory_manager as mm
+        import genesis.backends.cuda_memory as mm
         mm._memory_manager = None
         
         manager = get_memory_manager()

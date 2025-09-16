@@ -24,7 +24,7 @@ def test_tensor_cuda_method(dtype, shape):
     cpu_tensor = genesis.tensor(input_data, device=genesis.device('cpu'), dtype=dtype)
     
     # Test basic properties
-    assert str(cpu_tensor.device) == "cpu()", f"Expected cpu() device, got {cpu_tensor.device}"
+    assert str(cpu_tensor.device) == "cpu", f"Expected cpu device, got {cpu_tensor.device}"
     assert cpu_tensor.dtype == dtype, f"Expected {dtype}, got {cpu_tensor.dtype}"
     assert cpu_tensor.shape == shape, f"Expected shape {shape}, got {cpu_tensor.shape}"
     
@@ -123,7 +123,7 @@ def test_from_numpy(dtype, shape):
     
     # Test device specification
     genesis_cpu = genesis.from_numpy(np_data, device=genesis.device('cpu'))
-    assert str(genesis_cpu.device) == "cpu()", f"Device specification failed: {genesis_cpu.device}"
+    assert str(genesis_cpu.device) == "cpu", f"Device specification failed: {genesis_cpu.device}"
 
 
 @pytest.mark.parametrize("input_type", ["list", "nested_list", "scalar"])

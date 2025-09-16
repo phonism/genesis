@@ -1,7 +1,7 @@
 """Container modules for organizing neural network components."""
 
 from typing import List, Optional, Iterator, Tuple
-from ...autograd import Tensor
+from genesis.tensor import Tensor
 from .module import Module
 
 
