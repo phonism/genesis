@@ -28,7 +28,7 @@ first_project/
 ## 📁 1. Data Processing (`dataset.py`)
 
 ```python
-"""数据加载和预处理模块"""
+"""Data loading and preprocessing module"""
 import genesis
 import numpy as np
 from typing import Tuple, List
@@ -36,16 +36,16 @@ import pickle
 import os
 
 class SimpleDataset:
-    """简单的数据集类"""
+    """Simple dataset class"""
     
     def __init__(self, data: np.ndarray, labels: np.ndarray, transform=None):
         """
-        初始化数据集
-        
+        Initialize the dataset
+
         Args:
-            data: 输入数据 (N, H, W) 或 (N, D)
-            labels: 标签 (N,)
-            transform: 数据变换函数
+            data: Input data (N, H, W) or (N, D)
+            labels: Labels (N,)
+            transform: Data transformation function
         """
         self.data = data.astype(np.float32)
         self.labels = labels.astype(np.int64)
@@ -55,7 +55,7 @@ class SimpleDataset:
         return len(self.data)
     
     def __getitem__(self, idx: int) -> Tuple[genesis.Tensor, genesis.Tensor]:
-        """获取单个样本"""
+        """Get a single sample"""
         x = self.data[idx]
         y = self.labels[idx]
         
@@ -65,7 +65,7 @@ class SimpleDataset:
         return genesis.tensor(x), genesis.tensor(y)
 
 class DataLoader:
-    """简单的数据加载器"""
+    """Simple data loader"""
     
     def __init__(self, dataset: SimpleDataset, batch_size: int = 32, shuffle: bool = True):
         self.dataset = dataset
@@ -74,7 +74,7 @@ class DataLoader:
         self._reset_indices()
     
     def _reset_indices(self):
-        """重置索引"""
+        """Reset indices"""
         self.indices = np.arange(len(self.dataset))
         if self.shuffle:
             np.random.shuffle(self.indices)
@@ -88,11 +88,11 @@ class DataLoader:
         if self.current >= len(self.dataset):
             raise StopIteration
         
-        # 获取当前批次的索引
+        # Get the current batch indices
         end_idx = min(self.current + self.batch_size, len(self.dataset))
         batch_indices = self.indices[self.current:end_idx]
         
-        # 收集批次数据
+        # Collect batch data
         batch_data = []
         batch_labels = []
         
@@ -103,80 +103,80 @@ class DataLoader:
         
         self.current = end_idx
         
-        # 堆叠成批次
+        # Stack into batches
         batch_x = genesis.stack(batch_data, dim=0)
         batch_y = genesis.stack(batch_labels, dim=0)
         
         return batch_x, batch_y
 
 def create_synthetic_data(n_samples: int = 1000, n_features: int = 784, n_classes: int = 10) -> Tuple[np.ndarray, np.ndarray]:
-    """创建合成数据用于演示"""
+    """Create synthetic data for demonstration"""
     np.random.seed(42)
     
-    # 生成随机数据
+    # Generate random data
     data = np.random.randn(n_samples, n_features).astype(np.float32)
     
-    # 为每个类别添加一些模式
+    # Add some patterns for each class
     labels = np.random.randint(0, n_classes, n_samples)
     for i in range(n_classes):
         mask = labels == i
-        # 给每个类别添加特定的偏置
+        # Add specific bias to each class
         data[mask] += np.random.randn(n_features) * 0.5
     
     return data, labels
 
 def load_data() -> Tuple[DataLoader, DataLoader]:
-    """加载训练和验证数据"""
-    print("🔄 加载数据...")
+    """Load training and validation data"""
+    print("🔄 Loading data...")
     
-    # 创建合成数据 (实际项目中替换为真实数据)
+    # Create synthetic data (replace with real data in actual projects)
     train_data, train_labels = create_synthetic_data(800, 784, 10)
     val_data, val_labels = create_synthetic_data(200, 784, 10)
     
-    # 数据标准化
+    # Data normalization
     def normalize(x):
         return (x - x.mean()) / (x.std() + 1e-8)
     
-    # 创建数据集
+    # Create datasets
     train_dataset = SimpleDataset(train_data, train_labels, transform=normalize)
     val_dataset = SimpleDataset(val_data, val_labels, transform=normalize)
     
-    # 创建数据加载器
+    # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
     
-    print(f"✅ 数据加载完成 - 训练集: {len(train_dataset)}, 验证集: {len(val_dataset)}")
+    print(f"✅ Data loading complete - Training set: {len(train_dataset)}, Validation set: {len(val_dataset)}")
     
     return train_loader, val_loader
 ```
 
-## 🧠 2. 模型定义 (`model.py`)
+## 🧠 2. Model Definition (`model.py`)
 
 ```python
-"""神经网络模型定义"""
+"""Neural network model definition"""
 import genesis
 import genesis.nn as nn
 import genesis.nn.functional as F
 
 class MLP(nn.Module):
-    """多层感知机分类器"""
+    """Multilayer Perceptron Classifier"""
     
     def __init__(self, input_dim: int = 784, hidden_dims: list = None, num_classes: int = 10, dropout_rate: float = 0.2):
         """
-        初始化MLP模型
-        
+        Initialize MLP model
+
         Args:
-            input_dim: 输入维度
-            hidden_dims: 隐藏层维度列表
-            num_classes: 分类数量
-            dropout_rate: Dropout比率
+            input_dim: Input dimension
+            hidden_dims: List of hidden layer dimensions
+            num_classes: Number of classes
+            dropout_rate: Dropout ratio
         """
         super().__init__()
         
         if hidden_dims is None:
             hidden_dims = [512, 256, 128]
         
-        # 构建网络层
+        # Build network layers
         layers = []
         prev_dim = input_dim
         
@@ -188,63 +188,63 @@ class MLP(nn.Module):
             ])
             prev_dim = hidden_dim
         
-        # 输出层
+        # Output layer
         layers.append(nn.Linear(prev_dim, num_classes))
         
         self.network = nn.Sequential(*layers)
         
-        # 初始化权重
+        # Initialize weights
         self._init_weights()
     
     def _init_weights(self):
-        """权重初始化"""
+        """Weight initialization"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
-                # Xavier初始化
+                # Xavier initialization
                 std = (2.0 / (module.in_features + module.out_features)) ** 0.5
                 module.weight.data.normal_(0, std)
                 if module.bias is not None:
                     module.bias.data.zero_()
     
     def forward(self, x: genesis.Tensor) -> genesis.Tensor:
-        """前向传播"""
-        # 展平输入 (如果是图像数据)
+        """Forward propagation"""
+        # Flatten input (if image data)
         if x.dim() > 2:
             x = x.view(x.size(0), -1)
         
         return self.network(x)
 
 class CNN(nn.Module):
-    """卷积神经网络分类器 (如果需要处理图像)"""
+    """Convolutional Neural Network Classifier (if processing images)"""
     
     def __init__(self, num_classes: int = 10):
         super().__init__()
         
-        # 卷积层
+        # Convolutional layers
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         
-        # 池化层
+        # Pooling layers
         self.pool = nn.MaxPool2d(2, 2)
         
-        # 全连接层
-        self.fc1 = nn.Linear(128 * 3 * 3, 512)  # 假设输入是28x28
+        # Fully connected layers
+        self.fc1 = nn.Linear(128 * 3 * 3, 512)  # Assuming input is 28x28
         self.fc2 = nn.Linear(512, num_classes)
         
         # Dropout
         self.dropout = nn.Dropout(0.5)
         
     def forward(self, x: genesis.Tensor) -> genesis.Tensor:
-        # 卷积 + 池化
+        # Convolution + pooling
         x = self.pool(F.relu(self.conv1(x)))  # 28x28 -> 14x14
         x = self.pool(F.relu(self.conv2(x)))  # 14x14 -> 7x7  
         x = self.pool(F.relu(self.conv3(x)))  # 7x7 -> 3x3
         
-        # 展平
+        # Flatten
         x = x.view(x.size(0), -1)
         
-        # 全连接层
+        # Fully connected layers
         x = F.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
@@ -252,19 +252,19 @@ class CNN(nn.Module):
         return x
 
 def create_model(model_type: str = "mlp", **kwargs) -> nn.Module:
-    """工厂函数：创建模型"""
+    """Factory function: create model"""
     if model_type.lower() == "mlp":
         return MLP(**kwargs)
     elif model_type.lower() == "cnn":
         return CNN(**kwargs)
     else:
-        raise ValueError(f"未知的模型类型: {model_type}")
+        raise ValueError(f"Unknown model type: {model_type}")
 ```
 
-## 🛠️ 3. 工具函数 (`utils.py`)
+## 🛠️ 3. Utility Functions (`utils.py`)
 
 ```python
-"""工具函数模块"""
+"""Utility functions module"""
 import genesis
 import time
 import os
@@ -272,7 +272,7 @@ from typing import Dict, Any
 import json
 
 class AverageMeter:
-    """平均值计算器"""
+    """Average calculator"""
     
     def __init__(self):
         self.reset()
@@ -290,7 +290,7 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 class Timer:
-    """计时器"""
+    """Timer"""
     
     def __init__(self):
         self.start_time = None
@@ -309,7 +309,7 @@ class Timer:
         return time.time() - self.start_time
 
 def accuracy(output: genesis.Tensor, target: genesis.Tensor, topk: tuple = (1,)) -> list:
-    """计算准确率"""
+    """Calculate accuracy"""
     with genesis.no_grad():
         maxk = max(topk)
         batch_size = target.size(0)
@@ -327,7 +327,7 @@ def accuracy(output: genesis.Tensor, target: genesis.Tensor, topk: tuple = (1,))
 
 def save_checkpoint(model: genesis.nn.Module, optimizer: genesis.optim.Optimizer, 
                    epoch: int, loss: float, accuracy: float, filepath: str):
-    """保存检查点"""
+    """Save checkpoint"""
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
@@ -336,14 +336,14 @@ def save_checkpoint(model: genesis.nn.Module, optimizer: genesis.optim.Optimizer
         'accuracy': accuracy
     }
     
-    # 确保目录存在
+    # Ensure directory exists
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     
     genesis.save(checkpoint, filepath)
-    print(f"💾 检查点已保存: {filepath}")
+    print(f"💾 Checkpoint saved: {filepath}")
 
 def load_checkpoint(filepath: str, model: genesis.nn.Module, optimizer: genesis.optim.Optimizer = None) -> Dict[str, Any]:
-    """加载检查点"""
+    """Load checkpoint"""
     checkpoint = genesis.load(filepath)
     
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -351,46 +351,46 @@ def load_checkpoint(filepath: str, model: genesis.nn.Module, optimizer: genesis.
     if optimizer and 'optimizer_state_dict' in checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     
-    print(f"📁 检查点已加载: {filepath}")
-    print(f"   轮次: {checkpoint['epoch']}, 损失: {checkpoint['loss']:.4f}, 准确率: {checkpoint['accuracy']:.2f}%")
+    print(f"📁 Checkpoint loaded: {filepath}")
+    print(f"   Epoch: {checkpoint['epoch']}, Loss: {checkpoint['loss']:.4f}, Accuracy: {checkpoint['accuracy']:.2f}%")
     
     return checkpoint
 
 def save_training_history(history: Dict[str, list], filepath: str):
-    """保存训练历史"""
+    """Save training history"""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     
     with open(filepath, 'w') as f:
         json.dump(history, f, indent=2)
     
-    print(f"📊 训练历史已保存: {filepath}")
+    print(f"📊 Training history saved: {filepath}")
 
 def print_model_summary(model: genesis.nn.Module, input_shape: tuple):
-    """打印模型摘要"""
-    print("🏗️  模型架构:")
+    """Print model summary"""
+    print("🏗️  Model architecture:")
     print("=" * 50)
     
-    # 计算参数数量
+    # Calculate parameter count
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
-    print(f"总参数量: {total_params:,}")
-    print(f"可训练参数: {trainable_params:,}")
-    print(f"输入形状: {input_shape}")
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    print(f"Input shape: {input_shape}")
     
-    # 测试前向传播
+    # Test forward propagation
     dummy_input = genesis.randn(*input_shape)
     try:
         with genesis.no_grad():
             output = model(dummy_input)
-        print(f"输出形状: {output.shape}")
+        print(f"Output shape: {output.shape}")
     except Exception as e:
-        print(f"前向传播测试失败: {e}")
+        print(f"Forward propagation test failed: {e}")
     
     print("=" * 50)
 ```
 
-## 🚂 4. 训练脚本 (`train.py`)
+## 🚂 4. Training Script (`train.py`)
 
 <function_calls>
 <invoke name="TodoWrite">

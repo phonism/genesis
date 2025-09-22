@@ -115,6 +115,74 @@ def _fill_kernel(
     
     tl.store(output_ptr + offsets, fill_value, mask=mask)
 
+# Strided fill kernels for non-contiguous tensors
+@triton.jit
+def _fill_strided_kernel(
+    dst_ptr,
+    value,
+    total_numel,
+    size0: tl.constexpr, stride0: tl.constexpr,
+    size1: tl.constexpr, stride1: tl.constexpr,
+    size2: tl.constexpr, stride2: tl.constexpr,
+    size3: tl.constexpr, stride3: tl.constexpr,
+    ndim: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    m = offs < total_numel
+    lin = offs.to(tl.int64)
+    dst_off = tl.zeros_like(lin)
+
+    if ndim == 4:
+        c3 = lin % size3
+        lin //= size3
+        c2 = lin % size2
+        lin //= size2
+        c1 = lin % size1
+        lin //= size1
+        c0 = lin
+        dst_off = c0 * stride0 + c1 * stride1 + c2 * stride2 + c3 * stride3
+    elif ndim == 3:
+        c2 = lin % size2
+        lin //= size2
+        c1 = lin % size1
+        lin //= size1
+        c0 = lin
+        dst_off = c0 * stride0 + c1 * stride1 + c2 * stride2
+    elif ndim == 2:
+        c1 = lin % size1
+        c0 = lin // size1
+        dst_off = c0 * stride0 + c1 * stride1
+    else:
+        dst_off = lin
+
+    tl.store(dst_ptr + dst_off, value, mask=m)
+
+@triton.jit
+def _fill_strided_kernel_general(
+    dst_ptr,
+    sizes_ptr, strides_ptr,
+    value,
+    total_numel,
+    ndim: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    m = offs < total_numel
+    lin = offs.to(tl.int64)
+    dst_off = tl.zeros_like(lin)
+
+    for d in range(ndim - 1, -1, -1):
+        sz = tl.load(sizes_ptr + d)
+        st = tl.load(strides_ptr + d)
+        coord = lin % sz
+        lin //= sz
+        dst_off += coord * st
+
+    tl.store(dst_ptr + dst_off, value, mask=m)
+
 class CUDAStorage(Storage):
     """Pure CUDA implementation of Tensor class"""
     
@@ -328,15 +396,33 @@ class CUDAStorage(Storage):
         """Create a deep copy of the tensor."""
         # Create new tensor with same shape and dtype
         new_tensor = CUDAStorage(self.shape, self.dtype)
-        
+
         # Copy data using Triton kernel
         copy_strided_kernel(self, new_tensor)
         return new_tensor
+
+    def copy_strided_to_contiguous(self, shape: Tuple[int, ...], stride: Tuple[int, ...], offset: int, dst_storage: 'CUDAStorage'):
+        """Copy strided tensor data to contiguous destination storage."""
+        # Use existing copy_strided_kernel which handles strided -> contiguous copying
+        # Create a temporary view of source tensor with the given shape, stride, offset
+        temp_view = CUDAStorage(shape, self.dtype_obj, self.ptr + offset * self.itemsize, stride, base=self)
+
+        # Copy from strided view to contiguous destination
+        copy_strided_kernel(temp_view, dst_storage)
+        return dst_storage
     
-    def reshape(self, new_shape: Tuple[int, ...]) -> 'CUDAStorage':
-        """Reshape operation"""
-        # Handle -1 case
-        new_shape = list(new_shape)
+    def reshape(self, *args) -> 'CUDAStorage':
+        """Reshape operation - supports both tuple and separate arguments.
+
+        Examples:
+            reshape((2, 3))     # tuple argument
+            reshape(2, 3)       # separate arguments
+        """
+        # Handle both tuple and separate arguments
+        if len(args) == 1 and isinstance(args[0], (tuple, list)):
+            new_shape = list(args[0])
+        else:
+            new_shape = list(args)
         neg_idx = None
         total_size = 1
         
@@ -649,15 +735,15 @@ class CUDAStorage(Storage):
             contig = self.contiguous()
             self.data = contig.data
             self.strides = contig.strides
-        
+
         n_elements = self.size
         grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        
+
         _fill_kernel[grid](
             self, float(value), n_elements, BLOCK_SIZE=1024
         )
         return self
-    
+
     def fill(self, value):
         """Fill tensor with a constant value (in-place) using GPU kernel"""
         if not self.is_contiguous():
@@ -665,17 +751,17 @@ class CUDAStorage(Storage):
             contig = self.contiguous()
             self.data = contig.data
             self.strides = contig.strides
-        
+
         # Optimization: use fast cuMemsetD8 for zeros
         if value == 0.0:
             result = cuda.cuMemsetD8(self.ptr, 0, self.nbytes)
             check_cuda_error(result)
             return self
-        
+
         # Default path for non-zero values
         n_elements = self.size
         grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        
+
         _fill_kernel[grid](
             self, float(value), n_elements, BLOCK_SIZE=1024
         )
@@ -684,19 +770,29 @@ class CUDAStorage(Storage):
     
     def _preprocess_index_key(self, key):
         """Convert lists in index keys to tensors before passing to indexing operations"""
-        if isinstance(key, list):
-            # Convert list to tensor
+        if isinstance(key, CUDAStorage):
+            # If it's already a CUDAStorage, return as-is
+            return key
+        elif isinstance(key, list):
+            # Check if list contains CUDAStorage objects (advanced indexing)
+            if key and isinstance(key[0], CUDAStorage):
+                # It's a list of CUDAStorage tensors - convert to tuple for multi-dimensional indexing
+                return tuple(key)
+            # Otherwise convert list to tensor
             key_array = np.array(key)
             if key_array.dtype == np.bool_ or key_array.dtype == bool:
                 return from_numpy(key_array.astype(np.bool_))
             else:
                 return from_numpy(key_array.astype(np.int64))
-        
+
         elif isinstance(key, tuple):
             # Process each element in tuple
             processed_key = []
             for idx in key:
-                if isinstance(idx, list):
+                if isinstance(idx, CUDAStorage):
+                    # If it's already a CUDAStorage tensor, keep it as-is
+                    processed_key.append(idx)
+                elif isinstance(idx, list):
                     key_array = np.array(idx)
                     if key_array.dtype == np.bool_ or key_array.dtype == bool:
                         processed_key.append(from_numpy(key_array.astype(np.bool_)))
@@ -705,7 +801,7 @@ class CUDAStorage(Storage):
                 else:
                     processed_key.append(idx)
             return tuple(processed_key)
-        
+
         else:
             # Return key as-is (int, slice, tensor, etc.)
             return key
@@ -740,48 +836,23 @@ class CUDAStorage(Storage):
             raise TypeError(f"Cannot assign {type(value)} to CUDAStorage")
     
     def _gpu_strided_copy(self, target_view, value):
-        """GPU-only strided copy without CPU fallback"""
+        """GPU-only strided copy without CPU fallback (kernel-based)."""
         if target_view.shape != value.shape:
             raise ValueError(f"Shape mismatch: {target_view.shape} vs {value.shape}")
-        
-        # For 1D tensors, use element-wise copy with stride
-        if target_view.ndim == 1 and value.ndim == 1:
-            self._gpu_1d_strided_copy(target_view, value)
-        elif target_view.ndim == 2 and value.ndim == 2:
-            self._gpu_2d_strided_copy(target_view, value) 
-        else:
-            # For higher dimensions, flatten and copy
-            self._gpu_flattened_copy(target_view, value)
+        # Keep fast 2D path via cuMemcpy2D
+        if target_view.ndim == 2 and value.ndim == 2:
+            self._gpu_2d_strided_copy(target_view, value)
+            return
+        # General path: single Triton kernel
+        copy_strided_to_strided_kernel(value, target_view)
     
     def _gpu_1d_strided_copy(self, target_view, value):
-        """GPU 1D strided copy"""
-        size = target_view.size
-        target_stride = target_view.stride()[0] * target_view.itemsize
-        value_stride = value.stride()[0] * value.itemsize
-        itemsize = target_view.itemsize
-        
-        if target_stride == itemsize and value_stride == itemsize:
-            # Both contiguous, direct copy
-            result = cuda.cuMemcpyDtoD(target_view.ptr, value.ptr, size * itemsize)
-            check_cuda_error(result)
-        else:
-            # Strided copy - copy element by element
-            for i in range(size):
-                src_ptr = cuda.CUdeviceptr(int(value.ptr) + i * value_stride)
-                dst_ptr = cuda.CUdeviceptr(int(target_view.ptr) + i * target_stride)
-                result = cuda.cuMemcpyDtoD(dst_ptr, src_ptr, itemsize)
-                check_cuda_error(result)
+        """GPU 1D strided copy (kernel)."""
+        copy_strided_to_strided_kernel(value, target_view)
     
     def _gpu_flattened_copy(self, target_view, value):
-        """GPU copy by flattening tensors"""
-        if target_view.is_contiguous():
-            # Contiguous case: use fast reshape+copy
-            target_flat = target_view.reshape((-1,))
-            value_flat = value.reshape((-1,))
-            self._gpu_1d_strided_copy(target_flat, value_flat)
-        else:
-            # Non-contiguous case: use optimized strided copy (old architecture)
-            self._gpu_strided_copy_fast(target_view, value)
+        """Unified path via strided kernel."""
+        copy_strided_to_strided_kernel(value, target_view)
     
     def _gpu_strided_copy_fast(self, target_view, value):
         """Fast GPU strided copy for non-contiguous views"""
@@ -803,45 +874,8 @@ class CUDAStorage(Storage):
                 self._gpu_decompose_to_2d_copy(target_view, value)
     
     def _gpu_decompose_to_2d_copy(self, target_view, value):
-        """Decompose high-dimensional copy into lower-dimensional operations"""
-        # For non-contiguous tensors, we can't safely reshape to 2D
-        # Instead, decompose recursively along dimensions
-
-        if target_view.ndim == 3 and value.ndim == 3:
-            # Handle 3D tensors by iterating over the first dimension
-            for i in range(target_view.shape[0]):
-                target_2d = target_view[i]
-                value_2d = value[i]
-                if target_2d.is_contiguous() and value_2d.is_contiguous():
-                    # Both contiguous: direct copy
-                    result = cuda.cuMemcpyDtoD(target_2d.ptr, value_2d.ptr, target_2d.nbytes)
-                    check_cuda_error(result)
-                else:
-                    self._gpu_2d_strided_copy(target_2d, value_2d)
-
-        elif target_view.ndim == 4 and value.ndim == 4:
-            # Handle 4D tensors by iterating over the first dimension
-            for i in range(target_view.shape[0]):
-                target_3d = target_view[i]
-                value_3d = value[i]
-                # Recursively handle 3D case
-                self._gpu_decompose_to_2d_copy(target_3d, value_3d)
-
-        elif target_view.ndim > 4:
-            # For higher dimensions, iterate over the first dimension
-            for i in range(target_view.shape[0]):
-                target_sub = target_view[i]
-                value_sub = value[i]
-                self._gpu_decompose_to_2d_copy(target_sub, value_sub)
-
-        else:
-            # For other cases, use old architecture logic
-            if target_view.size <= 1000:
-                # Small tensors: use element-wise copy
-                self._gpu_elementwise_copy(target_view, value)
-            else:
-                # Large tensors: try to decompose into 2D operations (old architecture)
-                self._gpu_decompose_to_2d_copy(target_view, value)
+        """Unified path via strided kernel."""
+        copy_strided_to_strided_kernel(value, target_view)
 
     def _gpu_2d_strided_copy(self, target_view, value):
         """GPU 2D strided copy using cuMemcpy2D - restored from old architecture"""
@@ -959,51 +993,58 @@ class CUDAStorage(Storage):
     def _fill_view(self, target_view, value):
         """Fill view with scalar value"""
         if target_view.is_contiguous():
-            # Contiguous memory: use GPU kernel
+            # Contiguous memory: memset or simple fill kernel
             if target_view.dtype == "float32" and value == 0.0:
-                # Zero fill: can use cuMemsetD8 (fastest)
                 result = cuda.cuMemsetD8(target_view.ptr, 0, target_view.nbytes)
                 check_cuda_error(result)
-            else:
-                # Use GPU fill kernel instead of CPU creation
-                n_elements = target_view.size
-                grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-                
-                _fill_kernel[grid](
-                    target_view, float(value), n_elements, BLOCK_SIZE=1024
-                )
+                return
+            n_elements = target_view.size
+            grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+            _fill_kernel[grid](target_view, float(value), n_elements, BLOCK_SIZE=1024)
+            return
+        # Non-contiguous: launch strided fill kernel
+        ndim = len(target_view.shape)
+        numel = target_view.size
+        if numel == 0:
+            return
+        if numel < 1024:
+            BLOCK = 256; num_warps = 2
+        elif numel < 1024 * 1024:
+            BLOCK = 512; num_warps = 4
         else:
-            # Non-contiguous memory: use element-wise GPU fill
-            # Create a simple GPU kernel or use element-wise assignment
-            if target_view.size <= 10000:  # For reasonable sizes, use element-wise
-                # Use GPU element-wise fill - iterate through each element
-                flat_size = target_view.size
-                for i in range(flat_size):
-                    # Convert linear index to multi-dimensional indices
-                    indices = []
-                    remaining = i
-                    for dim_size in reversed(target_view.shape):
-                        indices.append(remaining % dim_size)
-                        remaining //= dim_size
-                    indices.reverse()
-                    
-                    # Calculate memory offset for this element
-                    offset = 0
-                    for idx, stride in zip(indices, target_view.stride()):
-                        offset += idx * stride
-                    
-                    # Direct memory write
-                    value_bytes = target_view._numpy_dtype(value).tobytes()
-                    result = cuda.cuMemcpyHtoD(target_view.ptr + offset * target_view.itemsize, 
-                                             value_bytes, target_view.itemsize)
-                    check_cuda_error(result)
-            else:
-                # For large non-contiguous tensors, use temporary contiguous tensor approach
-                # This avoids expensive element-wise operations while staying on GPU
-                temp_tensor = empty(target_view.shape, target_view._numpy_dtype)
-                temp_tensor.fill(value)  # GPU fill
-                # Copy from temp to target using existing strided copy kernel
-                copy_strided_kernel(temp_tensor, target_view)
+            BLOCK = 1024; num_warps = 8
+        grid = (triton.cdiv(numel, BLOCK),)
+        if ndim <= 4:
+            sizes = list(target_view.shape) + [1] * (4 - ndim)
+            strides = list(target_view.stride()) + [0] * (4 - ndim)
+            _fill_strided_kernel[grid](
+                target_view, float(value), numel,
+                size0=sizes[0], stride0=strides[0],
+                size1=sizes[1], stride1=strides[1],
+                size2=sizes[2], stride2=strides[2],
+                size3=sizes[3], stride3=strides[3],
+                ndim=ndim,
+                BLOCK=BLOCK,
+                num_warps=num_warps,
+            )
+        else:
+            cache_key = (tuple(target_view.shape), tuple(target_view.stride()))
+            if cache_key not in _metadata_cache:
+                sizes_gpu = empty((ndim,), np.int64)
+                strides_gpu = empty((ndim,), np.int64)
+                _metadata_cache[cache_key] = (sizes_gpu, strides_gpu)
+                s = np.array(target_view.shape, dtype=np.int64)
+                st = np.array(target_view.stride(), dtype=np.int64)
+                r = cuda.cuMemcpyHtoD(sizes_gpu.ptr, s, s.nbytes); check_cuda_error(r)
+                r = cuda.cuMemcpyHtoD(strides_gpu.ptr, st, st.nbytes); check_cuda_error(r)
+            sizes_gpu, strides_gpu = _metadata_cache[cache_key]
+            _fill_strided_kernel_general[grid](
+                target_view, sizes_gpu, strides_gpu,
+                float(value), numel,
+                ndim=ndim,
+                BLOCK=BLOCK,
+                num_warps=num_warps,
+            )
     
     
     def _copy_to_view(self, target_view, value):
@@ -1019,7 +1060,7 @@ class CUDAStorage(Storage):
                 result = cuda.cuMemcpyDtoD(target_view.ptr, value.ptr, target_view.nbytes)
                 check_cuda_error(result)
             else:
-                # GPU strided copy using cuMemcpy2D
+                # GPU strided copy (single kernel when possible)
                 self._gpu_strided_copy(target_view, value)
         
         elif isinstance(value, np.ndarray):
@@ -1827,8 +1868,147 @@ def copy_strided_reverse_kernel(src: CUDAStorage, dst: CUDAStorage):
             num_warps=num_warps
         )
 
+# ===================== Strided -> Strided copy kernels =====================
+@triton.jit
+def _copy_strided_to_strided_optimized(
+    src_ptr, dst_ptr, total_numel,
+    s_sz0: tl.constexpr, s_st0: tl.constexpr,
+    s_sz1: tl.constexpr, s_st1: tl.constexpr,
+    s_sz2: tl.constexpr, s_st2: tl.constexpr,
+    s_sz3: tl.constexpr, s_st3: tl.constexpr,
+    d_sz0: tl.constexpr, d_st0: tl.constexpr,
+    d_sz1: tl.constexpr, d_st1: tl.constexpr,
+    d_sz2: tl.constexpr, d_st2: tl.constexpr,
+    d_sz3: tl.constexpr, d_st3: tl.constexpr,
+    ndim: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    m = offs < total_numel
+    lin = offs.to(tl.int64)
+    src_off = tl.zeros_like(lin)
+    dst_off = tl.zeros_like(lin)
+    if ndim == 4:
+        c3 = lin % s_sz3; lin //= s_sz3
+        c2 = lin % s_sz2; lin //= s_sz2
+        c1 = lin % s_sz1; lin //= s_sz1
+        c0 = lin
+        src_off = c0 * s_st0 + c1 * s_st1 + c2 * s_st2 + c3 * s_st3
+        dst_off = c0 * d_st0 + c1 * d_st1 + c2 * d_st2 + c3 * d_st3
+    elif ndim == 3:
+        c2 = lin % s_sz2; lin //= s_sz2
+        c1 = lin % s_sz1; lin //= s_sz1
+        c0 = lin
+        src_off = c0 * s_st0 + c1 * s_st1 + c2 * s_st2
+        dst_off = c0 * d_st0 + c1 * d_st1 + c2 * d_st2
+    elif ndim == 2:
+        c1 = lin % s_sz1
+        c0 = lin // s_sz1
+        src_off = c0 * s_st0 + c1 * s_st1
+        dst_off = c0 * d_st0 + c1 * d_st1
+    else:
+        src_off = lin * s_st0
+        dst_off = lin * d_st0
+    val = tl.load(src_ptr + src_off, mask=m)
+    tl.store(dst_ptr + dst_off, val, mask=m)
+
+@triton.jit
+def _copy_strided_to_strided_general(
+    src_ptr, dst_ptr,
+    s_sizes_ptr, s_strides_ptr,
+    d_sizes_ptr, d_strides_ptr,
+    total_numel,
+    ndim: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    m = offs < total_numel
+    lin = offs.to(tl.int64)
+    src_off = tl.zeros_like(lin)
+    dst_off = tl.zeros_like(lin)
+    for d in range(ndim - 1, -1, -1):
+        sz = tl.load(s_sizes_ptr + d)
+        sst = tl.load(s_strides_ptr + d)
+        dsts = tl.load(d_strides_ptr + d)
+        coord = lin % sz
+        lin //= sz
+        src_off += coord * sst
+        dst_off += coord * dsts
+    val = tl.load(src_ptr + src_off, mask=m)
+    tl.store(dst_ptr + dst_off, val, mask=m)
+
+def copy_strided_to_strided_kernel(src: CUDAStorage, dst: CUDAStorage):
+    """Copy from possibly non-contiguous src to possibly non-contiguous dst using a single kernel."""
+    assert src.size == dst.size
+    if src.size == 0:
+        return
+    if src.is_contiguous() and dst.is_contiguous():
+        r = cuda.cuMemcpyDtoD(dst.ptr, src.ptr, src.nbytes)
+        check_cuda_error(r)
+        return
+    ndim = len(src.shape)
+    numel = src.size
+    if numel < 1024:
+        BLOCK = 256; num_warps = 2
+    elif numel < 1024 * 1024:
+        BLOCK = 512; num_warps = 4
+    else:
+        BLOCK = 1024; num_warps = 8
+    grid = (triton.cdiv(numel, BLOCK),)
+    if ndim <= 4:
+        s_sizes = list(src.shape) + [1] * (4 - ndim)
+        s_strides = list(src.strides) + [0] * (4 - ndim)
+        d_sizes = list(dst.shape) + [1] * (4 - ndim)
+        d_strides = list(dst.strides) + [0] * (4 - ndim)
+        _copy_strided_to_strided_optimized[grid](
+            src, dst, numel,
+            s_sz0=s_sizes[0], s_st0=s_strides[0],
+            s_sz1=s_sizes[1], s_st1=s_strides[1],
+            s_sz2=s_sizes[2], s_st2=s_strides[2],
+            s_sz3=s_sizes[3], s_st3=s_strides[3],
+            d_sz0=d_sizes[0], d_st0=d_strides[0],
+            d_sz1=d_sizes[1], d_st1=d_strides[1],
+            d_sz2=d_sizes[2], d_st2=d_strides[2],
+            d_sz3=d_sizes[3], d_st3=d_strides[3],
+            ndim=ndim,
+            BLOCK=BLOCK,
+            num_warps=num_warps,
+        )
+        return
+    # General path for ndim > 4
+    cache_key_src = (tuple(src.shape), tuple(src.strides))
+    cache_key_dst = (tuple(dst.shape), tuple(dst.strides))
+    if cache_key_src not in _metadata_cache:
+        s_sz_gpu = empty((ndim,), np.int64)
+        s_st_gpu = empty((ndim,), np.int64)
+        _metadata_cache[cache_key_src] = (s_sz_gpu, s_st_gpu)
+        s = np.array(src.shape, dtype=np.int64)
+        st = np.array(src.strides, dtype=np.int64)
+        r = cuda.cuMemcpyHtoD(s_sz_gpu.ptr, s, s.nbytes); check_cuda_error(r)
+        r = cuda.cuMemcpyHtoD(s_st_gpu.ptr, st, st.nbytes); check_cuda_error(r)
+    if cache_key_dst not in _metadata_cache:
+        d_sz_gpu = empty((ndim,), np.int64)
+        d_st_gpu = empty((ndim,), np.int64)
+        _metadata_cache[cache_key_dst] = (d_sz_gpu, d_st_gpu)
+        ds = np.array(dst.shape, dtype=np.int64)
+        dsts = np.array(dst.strides, dtype=np.int64)
+        r = cuda.cuMemcpyHtoD(d_sz_gpu.ptr, ds, ds.nbytes); check_cuda_error(r)
+        r = cuda.cuMemcpyHtoD(d_st_gpu.ptr, dsts, dsts.nbytes); check_cuda_error(r)
+    s_sz_gpu, s_st_gpu = _metadata_cache[cache_key_src]
+    d_sz_gpu, d_st_gpu = _metadata_cache[cache_key_dst]
+    _copy_strided_to_strided_general[grid](
+        src, dst,
+        s_sz_gpu, s_st_gpu,
+        d_sz_gpu, d_st_gpu,
+        numel,
+        ndim=ndim,
+        BLOCK=BLOCK,
+        num_warps=num_warps,
+    )
+
 
 # Set up factory function for cuda_utils to avoid circular import
 from . import cuda_utils
 cuda_utils.set_cuda_storage_factory(CUDAStorage)
-

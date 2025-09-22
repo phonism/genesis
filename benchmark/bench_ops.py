@@ -164,7 +164,23 @@ class ComprehensiveOpRegistry:
         elif category == OpCategory.SHAPE:
             return base_shapes["medium"][:3] + base_shapes["batch"][:2]
         elif category == OpCategory.MATRIX_OPS:
-            return [(512, 512), (256, 512), (1024, 256), (2048, 1024)]
+            # Transformer-specific MatMul shapes (batch=4, seq_len=512, various hidden sizes)
+            return [
+                # Small to medium transformers
+                (512, 768),           # BERT-base hidden size
+                (768, 2304),          # QKV projection (768 -> 3*768)
+                (768, 3072),          # MLP up projection (768 -> 4*768)
+                (3072, 768),          # MLP down projection (4*768 -> 768)
+                # Qwen-0.5B sizes
+                (896, 896),           # Self-attention projection
+                (896, 2688),          # QKV projection (896 -> 3*896)
+                (896, 4864),          # MLP up projection
+                (4864, 896),          # MLP down projection
+                # Large model (LM Head - the main bottleneck!)
+                (896, 151936),        # LM Head (hidden -> vocab)
+                (2048, 896),          # Larger batch size
+                (2048, 151936),       # Large batch LM Head
+            ]
         elif category == OpCategory.TENSOR_MANIPULATION:
             return base_shapes["small"][ :3] + base_shapes["medium"][ :2]
         elif category == OpCategory.BROADCAST:
@@ -1635,7 +1651,13 @@ class ComprehensiveBenchmarkRunner:
             if op_spec.requires_second_tensor:
                 if op_spec.name == "matmul":
                     # Special case for matmul - ensure compatible shapes
-                    second_shape = (shape[-1], shape[-1]) if len(shape) >= 2 else (shape[0], shape[0])
+                    # For 2D shapes, create a compatible second matrix (transpose-like shape)
+                    if len(shape) == 2:
+                        # Use a reasonable second dimension (not too large)
+                        second_dim = min(shape[0], 4096)  # Cap at 4096 to avoid huge matrices
+                        second_shape = (shape[-1], second_dim)
+                    else:
+                        second_shape = (shape[-1], shape[-1])
                 else:
                     second_shape = shape
                     

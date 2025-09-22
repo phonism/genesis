@@ -27,21 +27,7 @@ except Exception as e:
 
 def sum_to_shape(data, shape):
     """Sum the array `data` to match the target `shape`."""
-    # Calculate which axes need to be summed
-    while len(data.shape) > len(shape):
-        data = data.sum(dim=0)
-    
-    # Collect axes that need to be summed (where target is 1 but current is not)
-    axes_to_sum = []
-    for i, (dim, target_dim) in enumerate(zip(data.shape, shape)):
-        if target_dim == 1 and dim != 1:
-            axes_to_sum.append(i)
-    
-    # Sum over all collected axes at once, keeping dimensions
-    if axes_to_sum:
-        data = data.sum(dim=tuple(axes_to_sum), keepdim=True)
-    
-    return data
+    return OperationDispatcher.dispatch("sum_to_shape", data, shape)
 
 class EWiseAdd(Function):
     @staticmethod
@@ -75,6 +61,33 @@ def add(a, b):
     else:
         # b is a scalar
         return add_scalar(a, b)
+
+def add_inplace(a, b):
+    """
+    In-place addition: a += b
+    Modifies a directly without creating new tensor.
+
+    Args:
+        a: Tensor to modify in-place
+        b: Tensor or scalar to add
+
+    Returns:
+        a (same object, modified in-place)
+    """
+    # Check if this is a leaf variable that requires grad
+    # PyTorch doesn't allow in-place operations on such tensors
+    if hasattr(a, 'is_leaf') and a.is_leaf and a.requires_grad:
+        raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+
+    # Handle non-contiguous tensors like PyTorch does
+    if not a.is_contiguous():
+        # For non-contiguous tensors, compute result and copy back
+        result = add(a, b)  # Regular add creates contiguous result
+        a.copy_(result)  # Copy result back to a in-place
+        return a
+    else:
+        # Use specialized in-place dispatcher for contiguous tensors
+        return OperationDispatcher.dispatch_inplace("add", a, b)
 
 class EWiseSub(Function):
     @staticmethod
@@ -798,6 +811,24 @@ class Transpose(Function):
 
 def transpose(a, axis=None):
     return Transpose.apply(a, axis=axis)
+
+
+def t(a):
+    """
+    Transpose a 2D tensor (PyTorch compatible).
+
+    Args:
+        a: 2D tensor to transpose
+
+    Returns:
+        Transposed tensor
+
+    Raises:
+        ValueError: If input is not a 2D tensor
+    """
+    if len(a.shape) != 2:
+        raise ValueError(f"t() expects a tensor with 2 dimensions, but got {len(a.shape)}")
+    return transpose(a, axis=(0, 1))
 
 
 class Reshape(Function):
@@ -1693,6 +1724,11 @@ def softmax(input, dim=-1):
     Returns:
         Softmax of input
     """
+    # CPU path or Triton disabled: numerically-stable softmax
+    if input.device == genesis.device('cpu') or getattr(genesis, 'use_triton', True) is False:
+        x_exp = exp(input - max(input, dim, keepdims=True))
+        return x_exp / summation(x_exp, axis=dim, keepdims=True)
+    # GPU Triton path
     return triton_softmax(input, dim)
 
 

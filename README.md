@@ -24,15 +24,15 @@
 
 ## 🌟 Highlights
 
-Genesis is a lightweight yet powerful deep learning framework that combines **educational clarity** with **production-level performance**. Built from scratch in Python, it features a unique dual-backend architecture: PyTorch for CPU operations and a completely independent CUDA/Triton implementation for GPU acceleration.
+Genesis is a lightweight yet powerful deep learning framework that combines **educational clarity** with **production-level performance**. Built from scratch in Python, it features a clean, modern architecture with modular backends for CPU and GPU operations.
 
-**🔥 Latest Features**:
-- ✅ **Advanced Memory Management**: Reference-counted memory pools with cache optimization and OOM protection
-- ✅ **Performance Monitoring**: Comprehensive memory statistics collection and performance profiling tools
-- ✅ **Random Number Generation**: PyTorch-compatible RNG API with state management and reproducibility
-- ✅ **Storage Abstraction**: Unified base storage interface for consistent CPU/GPU access patterns
-- ✅ **Enhanced CUDA Ops**: Optimized index operations and memory copy routines for better performance
-- ✅ **Production Stability**: Fast-fail OOM handling, improved memory efficiency, and robust error management
+**🚀 v2.0 - Clean Architecture Update**:
+- ✅ **Modular Backend System**: Separated CPU and CUDA backends in `backends/` for better maintainability
+- ✅ **Unified Device Abstraction**: Centralized device management in `genesis.device`
+- ✅ **Advanced Memory Management**: High-performance CUDA memory manager with lazy initialization
+- ✅ **Modern Dispatcher**: Clean operation dispatch system routing to device-specific implementations
+- ✅ **Enhanced Stability**: Improved error handling and CUDA initialization
+- ✅ **Production Ready**: Complete training pipeline with mixed precision and distributed support
 
 ### Why Genesis?
 
@@ -56,12 +56,14 @@ Genesis is a lightweight yet powerful deep learning framework that combines **ed
 - ✅ **Chat Applications**: Ready-to-use chat interfaces for trained models
 
 ### Technical Innovations
-- 🏗️ **Dual Backend Architecture**: CPU (PyTorch) + GPU (Pure CUDA/Triton)
+- 🏗️ **Modular Backend System**: Clean separation of CPU and CUDA implementations in `backends/`
+- 🎯 **Unified Operation Dispatch**: Central operation router automatically selects optimal backend
 - 🔥 **Triton Kernels**: Hand-optimized GPU kernels for maximum performance
-- 🧮 **Advanced Memory Management**: Reference-counted memory pools with cache optimization and comprehensive statistics
+- 🧮 **Advanced Memory Management**: High-performance memory pooling with fragmentation control and statistics
+- 🚀 **Lazy CUDA Initialization**: Reliable GPU initialization without import-time failures
 - 📊 **Profiling Tools**: Built-in performance profiling, memory usage tracking, and optimization utilities
 - 🎲 **Random State Management**: PyTorch-compatible RNG with thread-safe state handling
-- 🏛️ **Unified Storage**: Abstract storage interface enabling consistent access patterns across devices
+- 🏛️ **Device Abstraction**: Unified device interface supporting CPU, CUDA, and future backends
 
 ## 📊 Performance
 
@@ -249,35 +251,39 @@ print(prof.memory_summary())
 
 ```
 genesis/
-├── core/
-│   ├── autograd.py          # Automatic differentiation engine
-│   ├── tensor.py            # Tensor class with grad support
-│   └── functional.py        # Functional operations
+├── tensor.py                # Core Tensor class with autograd support
+├── function.py              # Automatic differentiation functions
+├── device.py                # Unified device abstraction
+├── storage.py               # Storage interface layer
+├── backends/                # Device-specific implementations
+│   ├── cpu.py               # CPU backend using PyTorch
+│   ├── cuda.py              # CUDA tensor storage
+│   ├── cuda_memory.py       # Advanced CUDA memory management
+│   └── cuda_kernels.py      # Optimized CUDA kernels
+├── ops/                     # Operation dispatch system
+│   ├── dispatcher.py        # Central operation router
+│   ├── cpu/                 # CPU operation implementations
+│   └── cuda/                # CUDA operation implementations
 ├── nn/
 │   ├── modules/             # Neural network modules (modularized)
+│   │   ├── module.py        # Base Module class
 │   │   ├── linear.py        # Linear layers
 │   │   ├── activation.py    # Activation functions
-│   │   ├── normalization.py # Normalization layers
-│   │   ├── transformer.py   # Attention and transformer components
-│   │   └── loss.py          # Loss functions
-│   └── functional.py        # NN functional operations
-├── ndarray/
-│   ├── base_storage.py      # Abstract storage interface
-│   ├── cuda_storage.py      # CUDA tensor storage
-│   ├── cuda_memory_manager.py # Advanced memory management
-│   ├── memory_stats_collector.py # Memory profiling & statistics
-│   └── gpu_ops/             # Optimized CUDA operations
+│   │   ├── normalization.py # LayerNorm, BatchNorm, RMSNorm
+│   │   ├── transformer.py   # Multi-head attention, transformers
+│   │   └── loss.py          # Loss functions (CrossEntropy, MSE, etc.)
+│   ├── functional.py        # Functional NN operations
+│   └── triton_ops/          # Triton-accelerated operations
 ├── optim/
-│   ├── optimizer.py         # Base optimizer class
-│   ├── adam.py              # Adam and AdamW
-│   ├── sgd.py               # SGD with momentum
+│   ├── optimizer.py         # Base optimizer and Adam/AdamW/SGD
 │   └── lr_scheduler.py      # Learning rate schedulers
 ├── models/
 │   └── qwen.py              # Qwen LLM implementation
-├── random.py                # PyTorch-compatible RNG API
-└── utils/
-    ├── data.py              # Data loading utilities
-    └── profile.py           # Performance profiling
+├── distributed/             # Distributed training support
+│   ├── parallel.py          # DDP implementation
+│   └── nccl_backend.py      # NCCL communication
+└── cuda/
+    └── __init__.py          # CUDA utilities and initialization
 ```
 
 ## 📚 Documentation

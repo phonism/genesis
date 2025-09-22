@@ -28,7 +28,12 @@ def bind_tensor_methods():
     Tensor.__rpow__ = lambda self, other: F.pow_scalar(self, other, reverse=True)  # scalar ** tensor
     Tensor.__neg__ = lambda self: F.neg(self)
     Tensor.__abs__ = lambda self: F.abs(self)
-    
+
+    # In-place operations
+    Tensor.__iadd__ = lambda self, other: F.add_inplace(self, other)
+    # Tensor.__isub__ = lambda self, other: F.sub_inplace(self, other)  # TODO: implement
+    # Tensor.__imul__ = lambda self, other: F.mul_inplace(self, other)  # TODO: implement
+
     # Method versions
     Tensor.add = lambda self, other: F.add(self, other)
     Tensor.sub = lambda self, other: F.sub(self, other)
@@ -42,6 +47,7 @@ def bind_tensor_methods():
     Tensor.exp = lambda self: F.exp(self)
     Tensor.log = lambda self: F.log(self)
     Tensor.sqrt = lambda self: F.sqrt(self)
+    Tensor.rsqrt = lambda self: F.pow(self, -0.5)  # 1/sqrt(x) = x^(-0.5)
     Tensor.sin = lambda self: F.sin(self)
     Tensor.cos = lambda self: F.cos(self)
     Tensor.tanh = lambda self: F.tanh(self)
@@ -64,9 +70,12 @@ def bind_tensor_methods():
         """Transpose property for 2D tensors."""
         if len(self.shape) != 2:
             raise ValueError("T property only valid for 2D tensors")
-        return F.transpose(self, 0, 1)
-    
+        return F.transpose(self, axis=(0, 1))
+
     Tensor.T = property(T_getter)
+
+    # t() method for 2D transpose (PyTorch compatible)
+    Tensor.t = lambda self: F.t(self)
     
     # Shape operations - direct binding
     Tensor.squeeze = lambda self, dim=None: F.squeeze(self, dim)

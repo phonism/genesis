@@ -13,7 +13,7 @@ graph TB
     end
     
     subgraph "Automatic Differentiation Layer"
-        E[autograd.Tensor] --> F[Function Base Class]
+        E[tensor.Tensor] --> F[Function Base Class]
         F --> G[Context]
     end
     
@@ -29,14 +29,14 @@ graph TB
     subgraph "GPU Independent Implementation"
         K --> L[cuda_storage.py<br/>Pure CUDA Memory Management]
         K --> M[cuda_indexing_ops.py<br/>Advanced Indexing Operations]
-        K --> N[ndarray_ops_gpu.py<br/>Triton kernels]
+        K --> N[cuda_kernels.py<br/>Triton kernels]
         L --> O[CUDA Python API]
         M --> O
         N --> P[Triton Compiler]
     end
     
     subgraph "CPU Implementation"
-        J --> P[ndarray_ops_cpu.py<br/>PyTorch Operations]
+        J --> P[cpu.py<br/>PyTorch Operations]
         P --> Q[PyTorch Backend]
     end
     
@@ -87,7 +87,7 @@ Each component can be understood and extended independently:
 
 ## 📊 Main Component Details
 
-### Automatic Differentiation System (`autograd.py`)
+### Automatic Differentiation System (`tensor.py` and `function.py`)
 
 ```python
 # Core class structure
@@ -111,7 +111,7 @@ class Function:
 
 ### Tensor Backend System
 
-#### CPU Backend (`ndarray_ops_cpu.py`)
+#### CPU Backend (`backends/cpu.py`)
 ```python
 # Direct use of PyTorch operations
 def add(x, y):
@@ -121,7 +121,7 @@ def matmul(x, y):
     return torch.matmul(x, y)
 ```
 
-#### GPU Backend (`ndarray_ops_gpu.py`)
+#### GPU Backend (`backends/cuda.py` and `backends/cuda_kernels.py`)
 ```python
 # GPU kernels implemented with Triton
 @triton.jit

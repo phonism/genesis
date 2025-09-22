@@ -77,14 +77,19 @@ class SGD(Optimizer):
     def step(self):
         """Perform SGD parameter update with momentum."""
         for idx, p in enumerate(self.params):
+            # Skip parameters without gradients
+            if p.grad is None:
+                continue
+                
             grad = p.grad.detach() + self.weight_decay * p.detach()
             if idx not in self.u.keys():
                 self.u[idx] = 0
             # Update momentum buffer and apply update
             self.u[idx] = (self.momentum * self.u[idx] + (1 - self.momentum) * grad).detach()
-            # Update parameter in-place using subtract operation
-            updated_param = p - self.lr * self.u[idx]
-            self.params[idx] = updated_param
+            # Update parameter using no_grad context to avoid affecting autograd
+            with genesis.no_grad():
+                # Direct tensor subtraction - modern approach, no .data needed
+                p -= self.lr * self.u[idx]
 
 
 class Adam(Optimizer):
@@ -119,6 +124,10 @@ class Adam(Optimizer):
         """Perform Adam parameter update with bias correction."""
         self.t += 1
         for theta_id, theta in enumerate(self.params):
+            # Skip parameters without gradients
+            if theta.grad is None:
+                continue
+            
             grad = theta.grad.detach() + self.weight_decay * theta.detach()
 
             # Initialize or update first moment estimate
@@ -136,10 +145,10 @@ class Adam(Optimizer):
             self.v[theta_id] = v_cur.detach()
             m_next_hat = m_cur / (1 - self.beta1 ** self.t)
             v_next_hat = v_cur / (1 - self.beta2 ** self.t)
-            # Update parameter using tensor operations, not .data attribute
-            update = self.lr * m_next_hat / ((v_next_hat ** 0.5) + self.eps)
-            updated_param = theta - update
-            self.params[theta_id] = updated_param
+            # Update parameter using no_grad context to avoid affecting autograd
+            with genesis.no_grad():
+                # Direct tensor subtraction - modern approach, no .data needed
+                theta -= self.lr * m_next_hat / ((v_next_hat ** 0.5) + self.eps)
 
 
 class AdamW(Optimizer):
@@ -175,5 +184,8 @@ class AdamW(Optimizer):
             self.v[theta_id] = v_cur.detach()
             m_next_hat = m_cur / (1 - self.beta1 ** self.t)
             v_next_hat = v_cur / (1 - self.beta2 ** self.t)
-            theta.data -= self.lr * (m_next_hat.data / ((v_next_hat.data ** 0.5) + self.eps) 
-                    + self.weight_decay * theta.data)
+            # Use no_grad context to avoid affecting autograd computation graph
+            with genesis.no_grad():
+                # Direct tensor subtraction - modern approach, no .data needed
+                theta -= self.lr * (m_next_hat / ((v_next_hat ** 0.5) + self.eps)
+                        + self.weight_decay * theta)

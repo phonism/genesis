@@ -1,63 +1,77 @@
 # Core Components Overview
 
-Genesis framework's core components provide the infrastructure for deep learning computation, including tensor systems, automatic differentiation engine, data type system, and functional operation interfaces.
+Genesis v2.0's core components provide the infrastructure for deep learning computation with a clean, modular architecture that separates concerns and enables high performance.
 
 ## 🧩 Component Architecture
 
 ```mermaid
 graph TB
-    subgraph "Core Components"
-        A[Tensor] --> B[Autograd Engine]
-        C[Data Type System] --> A
-        D[Functional Operations] --> A
-        E[Initialization Functions] --> A
+    subgraph "User API Layer"
+        A[genesis.tensor] --> B[genesis.Tensor]
+        C[genesis.matmul] --> D[Functional API]
     end
-    
-    subgraph "Autograd Details"
-        B --> F[Function Base Class]
-        B --> G[Context]
-        B --> H[Computation Graph Building]
-        B --> I[Backpropagation]
+
+    subgraph "Core Abstraction Layer"
+        B --> E[tensor.py]
+        D --> F[function.py]
+        E --> G[device.py]
+        E --> H[storage.py]
+        F --> I[ops/dispatcher.py]
     end
-    
-    subgraph "Type System"
-        C --> J[DType Class]
-        C --> K[Type Conversion]
-        C --> L[Precision Management]
+
+    subgraph "Backend Implementation"
+        G --> J[backends/cpu.py]
+        G --> K[backends/cuda.py]
+        I --> L[ops/cpu/]
+        I --> M[ops/cuda/]
     end
-    
-    style A fill:#e1f5fe
-    style B fill:#f3e5f5
-    style C fill:#e8f5e8
-    style D fill:#fff3e0
+
+    subgraph "Support Systems"
+        N[dtypes.py] --> E
+        O[init.py] --> E
+        K --> P[backends/cuda_memory.py]
+        K --> Q[backends/cuda_kernels.py]
+    end
+
+    style E fill:#e1f5fe
+    style F fill:#f3e5f5
+    style G fill:#e8f5e8
+    style I fill:#fff3e0
 ```
 
 ## 🎯 Core Component List
 
-| Component | File | Main Functions | 
+| Component | File | Main Functions |
 |-----------|------|----------------|
-| Tensor System | `autograd.py` | Basic data structures, automatic differentiation |
+| Tensor System | `tensor.py` | Tensor class, automatic differentiation integration |
+| Function System | `function.py` | Function base class, autograd context |
+| Device Abstraction | `device.py` | Unified device interface |
+| Storage Layer | `storage.py` | Memory and storage abstraction |
+| Operation Dispatch | `ops/dispatcher.py` | Operation routing and execution |
+| Backend CPU | `backends/cpu.py` | CPU tensor storage and operations |
+| Backend CUDA | `backends/cuda.py` | CUDA tensor storage and memory |
 | Data Types | `dtypes.py` | Unified type system, precision management |
-| Functional Operations | `functional.py` | Functional interface for tensor operations |
 | Initialization | `init.py` | Tensor creation and initialization |
-| Backend Abstraction | `backend.py` | Device and backend management |
 
 ## 🚀 Design Features
 
-### 1. Unified Tensor Interface
-- **Consistent API**: Users use the same interface whether on CPU or GPU
-- **Transparent Device Switching**: Automatic handling of data conversion between different devices
-- **Type Safety**: Compile-time and runtime type checking
+### 1. Modular Backend Architecture
+- **Clean Separation**: Backend implementations are completely isolated
+- **Extensible**: Easy to add new device support (TPU, NPU, etc.)
+- **Performance Optimized**: Each backend can be individually optimized
+- **Reliable**: Lazy CUDA initialization prevents import-time failures
 
-### 2. Efficient Automatic Differentiation
-- **Lazy Computation Graph**: Build computation graph on demand to save memory
-- **Smart Gradient Propagation**: Optimized backpropagation algorithm
-- **Memory Optimization**: Automatic release of intermediate results no longer needed
+### 2. Unified Operation Dispatch
+- **Single Entry Point**: All operations go through centralized dispatcher
+- **Automatic Routing**: Operations automatically routed to correct backend
+- **Type Preservation**: Consistent behavior across different devices
+- **Performance**: Minimal dispatch overhead
 
-### 3. Flexible Type System
-- **Mixed Precision Support**: Automatic conversion between FP32 and FP16
-- **Device Agnostic**: Type definitions independent of specific devices
-- **NumPy Compatible**: Seamless integration with NumPy ecosystem
+### 3. Advanced Memory Management
+- **Memory Pooling**: Reduces allocation overhead through intelligent pooling
+- **Device Abstraction**: Unified memory interface across CPU and GPU
+- **Garbage Collection**: Automatic cleanup of unused memory blocks
+- **Statistics**: Detailed memory usage tracking and debugging
 
 ## 📊 Performance Characteristics
 
@@ -73,38 +87,53 @@ graph TB
 
 ## 🔗 Component Collaboration
 
-### Tensor Creation Process
+### Tensor Creation Process (v2.0)
 ```python
 # User call
-x = genesis.randn(3, 4)
+x = genesis.tensor([1, 2, 3], device="cuda")
 
 # Internal flow
-init.randn() -> 
-NDArray.randn() -> 
-Device.randn() -> 
-Tensor.__init__() ->
-Set attributes like requires_grad
+genesis.tensor() ->
+tensor.py:Tensor.__init__() ->
+device.py:parse_device("cuda") ->
+storage.py:create_storage() ->
+backends/cuda.py:CUDAStorage() ->
+backends/cuda_memory.py:allocate() ->
+Set tensor attributes (shape, dtype, device)
 ```
 
-### Automatic Differentiation Process
+### Operation Dispatch Process
 ```python
-# Forward pass
-z = x * y + x.sum()
+# User operation
+z = genesis.matmul(x, y)
 
-# Build computation graph
-MulFunction.apply(x, y) -> 
-SumFunction.apply(x) ->
-AddFunction.apply(mul_result, sum_result) ->
-Set creator relationships
+# Dispatch flow
+ops/dispatcher.py:dispatch("matmul", x, y) ->
+Infer device from arguments ->
+Select backend implementation ->
+ops/cuda/matrix.py:cuda_matmul(x, y) ->
+Execute Triton/CUDA kernel ->
+Return new tensor with result
+```
+
+### Automatic Differentiation Integration
+```python
+# Forward with gradient tracking
+x = genesis.tensor([1, 2, 3], requires_grad=True)
+y = genesis.tensor([4, 5, 6], requires_grad=True)
+z = x * y  # Element-wise multiplication
+
+# Internal autograd setup
+function.py:Function.apply() ->
+Create computation graph node ->
+Store backward function ->
+Set gradient computation context
 
 # Backward pass
 z.backward()
-
-# Compute gradients
-topo_sort(z) ->
-Reverse topological traversal ->
-Call backward() of each Function ->
-Gradient accumulation to leaf nodes
+# Traverse computation graph ->
+# Call stored backward functions ->
+# Accumulate gradients to x.grad, y.grad
 ```
 
 ## 🎓 Learning Path Recommendations
@@ -126,7 +155,10 @@ Gradient accumulation to leaf nodes
 
 For detailed documentation of each component, please check the corresponding dedicated pages:
 
-- [Automatic Differentiation System](autograd.md) - Deep understanding of computation graphs and gradient computation
-- [Tensor Operations](tensor.md) - Comprehensive tensor operation guide  
+- [Tensor System](tensor.md) - Tensor class and automatic differentiation
+- [Function System](function.md) - Function base class and autograd context
+- [Device Abstraction](device.md) - Unified device interface
+- [Storage Layer](storage.md) - Memory and storage abstraction
 - [Data Types](dtypes.md) - Type system and precision management
-- [Functional Interface](../api-reference/functional.md) - Functional programming style operations
+- [Backend System](../backends/index.md) - Modular backend architecture
+- [Operation System](../ops/index.md) - Operation dispatch and execution

@@ -1540,8 +1540,9 @@ def allocate_memory(nbytes: int, stream: Optional[int] = None) -> int:
     """Allocate GPU memory with reference counting for small allocations"""
     manager = get_memory_manager()
     
-    # Use ref pool for small allocations (< 1MB)
-    if nbytes < 1024 * 1024:
+    # Use ref pool for small and medium allocations (< 16MB)
+    # Increased threshold to include typical model tensors
+    if nbytes < 16 * 1024 * 1024:
         block = manager.ref_pool.allocate_block(nbytes, stream)
         return block.ptr
     else:
@@ -1553,7 +1554,7 @@ def free_memory(ptr: int, nbytes: int = 0, stream: Optional[int] = None):
     manager = get_memory_manager()
     
     # Route to appropriate allocator based on size (same logic as allocate_memory)
-    if nbytes > 0 and nbytes < 1024 * 1024:
+    if nbytes > 0 and nbytes < 16 * 1024 * 1024:
         # Small allocations: use ref pool
         manager.ref_pool.decrease_ref(ptr, stream)
     else:

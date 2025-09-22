@@ -21,6 +21,9 @@ import os
 import argparse
 import time
 import gc
+import signal
+import traceback
+import threading
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 import json
@@ -70,63 +73,153 @@ class BenchResult:
 
 class QwenBenchmarkTimer:
     """High-precision CUDA timer for Qwen benchmarks"""
-    
+
     def __init__(self, warmup_iters: int = 10, test_iters: int = 50):
         self.warmup_iters = warmup_iters
         self.test_iters = test_iters
-        self.start_event = torch.cuda.Event(enable_timing=True)
-        self.end_event = torch.cuda.Event(enable_timing=True)
+        # Don't create events here - create fresh ones for each iteration
+        self.hang_timeout = 60  # 15 seconds timeout for hang detection
+        self.timer = None  # Threading timer backup
+
+    def setup_hang_detection(self):
+        """Setup hang detection with automatic stack trace"""
+        def timeout_handler(signum, frame):
+            print("\n" + "="*80)
+            print("🚨 HANG DETECTED! Benchmark has been stuck for 30+ seconds")
+            print("="*80)
+            print("📍 Current stack trace at hang location:")
+            print("-"*80)
+            traceback.print_stack(frame)
+            print("-"*80)
+            print("💀 Exiting due to hang...")
+            print("="*80)
+            os._exit(1)  # Force exit
+
+        signal.signal(signal.SIGALRM, timeout_handler)
+
+    def start_hang_detection(self):
+        """Start hang detection timer with dual mechanisms"""
+        # Method 1: Signal-based (may not work if blocked)
+        signal.alarm(self.hang_timeout)
+
+        # Method 2: Threading timer backup (more reliable)
+        def timeout_backup():
+            print("\n" + "="*80)
+            print("🚨 HANG DETECTED (Threading Timer)! Benchmark stuck for 15+ seconds")
+            print("="*80)
+            print("📍 Printing all thread stack traces:")
+            print("-"*80)
+            for thread_id, frame in sys._current_frames().items():
+                print(f"Thread {thread_id}:")
+                traceback.print_stack(frame)
+                print("-"*40)
+            print("💀 Force exiting due to hang...")
+            print("="*80)
+            os._exit(1)
+
+        self.timer = threading.Timer(self.hang_timeout, timeout_backup)
+        self.timer.start()
+
+    def stop_hang_detection(self):
+        """Stop hang detection timer"""
+        signal.alarm(0)
+        if self.timer and self.timer.is_alive():
+            self.timer.cancel()
     
     def benchmark(self, fn, *args, **kwargs) -> Tuple[float, float]:
         """
         Run benchmark with CUDA timing and memory tracking
         Returns: (time_ms, memory_mb)
         """
-        # Clear cache and reset memory stats
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
-        
+
+        # Setup hang detection
+        self.setup_hang_detection()
+
         # Warmup
-        for _ in range(self.warmup_iters):
+        for warmup_idx in range(self.warmup_iters):
             try:
+                import time
+                self.start_hang_detection()  # Start hang detection for this iteration
+                start_time = time.time()
                 result = fn()  # Call function without args/kwargs
-                # Don't do backward in warmup for forward-only functions
-                torch.cuda.synchronize()
+                # Use appropriate sync based on function name
+                if 'genesis' in fn.__name__:
+                    genesis.cuda.synchronize()
+                else:
+                    torch.cuda.synchronize()
+                self.stop_hang_detection()  # Stop hang detection
+                elapsed = (time.time() - start_time) * 1000
             except Exception as e:
-                print(f"Warmup failed: {e}")
+                self.stop_hang_detection()
+                print(f" FAILED: {e}")
                 break
-        
+
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
-        
+
         # Actual timing
         times = []
         memory_usage = []
-        
+
         for i in range(self.test_iters):
             try:
+                # Set iteration debug flag for genesis_backward to use
+
+                # Start hang detection for each test iteration
+                self.start_hang_detection()
+
                 torch.cuda.reset_peak_memory_stats()
-                
-                self.start_event.record()
+
+                import time
+                cpu_start = time.time()
+
+                # Create fresh CUDA events for each iteration
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+
+                start_event.record()
                 result = fn()  # Call function without args/kwargs
-                self.end_event.record()
-                torch.cuda.synchronize()
-                
-                elapsed_ms = self.start_event.elapsed_time(self.end_event)
+                end_event.record()
+
+                # Use appropriate sync based on function name
+                if 'genesis' in fn.__name__:
+                    genesis.cuda.synchronize()
+                else:
+                    torch.cuda.synchronize()
+                cpu_elapsed = (time.time() - cpu_start) * 1000
+                elapsed_ms = start_event.elapsed_time(end_event)
+
+                # WORKAROUND: Force cleanup after each iteration to prevent state accumulation
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+
                 peak_memory_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
-                
+
                 times.append(elapsed_ms)
                 memory_usage.append(peak_memory_mb)
-                
+
+                # Stop hang detection after successful completion
+                self.stop_hang_detection()
+                pass  # Silent execution
+
             except Exception as e:
+                # Stop hang detection on error
+                self.stop_hang_detection()
+                print(f" FAILED: {str(e)}")
                 if i < 3:
-                    print(f"Warning: Benchmark iteration {i} failed: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
                 break
-        
+
         if not times:
             return float('inf'), float('inf')
-        
-        return np.mean(times), np.mean(memory_usage)
+
+        avg_time = np.mean(times)
+        avg_mem = np.mean(memory_usage)
+        return avg_time, avg_mem
 
 def get_qwen_config(model_size: str) -> ModelArgs:
     """Get Qwen model configuration for different sizes"""
@@ -222,7 +315,8 @@ class QwenBenchmarkSuite:
             
             # Benchmark Genesis - pure computation only
             def genesis_forward():
-                with torch.no_grad():
+                # Use genesis.no_grad() instead of torch.no_grad() to avoid conflict
+                with genesis.no_grad():
                     return genesis_model(genesis_input)
             
             pytorch_time, pytorch_memory = self.timer.benchmark(pytorch_forward)
@@ -325,16 +419,23 @@ class QwenBenchmarkSuite:
             
             # Benchmark Genesis backward - pure computation only
             def genesis_backward():
-                # Genesis models may not have zero_grad method, try to handle it
-                if hasattr(genesis_model, 'zero_grad'):
-                    genesis_model.zero_grad()
-                
-                logits = genesis_model(genesis_input)
-                # Use Genesis's own backward - simple loss since cross_entropy not implemented
-                # Just use sum as loss for now
-                loss = logits.sum()
-                loss.backward()  # Do backward pass in Genesis
-                return loss
+                # WORKAROUND: Ensure Genesis gradient is enabled explicitly
+                import genesis
+                with genesis.enable_grad():  # Force enable Genesis gradients
+                    # Genesis models may not have zero_grad method, try to handle it
+                    if hasattr(genesis_model, 'zero_grad'):
+                        genesis_model.zero_grad()
+                    else:
+                        for param in genesis_model.parameters():
+                            if hasattr(param, 'grad'):
+                                param.grad = None
+
+                    logits = genesis_model(genesis_input)
+                    # Use Genesis's own backward - simple loss since cross_entropy not implemented
+                    # Just use sum as loss for now
+                    loss = logits.sum()
+                    loss.backward()  # Do backward pass in Genesis
+                    return loss
             
             pytorch_time, pytorch_memory = self.timer.benchmark(pytorch_backward)
             genesis_time, genesis_memory = self.timer.benchmark(genesis_backward)

@@ -41,14 +41,31 @@ This document provides a comprehensive guide to the performance characteristics,
 
 ## Architecture Implementation
 
-### Current ADD Operation Implementation
+### Current Operation Implementations
 
 Genesis uses a dual backend architecture:
 - **CPU Backend**: PyTorch tensor operations
 - **GPU Backend**: Custom CUDA + Triton kernels
 
+#### Reduction Operations (reduce_sum, reduce_max)
+
+Recent optimization work has focused on reduction operations, which are critical for backward pass performance in neural networks:
+
+**Key Optimizations:**
+- **Two-stage reduction strategy**: Inspired by FlagGems for large tensors
+- **Adaptive block sizing**: Using sqrt(n) block size selection
+- **Specialized kernels**: Separate optimized paths for inner/outer dimension reductions
+- **Memory layout optimization**: Reduced contiguous operations and permutes
+
+**Current Performance Status (vs PyTorch):**
+- Full reduction (axis=None): 7x slower (significant improvement from 20x)
+- Inner dimension (axis=-1): 4-6x slower
+- Multi-axis reduction: 10-15x slower
+- Critical issue identified: Storage object handling in dispatcher layer
+
 #### GPU Kernel Implementation
 
+**Element-wise Operations (ADD):**
 ```python
 @triton.jit
 def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -57,11 +74,38 @@ def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
-    
+
     x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
     y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
     output = x + y
     tl.store(output_ptr + offsets, output, mask=mask)
+```
+
+**Reduction Operations (SUM):**
+```python
+@triton.jit
+def sum_kernel_inner(output_ptr, input_ptr, M, N, TILE_N: tl.constexpr):
+    """Optimized kernel for reducing the innermost dimension"""
+    pid_m = tl.program_id(0)
+
+    # Use float32 accumulation for fp16/bf16
+    if input_ptr.dtype.element_ty == tl.float16:
+        acc_dtype = tl.float32
+    else:
+        acc_dtype = input_ptr.dtype.element_ty
+
+    acc = tl.zeros([], dtype=acc_dtype)
+
+    # Process row in chunks of TILE_N
+    for start_n in range(0, N, TILE_N):
+        n_offsets = start_n + tl.arange(0, TILE_N)
+        inp_offsets = pid_m * N + n_offsets
+        mask = n_offsets < N
+
+        chunk = tl.load(input_ptr + inp_offsets, mask=mask, other=0.0).to(acc_dtype)
+        acc += tl.sum(chunk)
+
+    tl.store(output_ptr + pid_m, acc.to(input_ptr.dtype.element_ty))
 ```
 
 #### Adaptive Block Size Configuration
@@ -80,22 +124,37 @@ BLOCK_SIZE_CONFIGS = {
 
 ### 1. Primary Bottleneck: Triton Kernel Performance
 
-- **Kernel Overhead**: 23.6x slower than PyTorch
+- **Element-wise Operations**: 23.6x slower than PyTorch
+- **Reduction Operations**: 4-120x slower depending on axis
 - **Root Cause**: Triton kernel efficiency far below PyTorch's optimized CUDA kernels
-- **Impact**: Most severe for large tensors (>16M elements)
+- **Impact**: Most severe for large tensors (>16M elements) and specific reduction patterns
 
 ### 2. Memory Bandwidth Utilization
 
 - **PyTorch**: 71.4% bandwidth efficiency
-- **Genesis**: 18.0% average efficiency  
+- **Genesis**: 18.0% average efficiency for element-wise, worse for reductions
 - **Theoretical Maximum**: 1555 GB/s (A800 HBM2e)
 
 **Issues**:
 - Memory access patterns not sufficiently optimized
 - Large kernels may have register spillage
 - Memory coalesced access not well optimized
+- Reduction operations suffer from poor memory locality
 
-### 3. GPU Occupancy Issues
+### 3. Reduction-Specific Bottlenecks (New Analysis)
+
+**Critical Discovery**: Reduction operations show severe performance degradation:
+- **Inner dimension reduction (axis=-1)**: 120x slower than PyTorch
+- **Multi-axis reduction**: 200x+ slower
+- **Storage object handling**: Framework overhead in dispatcher layer
+
+**Root Causes**:
+- **Framework Integration Issues**: Storage vs Tensor object mismatch in dispatcher
+- **Kernel Selection Logic**: Suboptimal kernel choice for different tensor shapes
+- **Memory Layout**: Excessive contiguous operations and permutations
+- **Precision Handling**: FP16 accumulation in FP32 adds overhead
+
+### 4. GPU Occupancy Issues
 
 - Block size configuration not achieving optimal occupancy
 - XLarge tensors show significant GPU utilization drop
@@ -103,7 +162,7 @@ BLOCK_SIZE_CONFIGS = {
 
 ## Optimization Roadmap
 
-### Phase 1: Immediate Improvements (Completed)
+### Phase 1: Element-wise Operations (Completed)
 
 **✅ Completed:**
 - Simplified adaptive block size configuration
@@ -114,18 +173,47 @@ BLOCK_SIZE_CONFIGS = {
 - Average efficiency improved from 5.7% to 18.0%
 - Medium/batch tensors achieving 29-33% efficiency
 
-### Phase 2: Kernel Optimization (In Progress)
+### Phase 2: Reduction Operations Optimization (Recently Completed)
+
+**✅ Implemented:**
+- Two-stage reduction strategy for large tensors
+- Adaptive block sizing using sqrt(n) formula (inspired by FlagGems)
+- Specialized kernels for inner vs outer dimension reductions
+- Optimized sum_to_shape for backward pass performance
+- Memory layout optimization to reduce contiguous operations
+
+**📊 Results:**
+- Full reduction (axis=None): Improved from 20x to 7x slower than PyTorch
+- Partial improvement in other reduction patterns
+- **Critical Issue Identified**: Storage object handling prevents full optimization
+
+**⚠️ Remaining Issues:**
+- Inner dimension reduction still 120x slower due to framework integration bugs
+- Dispatcher layer Storage/Tensor object mismatch
+- Kernel selection logic needs refinement
+
+### Phase 2B: Framework Integration Fixes (Priority)
+
+**🎯 Current Focus:**
+- Fix Storage object attribute access in reduce_sum implementation
+- Optimize dispatcher layer for reduction operations
+- Implement proper tensor type handling throughout reduction pipeline
+- Add specialized fast paths for common backward patterns
+
+### Phase 3: Advanced Kernel Optimization (In Progress)
 
 **🎯 Target Areas:**
 - Memory access pattern optimization (vectorization, cache-friendly tiling)
-- Automatic block size tuning
+- Automatic block size tuning based on hardware characteristics
 - Kernel fusion to reduce memory bandwidth pressure
+- Hand-optimized CUDA kernels for critical operations
 
-### Phase 3: Advanced Optimization (Future)
+### Phase 4: Advanced Optimization (Future)
 
 - Custom CUDA kernel hand optimization
 - Memory layout optimization
 - Multi-GPU support
+- Automatic kernel selection and tuning
 
 ## Usage Recommendations
 
@@ -144,26 +232,51 @@ BLOCK_SIZE_CONFIGS = {
 ### Performance Tips
 
 1. **Tensor Size Awareness**
-   - Optimal performance range: 1M-4M elements
-   - Avoid xlarge tensors (>67M)
+   - Optimal performance range: 1M-4M elements for element-wise operations
+   - Avoid xlarge tensors (>67M) for any operations
    - Consider tensor splitting for large operations
 
-2. **Memory Management**
+2. **Reduction Operation Considerations**
+   - **Avoid axis=-1 reductions** on large tensors (currently 120x slower)
+   - **Full reductions (axis=None)** have better relative performance
+   - **Multi-axis reductions** should be avoided for performance-critical paths
+   - Consider reshaping tensors to make reductions more efficient
+
+3. **Memory Management**
    ```python
    # Use in-place operations
    result = genesis.add(a, b, out=existing_tensor)
+
+   # For reductions, prefer full tensor reductions when possible
+   # Good:
+   total = genesis.sum(tensor)  # axis=None
+
+   # Avoid for now:
+   row_sums = genesis.sum(tensor, axis=-1)  # Much slower
    ```
+
+4. **Backward Pass Optimization**
+   - Reduction operations are heavily used in backward pass
+   - Current reduction bottlenecks significantly impact training performance
+   - Consider using smaller batch sizes or model dimensions until fixes are implemented
 
 ## Performance Monitoring
 
 ### Built-in Benchmarking
 
 ```bash
-# Quick performance check
+# Element-wise operations
 python benchmark/bench_ops.py --op add --fast
-
-# Comprehensive analysis
 python benchmark/bench_ops.py --op add --size large
+
+# Reduction operations performance comparison
+python benchmark/compare_reduction_performance.py
+
+# Detailed reduction bottleneck analysis
+python benchmark/test_reduction_bottleneck.py
+
+# Neural network backward pass analysis (includes reductions)
+python benchmark/profile_qwen_bottlenecks.py --profile-backward --deep
 ```
 
 ### Key Metrics

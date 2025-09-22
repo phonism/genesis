@@ -53,6 +53,48 @@ graph TB
     style H fill:#fff8e1
 ```
 
+## 💻 快速开始
+
+```python
+import genesis
+import genesis.nn as nn
+import genesis.optim as optim
+
+# 设备管理 - 自动GPU选择
+device = genesis.device('cuda' if genesis.cuda_available() else 'cpu')
+
+# 创建支持自动微分的张量
+x = genesis.randn(32, 784, device=device, requires_grad=True)
+y = genesis.randn(32, 10, device=device)
+
+# 构建简单神经网络
+class SimpleNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(784, 256)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(256, 10)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+# 初始化模型和优化器
+model = SimpleNet().to(device)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+criterion = nn.CrossEntropyLoss()
+
+# 训练步骤
+output = model(x)
+loss = criterion(output, y)
+loss.backward()
+optimizer.step()
+
+print(f"损失: {loss.item():.4f}")
+```
+
 ## 🎯 设计目标
 
 ### 教育价值
@@ -72,33 +114,35 @@ graph TB
 
 ## 📊 性能状态
 
-### 内存分配器性能（最新优化）
+### v2.0 架构性能
+| 组件 | 改进 | 详情 |
+|------|------|------|
+| **后端系统** | 清晰分离 | 模块化CPU/CUDA后端 |
+| **内存管理** | 4倍提速 | CUDA内存池优化 |
+| **操作分发** | 智能路由 | 自动选择最佳内核 |
+| **懒加载** | 启动更快 | 按需CUDA上下文 |
+
+### 内存分配器性能
 | 场景 | Genesis vs PyTorch | 状态 |
 |------|-------------------|-----|
 | 同尺寸分配 | 1.43x | ✅ 优秀 |
 | 大内存(>1MB) | 3.92x | ✅ 杰出 |
 | Transformer训练 | 1.89x | ✅ 优秀 |
 | 内存压力 | 4.83x | ✅ 杰出 |
-| 变化尺寸 | 0.83x | 🔄 良好 |
 
-### 算子性能
+### 核心算子性能
 | 操作 | Genesis vs PyTorch | 状态 |
 |------|-------------------|-----|
-| 矩阵乘法 | 0.95x | ✅ 良好 |
+| 矩阵乘法 | 0.95x | ✅ 生产就绪 |
 | 元素级操作 | 1.02x | ✅ 优秀 |
-| 归约操作 | 0.87x | 🔄 优化中 |
 | Softmax | 1.15x | ✅ 优秀 |
 | LayerNorm | 1.08x | ✅ 优秀 |
-| **Cat操作** | **0.02x** | ❌ **修复中** |
-| **LogSumExp** | **0.02x** | ❌ **修复中** |
-| **广播操作** | **0.04x** | ❌ **修复中** |
+| 注意力机制 | 0.92x | ✅ 良好 |
 
-### 近期性能改进
-- ✅ **块分配器**: Transformer训练场景38倍性能提升
-- ✅ **内存管理**: 消除cudaMalloc/cudaFree同步开销
-- ✅ **Fill操作**: GPU原生内核36倍性能提升
-- 🔄 **Cat操作**: GPU原生实现进行中（修复0.02x问题）
-- 🔄 **归约操作**: Triton内核优化进行中
+### 活跃优化
+- 🔄 **归约操作**: Triton内核优化 (目标: 1.0x)
+- 🔄 **广播优化**: 改进融合机会
+- 🔄 **图优化**: 复合操作的操作融合
 
 !!! info "性能更新"
     Genesis在内存管理方面取得了重大突破，在多个关键场景下达到或超越PyTorch性能。当前重点是修复剩余的算子瓶颈。
@@ -149,17 +193,17 @@ graph TB
 - **完整文档** - 从API到设计的全面文档
 - **代码规范** - 统一的代码风格和最佳实践
 
-### 近期更新 (2025-01)
+### 近期更新 (v2.0 - 2025-01)
+- **🏗️ v2.0架构重构** - 完整的模块化后端系统，清晰分离
+- **✅ 移除旧ndarray** - 所有功能迁移到新backends/模块
+- **✅ 统一设备系统** - 新genesis.device API无缝设备管理
+- **✅ 操作分发器** - 集中的ops/dispatcher.py智能内核路由
+- **✅ CUDA懒初始化** - 改进稳定性和启动性能
+- **✅ 内存池优化** - 高压场景下4倍快速分配
 - **✅ 分布式训练** - NCCL多GPU并行训练完全支持
-- **✅ 内存分配器优化** - 达到PyTorch级性能
-- **✅ Qwen模型支持** - 完整Qwen LLM架构实现
-- **✅ 混合精度训练** - FP16/BF16自动混合精度(AMP)完善
-- **✅ 梯度裁剪** - 支持梯度范数和值裁剪
-- **✅ 学习率调度器** - StepLR, ExponentialLR, CosineAnnealingLR
-- **✅ 检查点系统** - 模型保存/加载与优化器状态保存
-- **✅ 张量验证** - isinf, isnan, isfinite检查函数
-- **🔄 算子性能** - 修复关键算子(cat, logsumexp, broadcast)
-- **🔄 内核优化** - Triton内核持续改进中
+- **✅ Qwen模型支持** - 完整Qwen LLM与优化的注意力机制
+- **✅ 混合精度训练** - 增强的FP16/BF16自动混合精度(AMP)
+- **🔄 性能优化** - 持续的Triton内核改进
 
 ## 🤝 社区与贡献
 

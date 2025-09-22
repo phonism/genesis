@@ -88,37 +88,41 @@ genesis.save_checkpoint(model_state, "checkpoint.pth")
 state = genesis.load_checkpoint("checkpoint.pth")
 ```
 
-### 架构要点
-- **双后端**: CPU用PyTorch，GPU用CUDA+Triton
-- **核心文件**:
-  - `genesis/__init__.py`: 主API入口和功能函数
-  - `genesis/autograd.py`: Tensor类和自动微分引擎
-  - `genesis/ndarray/cuda_storage.py`: 纯CUDA存储后端实现
-  - `genesis/nn/modules/`: 模块化神经网络层目录
+### 架构要点 (v2.0 - 清理后的新架构)
+- **模块化后端系统**:
+  - `genesis/backends/`: 设备特定实现
+    - `cpu.py`: CPU后端（使用PyTorch）
+    - `cuda.py`: CUDA张量存储
+    - `cuda_memory.py`: 高性能CUDA内存管理
+    - `cuda_kernels.py`: 优化的CUDA内核
+- **核心组件**:
+  - `genesis/tensor.py`: Tensor类和自动微分支持
+  - `genesis/function.py`: 自动微分Function基类
+  - `genesis/device.py`: 统一设备抽象
+  - `genesis/storage.py`: 存储接口层
+  - `genesis/ops/`: 操作分发系统
+    - `dispatcher.py`: 中央操作路由器
+    - `cpu/`: CPU操作实现
+    - `cuda/`: CUDA操作实现
+- **神经网络层**:
+  - `genesis/nn/modules/`: 模块化神经网络层
     - `module.py`: 基础Module和Parameter类
     - `linear.py`: Linear, Flatten层
-    - `loss.py`: CrossEntropyLoss, MSELoss, BCELoss等损失函数
-    - `activation.py`: 激活函数（ReLU, Softmax, SiLU等）
-    - `normalization.py`: 归一化层（LayerNorm, BatchNorm等）
-    - `transformer.py`: Attention机制和Transformer组件
+    - `loss.py`: 完整的损失函数集合
+    - `activation.py`: 激活函数
+    - `normalization.py`: LayerNorm, BatchNorm, RMSNorm
+    - `transformer.py`: Multi-head Attention, Transformer组件
   - `genesis/nn/functional.py`: 函数式神经网络操作
-  - `genesis/optim/`: 优化器实现（Adam, AdamW, SGD）
-  - `genesis/models/qwen.py`: Qwen大模型完整实现
-  - `genesis/dtypes.py`: 数据类型系统（支持float16/bfloat16）
-  - `genesis/utils/`: 工具模块（数据加载、性能分析等）
-- **应用层**:
-  - `apps/llm/`: LLM训练和推理应用
-  - `benchmark/`: 性能测试和基准比较
-  - `tests/`: 完整测试套件
-  - `docs/`: MkDocs文档系统
-- **新特性**:
-  - 专业文档系统（MkDocs Material）
-  - 混合精度训练（AMP）支持
-  - 梯度裁剪和学习率调度器
-  - 模型检查点保存/加载系统
-  - Qwen模型完整训练和推理支持
-  - 增强的基准测试和性能分析工具
-  - GPU远程开发和调试工具集成
+  - `genesis/nn/triton_ops/`: Triton加速操作
+- **训练工具**:
+  - `genesis/optim/`: 优化器（Adam, AdamW, SGD）
+  - `genesis/distributed/`: 分布式训练支持（DDP）
+  - `genesis/models/qwen.py`: Qwen LLM完整实现
+- **其他特性**:
+  - CUDA懒初始化确保可靠性
+  - 清晰的模块边界和依赖关系
+  - 删除了旧的ndarray和autograd模块
+  - 统一的操作分发机制
 
 ### 关键测试命令
 ```bash
@@ -175,31 +179,24 @@ mypy genesis/                            # 类型检查
 - **自动微分**: 开销从86.3%降至~50%
 
 ### 最近更新
-- ✅ **v0.5.0** - 神经网络模块重构和损失函数扩展（2025-08-28）
-  - **🏗️ 模块化重构**: 将monolithic的`genesis/nn/modules.py`按PyTorch模式重构为模块化目录结构
-    - `genesis/nn/modules/` - 模块化目录
-    - `module.py` - 基础Module和Parameter类
-    - `linear.py` - Linear, Flatten层
-    - `activation.py` - ReLU, Softmax, SiLU, Residual激活函数
-    - `normalization.py` - BatchNorm1d, LayerNorm, RMSNorm等
-    - `loss.py` - CrossEntropyLoss, MSELoss, L1Loss, BCELoss等损失函数
-    - `container.py` - Sequential, ModuleList容器
-    - `dropout.py` - Dropout正则化
-    - `sparse.py` - Embedding, RotaryEmbedding
-    - `transformer.py` - MultiheadAttention, FeedForwardSwiGLU
-  - **💯 PyTorch兼容**: 新增CrossEntropyLoss, MSELoss, L1Loss, BCELoss, BCEWithLogitsLoss
-  - **🔧 函数增强**: 添加log_softmax, maximum, randint等functional API
-  - **✅ 完全兼容**: 所有现有测试通过，API保持向后兼容
-- ✅ **v0.4.0** - 专业文档系统和性能分析工具（95dfebc）
+- ✅ **v2.0.0** - 架构清理和模块化重构（2025-09-16）
+  - **🏗️ 完全移除ndarray老架构**: 删除整个ndarray模块，功能迁移到backends/
+  - **📦 模块化后端系统**: CPU和CUDA后端分离在backends/目录
+  - **🎯 统一设备抽象**: 新增genesis.device模块集中管理设备
+  - **⚡ CUDA懒初始化**: 解决初始化问题，提高稳定性
+  - **🔧 清理循环依赖**: 修复nn.moe和triton_ops的导入问题
+  - **✨ 更清晰的代码结构**: tensor.py, function.py, storage.py核心文件
+  - **🚀 操作分发优化**: ops/dispatcher.py统一路由机制
+- ✅ **v1.0.0** - 神经网络模块重构和损失函数扩展
+  - **🏗️ 模块化重构**: nn/modules/按功能分离
+  - **💯 PyTorch兼容**: 完整的损失函数集合
+  - **🔧 函数增强**: 添加log_softmax, maximum, randint等API
+- ✅ **v0.4.0** - 专业文档系统和性能分析工具
   - 完整的英文文档和API参考
-  - 增强的基准测试套件，支持CUDA事件计时
-  - 简化CUDA内存管理，提高稳定性
-- ✅ **修复reduce操作精度问题**（24d594f）
+  - 增强的基准测试套件
 - ✅ **v0.3.0** - Qwen模型和混合精度训练支持
   - 完整Qwen LLM架构实现
   - 自动混合精度（AMP）支持
-  - 高级优化器（AdamW, 学习率调度器）
-  - 模型检查点保存/加载系统
 
 ### 文档系统
 - **完整文档**: 中英双语MkDocs文档系统

@@ -21,6 +21,7 @@ from . import utils
 from .init import (
         rand,
         randn,
+        randint,
         ones,
         zeros,
         full,
@@ -30,6 +31,8 @@ from .init import (
         ones_like,
         one_hot,
         eye,
+        arange,
+        outer,
         from_numpy,
 )
 from .serialization import (
@@ -63,6 +66,9 @@ from .random import (
 
 # Device management - import our new Device system
 from .device import device
+
+# Gradient context managers
+from .grad_mode import no_grad, enable_grad, set_grad_enabled, is_grad_enabled
 
 # Device utilities
 def cuda_available() -> bool:

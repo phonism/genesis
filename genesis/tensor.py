@@ -105,11 +105,20 @@ class Tensor:
         return self.storage.element_size()
 
     def is_contiguous(self) -> bool:
-        """Check if tensor has contiguous stride pattern"""
+        """Check if tensor has contiguous memory layout (stride pattern and zero offset)."""
         if self._is_contiguous is None:
+            # Check both tensor-level and storage-level contiguity
             expected_stride = self._compute_default_stride(self.shape)
-            # Contiguous only depends on stride pattern, not offset
-            self._is_contiguous = (self._stride == expected_stride)
+            tensor_contiguous = (self._stride == expected_stride) and (self.offset == 0)
+
+            # Also check storage-level contiguity for broadcast tensors
+            # Use _backend since Storage wrapper doesn't have is_contiguous method
+            storage_contiguous = True
+            if hasattr(self.storage, '_backend') and hasattr(self.storage._backend, 'is_contiguous'):
+                storage_contiguous = self.storage._backend.is_contiguous()
+
+            # Both must be true for tensor to be truly contiguous
+            self._is_contiguous = tensor_contiguous and storage_contiguous
         return self._is_contiguous
     
     def contiguous(self) -> 'Tensor':
@@ -189,16 +198,26 @@ class Tensor:
             if node.requires_grad is False:
                 continue
             
-            # Accumulate gradients for current node
+            # Accumulate gradients for current node - optimized for memory efficiency
+            grad_list = node_to_output_grads_list[node]
             if node.grad is None:
-                node.grad = reduce(operator.add, node_to_output_grads_list[node])
-                # Ensure gradient is contiguous for efficient computation
+                # Use first gradient as base, accumulate rest in-place
+                if len(grad_list) == 1:
+                    node.grad = grad_list[0]
+                else:
+                    node.grad = grad_list[0].clone()  # Clone to avoid modifying original
+                    for grad in grad_list[1:]:
+                        node.grad += grad  # In-place accumulation
+
+                # Ensure gradient is contiguous only if needed
                 if hasattr(node.grad, 'data') and hasattr(node.grad.data, 'data'):
                     cuda_tensor = node.grad.data.data
                     if hasattr(cuda_tensor, 'is_contiguous') and not cuda_tensor.is_contiguous():
                         node.grad.data.data = cuda_tensor.contiguous()
             else:
-                node.grad += reduce(operator.add, node_to_output_grads_list[node])
+                # Accumulate all gradients in-place
+                for grad in grad_list:
+                    node.grad += grad
             if hasattr(node, 'apply_hooks'):
                 node.apply_hooks(node.grad)
             
@@ -350,7 +369,7 @@ class Tensor:
     def clone(self) -> 'Tensor':
         """
         Create a deep copy of the tensor with independent data storage.
-        
+
         Returns:
             New tensor with same data but independent storage
         """
@@ -359,7 +378,32 @@ class Tensor:
         result = Tensor(cloned_storage, self.shape, self._stride, self.offset)
         result.requires_grad = self.requires_grad
         return result
-    
+
+    def copy_(self, src: 'Tensor') -> 'Tensor':
+        """
+        Copy data from source tensor into this tensor in-place.
+        Similar to PyTorch's copy_ method.
+
+        Args:
+            src: Source tensor to copy from
+
+        Returns:
+            self (modified in-place)
+        """
+        # Import here to avoid circular dependency
+        from genesis.ops.dispatcher import OperationDispatcher
+
+        # Ensure shapes are compatible
+        if self.shape != src.shape:
+            raise RuntimeError(f"Shape mismatch: cannot copy tensor of shape {src.shape} into tensor of shape {self.shape}")
+
+        # Use dispatcher to handle the copy operation
+        # This will route to the appropriate backend (CPU/CUDA)
+        OperationDispatcher.dispatch("copy", self, src)
+
+        # Return self for chaining
+        return self
+
     def apply_hooks(self, grad):
         """Apply hooks to gradient"""
         for hook in self._hooks:
@@ -452,17 +496,17 @@ class Tensor:
     def fill_(self, value):
         """
         Fill tensor with specified value (in-place operation).
-        
+
         Args:
             value: Value to fill tensor with
-            
+
         Returns:
             Self tensor for chaining
         """
         # Use storage-level fill operation
         self.storage._backend.fill_(value)
         return self
-    
+
     def item(self):
         """
         Return the value of a tensor with a single element as a Python number.

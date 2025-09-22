@@ -181,29 +181,29 @@ class QwenModel(nn.Module):
     def forward(self, idx: Tensor, position_ids: Optional[Tensor] = None) -> Tensor:
         """
         Forward pass through the Qwen model.
-        
+
         Args:
             idx: Input token indices of shape (batch_size, sequence_length)
             position_ids: Optional position indices for each token
-        
+
         Returns:
             Logits tensor of shape (batch_size, sequence_length, vocab_size)
         """
         batch_size, sequence_length = idx.shape
-        
+
         if position_ids is None:
             position_ids = genesis.arange(0, sequence_length, device=idx.device)
             position_ids = position_ids + genesis.zeros(batch_size, sequence_length, device=idx.device)
         mask = None
-        
+
         x = self.embed_tokens(idx)
 
         for i, layer in enumerate(self.layers):
             x = layer(x, position_ids, position_ids, mask)
-            
+
         x = self.norm(x)
         x = self.lm_head(x)
-        
+
         return x
 
     @classmethod
