@@ -114,6 +114,84 @@ def test_ewise_fn(fn, shape, device, dtype):
     np.testing.assert_allclose(TB.grad.numpy()[mask], B.grad.numpy()[mask], atol=atol, rtol=rtol)
 
 
+@pytest.mark.parametrize("shape", GENERAL_SHAPES)
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+@pytest.mark.parametrize("dtype", _DTYPE, ids=["float32", "float16"])
+def test_add_inplace(shape, device, dtype):
+    """Test in-place addition operation.
+
+    Args:
+        shape: Input tensor shape
+        device: Device to run test on (CPU or CUDA)
+        dtype: Data type for tensors (float32 or float16)
+
+    Tests:
+        - In-place operations work correctly on non-leaf tensors
+        - Proper error handling for leaf tensors with requires_grad
+        - Forward pass matches PyTorch behavior
+    """
+    if dtype[0] == genesis.float16:
+        atol, rtol = 1e-3, 1e-3
+        _A = np.random.randn(*shape).astype(np.float16)
+        _B = np.random.randn(*shape).astype(np.float16)
+    else:
+        atol, rtol = 1e-5, 1e-5
+        _A = np.random.randn(*shape).astype(np.float32)
+        _B = np.random.randn(*shape).astype(np.float32)
+
+    # Test 1: Verify that in-place on leaf with requires_grad raises error
+    A_leaf = genesis.tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
+    B = genesis.tensor(_B, device=device, dtype=dtype[0])
+
+    TA_leaf = torch.Tensor(_A).to(dtype[1])
+    TA_leaf.requires_grad = True
+    TB = torch.Tensor(_B).to(dtype[1])
+
+    # Both should raise the same error
+    with pytest.raises(RuntimeError, match="leaf Variable"):
+        A_leaf += B
+
+    with pytest.raises(RuntimeError, match="leaf Variable"):
+        TA_leaf += TB
+
+    # Test 2: In-place on non-leaf tensors should work
+    A = genesis.tensor(_A, device=device, dtype=dtype[0], requires_grad=True)
+    A_nonleaf = A * 1.0  # Create non-leaf tensor
+    B = genesis.tensor(_B, device=device, dtype=dtype[0])
+
+    TA = torch.Tensor(_A).to(dtype[1])
+    TA.requires_grad = True
+    TA_nonleaf = TA * 1.0  # Create non-leaf tensor
+    TB = torch.Tensor(_B).to(dtype[1])
+
+    # Perform in-place addition
+    A_nonleaf += B
+    TA_nonleaf += TB
+
+    # Results should match
+    np.testing.assert_allclose(
+        TA_nonleaf.detach().numpy(),
+        A_nonleaf.detach().numpy(),
+        atol=atol, rtol=rtol
+    )
+
+    # Test 3: In-place on tensors without requires_grad should work
+    A_no_grad = genesis.tensor(_A, device=device, dtype=dtype[0])
+    B_no_grad = genesis.tensor(_B, device=device, dtype=dtype[0])
+
+    TA_no_grad = torch.Tensor(_A).to(dtype[1])
+    TB_no_grad = torch.Tensor(_B).to(dtype[1])
+
+    A_no_grad += B_no_grad
+    TA_no_grad += TB_no_grad
+
+    np.testing.assert_allclose(
+        TA_no_grad.numpy(),
+        A_no_grad.detach().numpy(),
+        atol=atol, rtol=rtol
+    )
+
+
 SCALAR_OPS = {
     "add": lambda a, b: a + b,
     "divide": lambda a, b: a / b,

@@ -39,5 +39,6 @@ gpu_tensor = cpu_tensor.to('cuda')
 
 ## See Also
 
-- [Autograd](autograd.md) - Automatic differentiation with tensors
-- [CUDA Storage](cuda-storage.md) - GPU memory management
+- [Function System](function.md) - Automatic differentiation functions
+- [Storage Layer](storage.md) - Memory storage interface
+- [Device Management](device.md) - Device abstraction

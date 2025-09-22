@@ -5,6 +5,7 @@ implementing automatic differentiation operations.
 """
 
 import genesis
+from genesis.tensor import Tensor
 from typing import List, Optional, NamedTuple, Tuple, Union
 
 
@@ -111,17 +112,18 @@ class Function:
         
         instance.is_tuple_result = isinstance(result, tuple)
 
-        # Set creator for gradient tracking - check both tensor types
-        from genesis.tensor import Tensor as NewTensor
-        
-        if instance.is_tuple_result:
-            for idx, res in enumerate(result):
-                if hasattr(res, 'requires_grad') and res.requires_grad:
-                    if hasattr(res, 'set_creator'):
-                        res.set_creator(instance, idx)
-        elif hasattr(result, 'requires_grad') and result.requires_grad:
-            if hasattr(result, 'set_creator'):
-                result.set_creator(instance)
+        # Only set creator for gradient tracking if gradients are enabled
+        if genesis.is_grad_enabled():
+            # Set creator for gradient tracking - check both tensor types
+            
+            if instance.is_tuple_result:
+                for idx, res in enumerate(result):
+                    if hasattr(res, 'requires_grad') and res.requires_grad:
+                        if hasattr(res, 'set_creator'):
+                            res.set_creator(instance, idx)
+            elif hasattr(result, 'requires_grad') and result.requires_grad:
+                if hasattr(result, 'set_creator'):
+                    result.set_creator(instance)
 
         # Store input tensors for backward pass
         instance.inputs = []

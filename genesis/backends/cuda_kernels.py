@@ -316,19 +316,35 @@ class CUDAIndexingOps:
     
     @staticmethod
     def _getitem_mixed_2d(storage, row_idx, col_idx):
-        """Handle mixed 2D indexing: tensor[row_indices, col_indices]"""
-        # Compute linear indices: row_idx * n_cols + col_idx
-        n_cols = storage.shape[1]
-        linear_indices = CUDAIndexingOps._compute_linear_indices_2d(storage, row_idx, col_idx, n_cols)
+        """Handle mixed 2D indexing: tensor[row_indices, col_indices] with a single kernel."""
+        # Ensure indices compatible
+        if hasattr(row_idx, 'shape') and hasattr(col_idx, 'shape'):
+            if tuple(row_idx.shape) != tuple(col_idx.shape):
+                raise ValueError("row and column indices must have the same shape")
         
-        # Use linear indexing to get values
-        flat_storage = storage.reshape((-1,))
-        result = flat_storage[linear_indices]
-        
+        # Flatten indices
+        row_flat = row_idx.reshape((-1,))
+        col_flat = col_idx.reshape((-1,))
+        K = int(row_flat.size)
+        n_cols = int(storage.shape[1])
+
+        # Flat contiguous source
+        flat_src = storage.contiguous()
+        flat_src = storage.__class__((flat_src.size,), dtype=storage.dtype, ptr=flat_src.ptr, strides=(1,), base=flat_src)
+
+        # Allocate output 1D then reshape to indices shape
+        out_1d = cuda_utils.empty((K,), flat_src._numpy_dtype)
+
+        BLOCK = 1024
+        grid = (triton.cdiv(K, BLOCK),)
+        CUDAIndexingOps._gather_mixed_2d_kernel[grid](
+            flat_src, row_flat, col_flat, out_1d, K, n_cols, BLOCK_SIZE=BLOCK
+        )
+
         # Reshape to match row_idx shape
+        result = out_1d
         if hasattr(row_idx, 'shape'):
             result = result.reshape(row_idx.shape)
-        
         return result
     
     @staticmethod
@@ -369,9 +385,8 @@ class CUDAIndexingOps:
     
     @staticmethod
     def _getitem_boolean_gather(storage, mask):
-        """Boolean mask indexing - extract values where mask is True"""
-        lin_idx = CUDAIndexingOps._boolean_mask_to_linear_indices(mask)
-        return CUDAIndexingOps._gather_linear(storage, lin_idx)
+        """Boolean mask indexing - fused compact+gather implementation"""
+        return CUDAIndexingOps._gather_mask_fused(storage, mask)
     
     @staticmethod
     def _getitem_tensor_gather(storage, indices):
@@ -379,21 +394,28 @@ class CUDAIndexingOps:
         idx = indices
         if idx.dtype != "int64":
             idx = idx.to("int64")
-        
-        # Convert row indices to linear indices accounting for row size
-        row_size = int(np.prod(storage.shape[1:]))  # elements per row
-        
-        # Use GPU-native expansion
-        idx_flat = idx.reshape((-1,))  # flatten index tensor
-        linear_idx_tensor = CUDAIndexingOps._expand_row_indices_gpu(idx_flat, row_size)
-        
+
+        # Flatten indices and make source a flat contiguous view
+        idx_flat = idx.reshape((-1,))
         flat_src = storage.contiguous()
         flat_src = storage.__class__((flat_src.size,), dtype=storage.dtype, ptr=flat_src.ptr, strides=(1,), base=flat_src)
-        out = CUDAIndexingOps._gather_linear(flat_src, linear_idx_tensor)
-        
-        # Correct shape: index_shape + remaining_original_dims  
+
+        num_rows = int(idx_flat.size)
+        row_size = int(np.prod(storage.shape[1:])) if len(storage.shape) > 1 else 1
+        n_src_rows = int(storage.shape[0]) if len(storage.shape) > 0 else 1
+
+        # Allocate output 1D and launch row-wise gather
+        out_1d = cuda_utils.empty((num_rows * row_size,), flat_src._numpy_dtype)
+        COL_BLOCK = 256
+        grid = (num_rows, triton.cdiv(row_size, COL_BLOCK))
+        CUDAIndexingOps._gather_rows_kernel[grid](
+            flat_src, idx_flat, out_1d,
+            num_rows, row_size, n_src_rows,
+            COL_BLOCK=COL_BLOCK,
+        )
+
         result_shape = tuple(indices.shape) + tuple(storage.shape[1:])
-        return out.reshape(result_shape)
+        return out_1d.reshape(result_shape)
     
     @staticmethod
     def _setitem_gather(storage, plan, value):
@@ -410,15 +432,8 @@ class CUDAIndexingOps:
     
     @staticmethod
     def _setitem_gather_boolean(storage, mask, value):
-        """Set values using boolean mask indexing (scatter with boolean mask)"""
-        if tuple(mask.shape) != tuple(storage.shape):
-            raise ValueError("boolean mask must have the same shape as tensor")
-        
-        # Convert boolean mask to linear indices
-        lin_idx = CUDAIndexingOps._boolean_mask_to_linear_indices(mask)
-        
-        # Use integer scatter operation
-        CUDAIndexingOps._setitem_scatter_linear(storage, lin_idx, value)
+        """Set values using boolean mask indexing (fused scatter for mask)."""
+        CUDAIndexingOps._scatter_mask(storage, mask, value)
         return storage
     
     @staticmethod
@@ -427,12 +442,47 @@ class CUDAIndexingOps:
         row_idx = plan.index_tensor
         col_idx = plan.column_index
         
-        # Convert to same linear indices as in forward pass
-        n_cols = storage.shape[1]
-        linear_indices = CUDAIndexingOps._compute_linear_indices_2d(storage, row_idx, col_idx, n_cols)
+        # Only supports 2D tensors by design of parse_mixed_index
+        n_cols = int(storage.shape[1])
         
-        # Use linear scatter
-        CUDAIndexingOps._setitem_scatter_linear(storage, linear_indices, value)
+        # Flatten indices to 1D
+        if hasattr(row_idx, 'reshape'):
+            row_flat = row_idx.reshape((-1,))
+        else:
+            raise TypeError("row indices must be CUDAStorage tensor")
+        if hasattr(col_idx, 'reshape'):
+            col_flat = col_idx.reshape((-1,))
+        else:
+            raise TypeError("col indices must be CUDAStorage tensor")
+        
+        K = int(row_flat.size)
+        if K != int(col_flat.size):
+            raise ValueError("row and column indices must have the same number of elements")
+        
+        # Destination must be contiguous for linear addressing
+        if not storage.is_contiguous():
+            raise ValueError("Target tensor must be contiguous for mixed 2D scatter")
+        dst_flat = storage.reshape((-1,)) if len(storage.shape) != 1 else storage
+        
+        if isinstance(value, (int, float)):
+            BLOCK = 1024
+            grid = (triton.cdiv(K, BLOCK),)
+            CUDAIndexingOps._scatter_mixed_2d_scalar_kernel[grid](
+                dst_flat, row_flat, col_flat, K, n_cols, float(value), BLOCK_SIZE=BLOCK
+            )
+            return storage
+        
+        if not hasattr(value, 'shape') or not hasattr(value, 'ptr'):
+            raise TypeError("Unsupported value type for mixed 2D scatter: expected CUDAStorage or scalar")
+        val_flat = value.reshape((-1,))
+        if int(val_flat.size) != K:
+            raise ValueError(f"values size ({int(val_flat.size)}) must match number of indices ({K})")
+        
+        BLOCK = 1024
+        grid = (triton.cdiv(K, BLOCK),)
+        CUDAIndexingOps._scatter_mixed_2d_array_kernel[grid](
+            dst_flat, row_flat, col_flat, val_flat, K, n_cols, BLOCK_SIZE=BLOCK
+        )
         return storage
     
     @staticmethod
@@ -441,19 +491,55 @@ class CUDAIndexingOps:
         idx = indices
         if idx.dtype != "int64":
             idx = idx.to("int64")
-        
-        # Convert row indices to linear indices
-        row_size = int(np.prod(storage.shape[1:]))  # elements per row
-        
+        # Require target contiguous for linear addressing
+        if not storage.is_contiguous():
+            raise ValueError("Target tensor must be contiguous for integer scatter operation")
+
+        row_size = int(np.prod(storage.shape[1:])) if len(storage.shape) > 1 else 1
+
         if row_size == 1:
             # 1D case: indices are already linear
             linear_idx = idx
-        else:
-            # Multi-dimensional case: expand row indices to linear indices
-            idx_flat = idx.reshape((-1,))
-            linear_idx = CUDAIndexingOps._expand_row_indices_gpu(idx_flat, row_size)
-        
-        CUDAIndexingOps._setitem_scatter_linear(storage, linear_idx, value)
+            CUDAIndexingOps._setitem_scatter_linear(storage, linear_idx, value)
+            return storage
+
+        # 2D+ case: use row-wise scatter to avoid building huge linear index buffers
+        idx_flat = idx.reshape((-1,))
+        num_rows = int(idx_flat.size)
+        n_src_rows = int(storage.shape[0])
+
+        # Ensure flat destination pointer
+        dst_flat = storage
+        if len(storage.shape) != 1:
+            dst_flat = storage.reshape((-1,))
+
+        if isinstance(value, (int, float)):
+            # Scalar assignment: write scalar across entire selected rows
+            COL_BLOCK = 256
+            grid = (num_rows, triton.cdiv(row_size, COL_BLOCK))
+            CUDAIndexingOps._scatter_rows_scalar_kernel[grid](
+                dst_flat, idx_flat, float(value),
+                num_rows, row_size, n_src_rows,
+                COL_BLOCK=COL_BLOCK,
+            )
+            return storage
+
+        if not hasattr(value, 'shape') or not hasattr(value, 'ptr'):
+            raise TypeError("Unsupported value type for integer scatter: expected CUDAStorage or scalar")
+
+        # Array assignment: values shape must be idx.shape + storage.shape[1:]
+        val_flat = value.reshape((-1,))
+        expected = num_rows * row_size
+        if val_flat.size != expected:
+            raise ValueError(f"scatter values size ({val_flat.size}) must match indices*row_size ({expected})")
+
+        COL_BLOCK = 256
+        grid = (num_rows, triton.cdiv(row_size, COL_BLOCK))
+        CUDAIndexingOps._scatter_rows_array_kernel[grid](
+            dst_flat, idx_flat, val_flat,
+            num_rows, row_size, n_src_rows,
+            COL_BLOCK=COL_BLOCK,
+        )
         return storage
     
     @staticmethod
@@ -540,6 +626,145 @@ class CUDAIndexingOps:
             n_indices,
             BLOCK_SIZE=BLOCK_SIZE,
         )
+
+    @staticmethod
+    @triton.jit
+    def _scatter_rows_scalar_kernel(
+        dst_ptr, idx_ptr, value,
+        num_rows, row_size, n_src_rows,
+        COL_BLOCK: tl.constexpr,
+    ):
+        rid = tl.program_id(0)
+        cb  = tl.program_id(1)
+        cols = cb * COL_BLOCK + tl.arange(0, COL_BLOCK)
+        m_row = rid < num_rows
+        m_col = cols < row_size
+        m = m_row & m_col
+        ridx = tl.load(idx_ptr + rid, mask=m_row, other=0).to(tl.int64)
+        valid_r = (ridx >= 0) & (ridx < n_src_rows)
+        m = m & valid_r
+        out_base = ridx * row_size
+        tl.store(dst_ptr + out_base + cols, value, mask=m)
+
+    @staticmethod
+    @triton.jit
+    def _scatter_rows_array_kernel(
+        dst_ptr, idx_ptr, values_ptr,
+        num_rows, row_size, n_src_rows,
+        COL_BLOCK: tl.constexpr,
+    ):
+        rid = tl.program_id(0)
+        cb  = tl.program_id(1)
+        cols = cb * COL_BLOCK + tl.arange(0, COL_BLOCK)
+        m_row = rid < num_rows
+        m_col = cols < row_size
+        m = m_row & m_col
+        ridx = tl.load(idx_ptr + rid, mask=m_row, other=0).to(tl.int64)
+        valid_r = (ridx >= 0) & (ridx < n_src_rows)
+        m = m & valid_r
+        out_base = ridx * row_size
+        val_base = rid * row_size
+        vals = tl.load(values_ptr + val_base + cols, mask=m, other=0)
+        tl.store(dst_ptr + out_base + cols, vals, mask=m)
+
+    @staticmethod
+    def _scatter_mask(storage, mask, value):
+        """Fused boolean-mask scatter that avoids building index buffers.
+
+        - If value is scalar: single pass kernel writes at mask positions.
+        - If value is array: count K first, validate size, then single pass kernel maps values sequentially.
+        """
+        if tuple(mask.shape) != tuple(storage.shape):
+            raise ValueError("boolean mask must have the same shape as tensor")
+        if mask.dtype != "bool":
+            raise ValueError("mask must be boolean")
+
+        # Flatten contiguous views
+        dst = storage
+        if not dst.is_contiguous():
+            raise ValueError("Target tensor must be contiguous for boolean scatter")
+        dst_flat = dst
+        if len(dst.shape) != 1:
+            dst_flat = dst.reshape((-1,))
+
+        m = mask
+        if not m.is_contiguous():
+            m = m.contiguous()
+        mflat = m.reshape((-1,))
+
+        N = mflat.size
+
+        if isinstance(value, (int, float)):
+            # Scalar assignment: direct masked store
+            BLOCK = 1024
+            grid = (triton.cdiv(N, BLOCK),)
+            CUDAIndexingOps._scatter_mask_scalar_kernel[grid](
+                dst_flat, mflat, float(value), N, BLOCK_SIZE=BLOCK
+            )
+            return
+
+        # Array assignment: need to map values sequentially to True positions
+        if not hasattr(value, 'shape') or not hasattr(value, 'ptr'):
+            raise TypeError("Unsupported value type for boolean scatter: expected CUDAStorage or scalar")
+        val_flat = value.reshape((-1,))
+
+        # Count K true elements without allocating index buffers
+        counter = cuda_utils.empty((1,), np.int32)
+        cuda.cuMemsetD8(counter.ptr, 0, 4)
+        BLOCK = 1024
+        grid = (triton.cdiv(N, BLOCK),)
+        CUDAIndexingOps._count_mask_kernel[grid](mflat, counter, N, BLOCK_SIZE=BLOCK)
+
+        # Read back K and validate
+        import numpy as _np
+        k_host = _np.empty(1, dtype=_np.int32)
+        cuda.cuMemcpyDtoH(k_host, counter.ptr, 4)
+        k = int(k_host[0])
+        if val_flat.size != k:
+            raise ValueError(f"boolean scatter values size ({val_flat.size}) must match mask true count ({k})")
+
+        # Reset counter and scatter
+        cuda.cuMemsetD8(counter.ptr, 0, 4)
+        CUDAIndexingOps._scatter_mask_array_kernel[grid](
+            dst_flat, mflat, val_flat, counter, N, BLOCK_SIZE=BLOCK
+        )
+
+    @staticmethod
+    @triton.jit
+    def _count_mask_kernel(mask_ptr, counter_ptr_i32, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        inb = offs < N
+        v = tl.load(mask_ptr + offs, mask=inb, other=0)
+        active = (v != 0) & inb
+        cnt = tl.sum(active.to(tl.int32), axis=0)
+        tl.atomic_add(counter_ptr_i32, cnt)
+
+    @staticmethod
+    @triton.jit
+    def _scatter_mask_scalar_kernel(target_ptr, mask_ptr, value, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        inb = offs < N
+        v = tl.load(mask_ptr + offs, mask=inb, other=0)
+        active = (v != 0) & inb
+        tl.store(target_ptr + offs, value, mask=active)
+
+    @staticmethod
+    @triton.jit
+    def _scatter_mask_array_kernel(target_ptr, mask_ptr, values_ptr, counter_ptr_i32, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        inb = offs < N
+        v = tl.load(mask_ptr + offs, mask=inb, other=0)
+        active = (v != 0) & inb
+        act_i32 = active.to(tl.int32)
+        local = tl.cumsum(act_i32, axis=0) - act_i32
+        cnt = tl.sum(act_i32, axis=0)
+        base = tl.atomic_add(counter_ptr_i32, cnt)
+        idx = base + local
+        vals = tl.load(values_ptr + idx, mask=active, other=0)
+        tl.store(target_ptr + offs, vals, mask=active)
     
     @staticmethod
     @triton.jit
@@ -579,6 +804,41 @@ class CUDAIndexingOps:
         
         # Store values at indexed positions
         tl.store(target_ptr + indices, values, mask=mask)
+
+    @staticmethod
+    @triton.jit
+    def _scatter_mixed_2d_scalar_kernel(
+        dst_ptr, row_idx_ptr, col_idx_ptr,
+        K, n_cols, value,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        """Scatter scalar to dst[row[i], col[i]] without building linear index buffer."""
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        m = offs < K
+        r = tl.load(row_idx_ptr + offs, mask=m, other=0).to(tl.int64)
+        c = tl.load(col_idx_ptr + offs, mask=m, other=0).to(tl.int64)
+        inb = (r >= 0) & (c >= 0) & (c < n_cols)
+        lin = r * n_cols + c
+        tl.store(dst_ptr + lin, value, mask=m & inb)
+
+    @staticmethod
+    @triton.jit
+    def _scatter_mixed_2d_array_kernel(
+        dst_ptr, row_idx_ptr, col_idx_ptr, vals_ptr,
+        K, n_cols,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        """Scatter array values to dst[row[i], col[i]]; vals[i] pairs with (row[i], col[i])."""
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        m = offs < K
+        r = tl.load(row_idx_ptr + offs, mask=m, other=0).to(tl.int64)
+        c = tl.load(col_idx_ptr + offs, mask=m, other=0).to(tl.int64)
+        inb = (r >= 0) & (c >= 0) & (c < n_cols)
+        lin = r * n_cols + c
+        vals = tl.load(vals_ptr + offs, mask=m & inb, other=0)
+        tl.store(dst_ptr + lin, vals, mask=m & inb)
     
     @staticmethod  
     def _boolean_mask_to_linear_indices(mask):
@@ -691,6 +951,127 @@ class CUDAIndexingOps:
         grid  = (triton.cdiv(N, BLOCK),)
         CUDAIndexingOps._gather_linear_kernel[grid](src, idx, out, N, BLOCK=BLOCK, num_warps=4)
         return out
+
+    @staticmethod
+    @triton.jit
+    def _gather_mask_fused_kernel(
+        src_ptr, mask_ptr, out_ptr,
+        counter_ptr_i32,
+        N,
+        BLOCK: tl.constexpr,
+    ):
+        """Fused boolean-mask gather: compact + gather in one pass.
+
+        - Uses single atomic per block to reserve output space.
+        - Writes selected src elements directly into out at computed positions.
+        """
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        inb = offs < N
+
+        v = tl.load(mask_ptr + offs, mask=inb, other=0)
+        active = inb & (v != 0)
+
+        act_i32 = active.to(tl.int32)
+        local = tl.cumsum(act_i32, axis=0) - act_i32
+        cnt = tl.sum(act_i32, axis=0)
+        base = tl.atomic_add(counter_ptr_i32, cnt)
+
+        idx = base + local
+        vals = tl.load(src_ptr + offs, mask=active, other=0)
+        tl.store(out_ptr + idx, vals, mask=active)
+
+    @staticmethod
+    def _gather_mask_fused(storage, mask):
+        """Fused boolean mask gather that avoids building linear index tensor.
+
+        Returns a 1D CUDAStorage vector of selected elements.
+        """
+        if tuple(mask.shape) != tuple(storage.shape):
+            raise ValueError("boolean mask must have the same shape as tensor")
+        if mask.dtype != "bool":
+            raise ValueError("mask must be boolean")
+
+        # Ensure contiguous flattened views
+        src = storage.contiguous()
+        src = storage.__class__((src.size,), dtype=storage.dtype, ptr=src.ptr, strides=(1,), base=src)
+        m = mask
+        if not m.is_contiguous():
+            m = m.contiguous()
+        mflat = m.reshape((-1,))
+
+        N = mflat.size
+        # Allocate output upper bound and counter
+        out_full = cuda_utils.empty((N,), src._numpy_dtype)
+        counter = cuda_utils.empty((1,), np.int32)
+        cuda.cuMemsetD8(counter.ptr, 0, 4)
+
+        BLOCK = 1024
+        grid = (triton.cdiv(N, BLOCK),)
+        CUDAIndexingOps._gather_mask_fused_kernel[grid](
+            src, mflat, out_full, counter, N, BLOCK=BLOCK, num_warps=4
+        )
+
+        # Read back the count
+        import numpy as _np
+        k_host = _np.empty(1, dtype=_np.int32)
+        cuda.cuMemcpyDtoH(k_host, counter.ptr, 4)
+        k = int(k_host[0])
+
+        # Create a size-k view over the same device buffer to avoid extra D2D copy
+        if k == N:
+            return out_full
+        out_view = src.__class__((k,), dtype=src.dtype, ptr=out_full.ptr, strides=(1,), base=out_full)
+        return out_view
+
+    @staticmethod
+    @triton.jit
+    def _gather_rows_kernel(
+        src_ptr, idx_ptr, out_ptr,
+        num_rows, row_size, n_src_rows,
+        COL_BLOCK: tl.constexpr,
+    ):
+        """2D row-wise gather without building a huge linear-index tensor.
+
+        Grid:
+          - program_id(0): row id in [0, num_rows)
+          - program_id(1): column block id covering [0, row_size)
+        """
+        rid = tl.program_id(0)
+        cb  = tl.program_id(1)
+        cols = cb * COL_BLOCK + tl.arange(0, COL_BLOCK)
+
+        m_row = rid < num_rows
+        m_col = cols < row_size
+        m = m_row & m_col
+
+        ridx = tl.load(idx_ptr + rid, mask=m_row, other=0).to(tl.int64)
+        valid_r = (ridx >= 0) & (ridx < n_src_rows)
+        m = m & valid_r
+
+        src_base = ridx * row_size
+        out_base = rid * row_size
+
+        vals = tl.load(src_ptr + src_base + cols, mask=m, other=0)
+        tl.store(out_ptr + out_base + cols, vals, mask=m)
+
+    @staticmethod
+    @triton.jit
+    def _gather_mixed_2d_kernel(
+        src_ptr, row_idx_ptr, col_idx_ptr, out_ptr,
+        K, n_cols,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        """Gather values for pairs (row[i], col[i]) without building linear index buffer."""
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        m = offs < K
+        r = tl.load(row_idx_ptr + offs, mask=m, other=0).to(tl.int64)
+        c = tl.load(col_idx_ptr + offs, mask=m, other=0).to(tl.int64)
+        inb = (r >= 0) & (c >= 0) & (c < n_cols)
+        lin = r * n_cols + c
+        vals = tl.load(src_ptr + lin, mask=m & inb, other=0)
+        tl.store(out_ptr + offs, vals, mask=m & inb)
     
     @staticmethod
     @triton.jit

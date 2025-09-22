@@ -282,4 +282,4 @@ for epoch in range(num_epochs):
 - [Basic Training Tutorial](../tutorials/basic-training.md)
 - [Performance Tuning Guide](../tutorials/performance-tuning.md)
 - [Model Architecture Guide](../core-components/index.md)
-- [Optimizer Documentation](../api/optim/optimizers.md)
+- [Optimizer Documentation](../api-reference/optim/optimizers.md)

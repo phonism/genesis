@@ -6,12 +6,13 @@ This is the main API reference for the Genesis deep learning framework.
 
 Please refer to the specific module documentation for detailed information:
 
-- [Autograd](../api/autograd.md) - Automatic differentiation
-- [NDArray](../api/ndarray/index.md) - Tensor operations  
-- [Neural Networks](../api/nn/modules.md) - Neural network layers
-- [Optimizers](../api/optim/optimizers.md) - Optimization algorithms
+- [Tensor System](tensor.md) - Core tensor operations and automatic differentiation
+- [Device Management](device.md) - Device abstraction and management
+- [Neural Networks](nn/modules.md) - Neural network layers
+- [Optimizers](optim/optimizers.md) - Optimization algorithms
 - [Random Number Generation](random.md) - PyTorch-compatible RNG API
 - [Memory Management](memory.md) - Advanced CUDA memory management
-- [Utilities](../api/utils/index.md) - Helper functions
+- [Storage Layer](storage.md) - Storage abstraction and management
+- [Utilities](utils/index.md) - Helper functions
 
 *This page is under construction. More detailed API documentation will be added soon.*

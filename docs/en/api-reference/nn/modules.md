@@ -748,5 +748,5 @@ class SimpleTransformer(nn.Module):
 
 - [Functional API](functional.md) - Functional operations
 - [Optimizers](../optim/optimizers.md) - Training optimizers
-- [Autograd](../autograd.md) - Automatic differentiation
+- [Tensor System](../tensor.md) - Tensor operations and automatic differentiation
 - [Examples](../../../samples/) - Complete examples

@@ -376,7 +376,7 @@ class Module:
             if isinstance(param, Parameter):
                 moved_param = Parameter(moved_param, requires_grad=param.requires_grad)
             setattr(parent_module, attr_name, moved_param)
-        
+
         # Also move buffers registered with register_buffer
         for name, value in self.__dict__.items():
             if isinstance(value, Tensor) and not isinstance(value, Parameter):
@@ -386,7 +386,7 @@ class Module:
                     self.__dict__[name] = value.detach().to(device_name)
                 else:
                     self.__dict__[name] = value.to(device_name)
-        
+
         for child_module in self._children():
             child_module.cuda(device_name)
         return self

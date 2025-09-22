@@ -60,14 +60,6 @@ _DEVICES = [
 
 _DTYPE = [(genesis.float32, torch.float32), (genesis.float16, torch.float16)]
 
-EWISE_OPS = {
-    "add": lambda a, b: a + b,
-    "divide": lambda a, b: a / b,
-    "subtract": lambda a, b: a - b,
-    "mul": lambda a, b: a * b,
-}
-EWISE_OP_FNS = [EWISE_OPS[k] for k in EWISE_OPS]
-EWISE_OP_NAMES = [k for k in EWISE_OPS]
 GENERAL_SHAPES = [(1, 1, 1), (4, 5, 6)]
 
 MATMUL_DIMS = [

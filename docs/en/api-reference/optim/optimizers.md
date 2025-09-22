@@ -438,5 +438,5 @@ for i, batch in enumerate(train_loader):
 
 - [Learning Rate Schedulers](lr_scheduler.md) - Dynamic learning rate adjustment
 - [Neural Network Modules](../nn/modules.md) - Building models
-- [Autograd](../autograd.md) - Automatic differentiation
+- [Tensor System](../tensor.md) - Tensor operations and automatic differentiation
 - [Examples](../../../samples/) - Complete training examples

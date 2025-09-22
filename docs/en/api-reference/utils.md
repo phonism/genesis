@@ -4,7 +4,7 @@ Utility functions and helpers for Genesis framework.
 
 ## Available Utilities
 
-See [Utils](../api/utils/index.md) for the main utilities documentation.
+See [Utils](utils/index.md) for the main utilities documentation.
 
 ## Categories
 
@@ -23,4 +23,4 @@ See [Utils](../api/utils/index.md) for the main utilities documentation.
 - Memory management
 - Device management
 
-*Detailed documentation is available in the main [utils documentation](../api/utils/index.md).*
+*Detailed documentation is available in the main [utils documentation](utils/index.md).*

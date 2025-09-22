@@ -4,8 +4,8 @@ Complete reference for Genesis optimization algorithms.
 
 ## Available Optimizers
 
-- **[Optimizers](../api/optim/optimizers.md)** - SGD, Adam, AdamW and more
-- **[Learning Rate Schedulers](../api/optim/lr_scheduler.md)** - Learning rate scheduling
+- **[Optimizers](optim/optimizers.md)** - SGD, Adam, AdamW and more
+- **[Learning Rate Schedulers](optim/lr_scheduler.md)** - Learning rate scheduling
 
 ## Quick Reference
 

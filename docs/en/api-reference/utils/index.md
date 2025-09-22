@@ -491,6 +491,6 @@ small_batch_loader = DataLoader(dataset, batch_size=16)
 ## See Also
 
 - [Neural Network Modules](../nn/modules.md) - Building models
-- [Optimizers](../optim/optimizers.md) - Training algorithms  
-- [Autograd](../autograd.md) - Automatic differentiation
+- [Optimizers](../optim/optimizers.md) - Training algorithms
+- [Tensor System](../tensor.md) - Tensor operations and automatic differentiation
 - [Performance Guide](../../performance/) - Optimization techniques

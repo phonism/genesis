@@ -63,10 +63,16 @@ def constant(*shape, c=1.0, device=None, dtype=genesis.float32, requires_grad=Fa
 
 def ones(*shape, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate all-ones Tensor """
+    # Handle case where shape is passed as a single tuple argument
+    if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+        shape = shape[0]
     return constant(*shape, c=1.0, device=device, dtype=dtype, requires_grad=requires_grad)
 
 def zeros(*shape, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate all-zeros Tensor """
+    # Handle case where shape is passed as a single tuple argument
+    if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+        shape = shape[0]
     return constant(*shape, c=0.0, device=device, dtype=dtype, requires_grad=requires_grad)
 
 def full(shape, fill_value, device=None, dtype=genesis.float32, requires_grad=False):
@@ -273,3 +279,51 @@ def from_numpy(array, device=None, dtype=None, requires_grad=False):
     # Create tensor directly using make_tensor (already imported via genesis.tensor module)
     tensor = genesis.tensor(array, dtype=dtype, device=device, requires_grad=requires_grad)
     return tensor
+
+
+def arange(start, end=None, step=1, device=None, dtype=genesis.float32, requires_grad=False):
+    """Create a 1-D tensor of size (end - start) / step with values from start to end.
+
+    Args:
+        start: Starting value for the sequence or the end value if end is None
+        end: End value for the sequence (exclusive). If None, start is used as end and start=0
+        step: Step size between values
+        device: Target device
+        dtype: Data type of the output tensor
+        requires_grad: Whether to track gradients
+
+    Returns:
+        Tensor: 1-D tensor with evenly spaced values
+    """
+    if end is None:
+        end = start
+        start = 0
+
+    # Handle string device
+    if device is None:
+        device = genesis.device('cpu')
+    elif isinstance(device, str):
+        device = genesis.device(device)
+
+    # Handle both string and DType for dtype parameter
+    if isinstance(dtype, str):
+        dtype = get_dtype(dtype)
+
+    # Use dispatch_creation for creation operations
+    tensor = OperationDispatcher.dispatch_creation("arange", device, start, end, step, dtype.name)
+    tensor.requires_grad = requires_grad
+    return tensor
+
+
+def outer(input, vec2):
+    """Compute the outer product of two 1-D tensors.
+
+    Args:
+        input: 1-D tensor
+        vec2: 1-D tensor
+
+    Returns:
+        Tensor: 2-D tensor representing the outer product
+    """
+    # Outer product: input.unsqueeze(1) @ vec2.unsqueeze(0)
+    return genesis.matmul(input.unsqueeze(1), vec2.unsqueeze(0))

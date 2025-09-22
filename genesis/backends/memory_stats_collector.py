@@ -31,11 +31,28 @@ class DeallocationEvent:
     thread_id: int = 0
 
 
+class NoOpMemoryStatsCollector:
+    """
+    No-operation memory statistics collector to avoid deadlock issues.
+    """
+
+    def __init__(self, history_size: int = 10000):
+        pass
+
+    def record_allocation(self, *args, **kwargs):
+        pass
+
+    def record_deallocation(self, *args, **kwargs):
+        pass
+
+    def get_enhanced_stats(self):
+        return {}
+
 class MemoryStatsCollector:
     """
     Comprehensive memory statistics collector with detailed insights.
     """
-    
+
     def __init__(self, history_size: int = 10000):
         self.history_size = history_size
         self.start_time = time.time()
@@ -408,7 +425,8 @@ def get_stats_collector() -> MemoryStatsCollector:
     global _global_stats_collector
     with _stats_lock:
         if _global_stats_collector is None:
-            _global_stats_collector = MemoryStatsCollector()
+            # Use NoOp collector to avoid deadlock issues
+            _global_stats_collector = NoOpMemoryStatsCollector()
         return _global_stats_collector
 
 

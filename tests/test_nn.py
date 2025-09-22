@@ -311,11 +311,11 @@ ATTENTION_SHAPES = [
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_fused_multihead_attention(shape, device):
     """Test fused multi-head attention (optimized CUDA kernel) forward and backward pass.
-    
+
     Args:
         shape: Input tensor shape (batch_size, seq_len, dim)
         device: Device to run test on (CUDA only)
-    
+
     Tests:
         - Forward pass fused attention matches PyTorch MultiheadAttention
         - Uses relaxed tolerance due to numerical precision differences
@@ -333,44 +333,23 @@ def test_fused_multihead_attention(shape, device):
     attn = genesis.nn.FusedMultiheadAttention(dim=shape[2], heads=heads)
 
     torch_attn = torch.nn.MultiheadAttention(shape[2], heads, bias=False, batch_first=True)
-
-    # Create weights on the correct device
-    qkv_weight = genesis.tensor(torch_attn.in_proj_weight.detach().T.numpy(), device=device)
-    out_weight = genesis.tensor(torch_attn.out_proj.weight.detach().numpy().T, device=device)
-    attn.w_qkv = genesis.nn.Parameter(qkv_weight)
-    attn.w_out = genesis.nn.Parameter(out_weight)
+    attn.w_qkv = genesis.nn.Parameter(torch_attn.in_proj_weight.detach().T.numpy())
+    attn.w_out = genesis.nn.Parameter(torch_attn.out_proj.weight.detach().numpy().T)
+    M = torch.triu(-float("inf") * torch.ones(shape[1], shape[1]), 1)
 
     if device == genesis.device("cuda"):
         attn.cuda()
-        TA = TA.cuda()
-        torch_attn.cuda()
-
     genesis_out = attn(A)
-
-    # Use PyTorch's causal attention to match Genesis implementation
-    # Extract Q, K, V from PyTorch MultiheadAttention weights
-    q_proj = torch_attn.in_proj_weight[:shape[2]]  # First third for Q
-    k_proj = torch_attn.in_proj_weight[shape[2]:2*shape[2]]  # Second third for K
-    v_proj = torch_attn.in_proj_weight[2*shape[2]:]  # Last third for V
-
-    # Compute Q, K, V
-    q = torch.nn.functional.linear(TA, q_proj).view(TA.shape[0], TA.shape[1], heads, shape[2]//heads).transpose(1, 2)
-    k = torch.nn.functional.linear(TA, k_proj).view(TA.shape[0], TA.shape[1], heads, shape[2]//heads).transpose(1, 2)
-    v = torch.nn.functional.linear(TA, v_proj).view(TA.shape[0], TA.shape[1], heads, shape[2]//heads).transpose(1, 2)
-
-    # Use causal scaled dot product attention
-    attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
-    attn_output = attn_output.transpose(1, 2).contiguous().view(TA.shape[0], TA.shape[1], shape[2])
-    torch_out = (torch.nn.functional.linear(attn_output, torch_attn.out_proj.weight, torch_attn.out_proj.bias),)
+    torch_out = torch_attn(TA, TA, TA, attn_mask=M)
 
     np.testing.assert_allclose(
             genesis_out[0].detach().numpy(),
-            torch_out[0].detach().cpu().numpy(),
+            torch_out[0].detach().numpy(),
             atol=1e-2, rtol=1e-2)
 
     genesis_out[0].sum().backward()
     torch_out[0].sum().backward()
-    np.testing.assert_allclose(TA.grad.cpu().numpy(), A.grad.numpy(), atol=1e-2, rtol=1e-2)
+    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=1e-2, rtol=1e-2)
 
 QKV_SHAPES = [
     (1, 16, 12, 64),

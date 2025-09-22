@@ -4,8 +4,8 @@ Complete reference for Genesis neural network modules and functions.
 
 ## Available Modules
 
-- **[Modules](../api/nn/modules.md)** - Neural network layers and building blocks
-- **[Functional](../api/nn/functional.md)** - Functional interface for operations
+- **[Modules](nn/modules.md)** - Neural network layers and building blocks
+- **[Functional](nn/functional.md)** - Functional interface for operations
 
 ## Quick Reference
 

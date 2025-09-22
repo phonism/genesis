@@ -157,26 +157,9 @@ class Storage:
     
     def contiguous(self, shape, stride, offset=0) -> 'Storage':
         """Create contiguous storage from strided data"""
-        numel = math.prod(shape)
-        
-        # Check if already contiguous
-        expected_stride = []
-        s = 1
-        for dim in reversed(shape):
-            expected_stride.append(s)
-            s *= dim
-        expected_stride = tuple(reversed(expected_stride))
-        
-        if stride == expected_stride and offset == 0:
-            return self  # Already contiguous
-        
-        # Create new contiguous storage
-        new_storage = Storage.allocate(numel, self.dtype, self.device)
-        
-        # Call backend-specific strided copy
-        self._backend.copy_strided_to_contiguous(shape, stride, offset, new_storage._backend)
-        
-        return new_storage
+        # Use backend's contiguous method directly
+        new_backend = self._backend.contiguous()
+        return Storage(new_backend, self.device)
     
     def data_ptr(self):
         """Get pointer to data (PyTorch-style)"""
