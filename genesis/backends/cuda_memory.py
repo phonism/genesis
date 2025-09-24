@@ -11,6 +11,7 @@ except ImportError:
 
 import threading
 import os
+import numpy as np
 from typing import Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 from collections import defaultdict
@@ -436,13 +437,12 @@ class FragmentationDetector:
                 # Keep one block, free others to be reallocated as larger blocks
                 blocks_to_consolidate = blocks[1:]  # Keep first block
                 for block in blocks_to_consolidate:
-                    try:
-                        from cuda import cuda
-                        _ok(cuda.cuMemFree(block.ptr))
-                        memory_freed += block.size
-                        blocks_consolidated += 1
-                    except:
-                        pass  # Continue on error
+                    # TODO: this will cause error！
+                    # _ok(cuda.cuMemFree(block.ptr))
+                    # memory_freed += block.size
+                    # blocks_consolidated += 1
+                    pass
+                   
                 
                 # Update the bucket
                 memory_pool[bucket_size] = blocks[:1]  # Keep only first block
@@ -1664,7 +1664,6 @@ def analyze_memory_fragmentation() -> Dict:
 
 def test_performance():
     """Test memory manager performance"""
-    import numpy as np
     
     print("🚀 High-performance CUDA memory manager test\n")
     

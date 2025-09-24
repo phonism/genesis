@@ -526,7 +526,6 @@ def broadcast_shapes(shape1, shape2):
     """
     Compute the broadcasted shape of two tensors (NumPy broadcasting rules).
     """
-    import numpy as np
     # Use numpy's broadcast_shapes if available (Python 3.10+)
     try:
         return np.broadcast_shapes(shape1, shape2)

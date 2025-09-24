@@ -4,15 +4,52 @@ import genesis
 import math
 from genesis.tensor import Tensor
 from genesis.ops import OperationDispatcher as Dispatcher
+from genesis.dtypes import DType
+from genesis.device import Device
+from typing import Optional, Union, Tuple, Any
 from .nn.functional import *
 
-def triu(a: Tensor, k: int, device=None):
+def triu(a: Tensor, k: int, device: Optional[Union[str, Device]] = None) -> Tensor:
+    """Return upper triangular part of tensor.
+
+    Args:
+        a: Input tensor
+        k: Diagonal offset (0 for main diagonal, positive for above, negative for below)
+        device: Device placement (unused, kept for compatibility)
+
+    Returns:
+        Tensor: Upper triangular tensor
+    """
     return Dispatcher.dispatch('triu', a, k)
 
-def empty(*shape, device=None, dtype=genesis.float32, requires_grad=False):
+def empty(*shape: int, device: Optional[Union[str, Device]] = None, dtype: DType = genesis.float32, requires_grad: bool = False) -> Tensor:
+    """Create tensor with uninitialized values.
+
+    Args:
+        *shape: Shape dimensions of the tensor
+        device: Device to place tensor on
+        dtype: Data type of the tensor
+        requires_grad: Whether to track gradients
+
+    Returns:
+        Tensor: Uninitialized tensor with specified shape and dtype
+    """
     return genesis.init.zeros(*shape, device=device, dtype=dtype, requires_grad=requires_grad)
 
-def arange(*args, dtype=None, device=None):
+def arange(*args: Union[int, float], dtype: Optional[DType] = None, device: Optional[Union[str, Device]] = None) -> Tensor:
+    """Create tensor with evenly spaced values within given range.
+
+    Args:
+        *args: Either (end,), (start, end), or (start, end, step)
+        dtype: Data type of the result tensor
+        device: Device to place tensor on
+
+    Returns:
+        Tensor: 1D tensor with evenly spaced values
+
+    Raises:
+        ValueError: If invalid number of arguments provided
+    """
     if len(args) == 1:
         start, end, step = 0, args[0], 1
     elif len(args) == 2:

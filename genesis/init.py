@@ -7,9 +7,11 @@ import math
 from genesis.storage import Storage
 from genesis.tensor import Tensor
 from genesis.ops.dispatcher import OperationDispatcher
-from genesis.dtypes import get_dtype
+from genesis.dtypes import get_dtype, DType
+from genesis.device import Device
+from typing import Optional, Union
 
-def rand(*shape, low=0.0, high=1.0, device=None, dtype=genesis.float32, requires_grad=False):
+def rand(*shape: int, low: float = 0.0, high: float = 1.0, device: Optional[Union[str, Device]] = None, dtype: DType = genesis.float32, requires_grad: bool = False) -> Tensor:
     """ Generate random numbers uniform between low and high """
     # Handle string device
     if device is None:
@@ -26,7 +28,7 @@ def rand(*shape, low=0.0, high=1.0, device=None, dtype=genesis.float32, requires
     tensor.requires_grad = requires_grad
     return tensor
 
-def randn(*shape, mean=0.0, std=1.0, device=None, dtype=genesis.float32, requires_grad=False):
+def randn(*shape: int, mean: float = 0.0, std: float = 1.0, device: Optional[Union[str, Device]] = None, dtype: DType = genesis.float32, requires_grad: bool = False) -> Tensor:
     """ Generate random normal with specified mean and std deviation """
     # Handle string device
     if device is None:

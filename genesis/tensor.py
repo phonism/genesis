@@ -11,6 +11,9 @@ from genesis.device import device as make_device, cpu, Device
 from genesis import init
 from genesis.storage import Storage
 
+# Import to avoid function-level imports
+import genesis
+
 class Tensor:
     """
     Tensor: lightweight metadata + storage reference
@@ -155,93 +158,120 @@ class Tensor:
             flat_index += idx * stride
         return self.storage[flat_index]
     
+    def _topo_sort(self, root_node):
+        """Perform topological sort on computational graph.
+
+        Args:
+            root_node: Root node to start topological sort from
+
+        Returns:
+            List of nodes in topological order
+        """
+        visited = set()
+        topo_order = []
+
+        def dfs(node):
+            if node in visited:
+                return
+            visited.add(node)
+            if hasattr(node, 'creator') and node.creator is not None:
+                for input_node in node.creator.inputs:
+                    if isinstance(input_node, Tensor):
+                        dfs(input_node)
+            topo_order.append(node)
+
+        dfs(root_node)
+        return topo_order
+
+    def _accumulate_gradients(self, node, grad_list):
+        """Accumulate gradients for a node efficiently.
+
+        Args:
+            node: Node to accumulate gradients for
+            grad_list: List of gradients to accumulate
+        """
+        if node.grad is None:
+            # Use first gradient as base, accumulate rest in-place
+            if len(grad_list) == 1:
+                node.grad = grad_list[0]
+            else:
+                node.grad = grad_list[0].clone()  # Clone to avoid modifying original
+                for grad in grad_list[1:]:
+                    node.grad += grad  # In-place accumulation
+
+            # Ensure gradient is contiguous only if needed
+            if hasattr(node.grad, 'data') and hasattr(node.grad.data, 'data'):
+                cuda_tensor = node.grad.data.data
+                if hasattr(cuda_tensor, 'is_contiguous') and not cuda_tensor.is_contiguous():
+                    node.grad.data.data = cuda_tensor.contiguous()
+        else:
+            # Accumulate all gradients in-place
+            for grad in grad_list:
+                node.grad += grad
+
+    def _propagate_gradients(self, node, node_to_output_grads_list):
+        """Propagate gradients to input nodes.
+
+        Args:
+            node: Current node to propagate gradients from
+            node_to_output_grads_list: Dictionary tracking gradient lists for each node
+        """
+        if not (hasattr(node, 'creator') and node.creator is not None):
+            return
+
+        # Initialize gradient lists for input nodes
+        for nd in node.creator.inputs:
+            if nd not in node_to_output_grads_list:
+                node_to_output_grads_list[nd] = []
+
+        # Compute backward gradients
+        grad = node.grad
+        if hasattr(node.creator, 'is_tuple_result') and node.creator.is_tuple_result:
+            backward_grad = node.creator.backward(node.creator.ctx, grad, node.idx)
+        else:
+            backward_grad = node.creator.backward(node.creator.ctx, grad)
+
+        # Distribute gradients to input tensors
+        for i, nd in enumerate(node.creator.inputs):
+            if nd.requires_grad is False:
+                continue
+            node_to_output_grads_list[nd].append(backward_grad[i])
+
     def backward(self, out_grad=None):
         """Compute gradients using reverse-mode automatic differentiation.
-        
+
         Args:
             out_grad: Optional output gradient tensor. Defaults to ones tensor.
-            
+
         This method implements topological sorting and backward pass computation
         for the computational graph rooted at this tensor.
         """
         out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)
         if hasattr(self, 'apply_hooks'):
             self.apply_hooks(self.grad)
-        node_to_output_grads_list = {}
-        node_to_output_grads_list[self] = [out_grad]
 
-        # Topological sort to determine computation order
-        def topo_sort(node):
-            """Local topological sort implementation."""
-            visited = set()
-            topo_order = []
+        node_to_output_grads_list = {self: [out_grad]}
 
-            def dfs(n):
-                if n in visited:
-                    return
-                visited.add(n)
-                if hasattr(n, 'creator') and n.creator is not None:
-                    for input_node in n.creator.inputs:
-                        if isinstance(input_node, Tensor):
-                            dfs(input_node)
-                topo_order.append(n)
-            
-            dfs(node)
-            return topo_order
-            
+        # Get computation order via topological sort
         if hasattr(self, 'creator') and self.creator is not None:
-            topo_order = topo_sort(self)
+            topo_order = self._topo_sort(self)
         else:
             topo_order = [self]
-        
+
         # Reverse pass through computation graph
         for node in reversed(topo_order):
             if node.requires_grad is False:
                 continue
-            
-            # Accumulate gradients for current node - optimized for memory efficiency
-            grad_list = node_to_output_grads_list[node]
-            if node.grad is None:
-                # Use first gradient as base, accumulate rest in-place
-                if len(grad_list) == 1:
-                    node.grad = grad_list[0]
-                else:
-                    node.grad = grad_list[0].clone()  # Clone to avoid modifying original
-                    for grad in grad_list[1:]:
-                        node.grad += grad  # In-place accumulation
 
-                # Ensure gradient is contiguous only if needed
-                if hasattr(node.grad, 'data') and hasattr(node.grad.data, 'data'):
-                    cuda_tensor = node.grad.data.data
-                    if hasattr(cuda_tensor, 'is_contiguous') and not cuda_tensor.is_contiguous():
-                        node.grad.data.data = cuda_tensor.contiguous()
-            else:
-                # Accumulate all gradients in-place
-                for grad in grad_list:
-                    node.grad += grad
+            # Accumulate gradients for current node
+            grad_list = node_to_output_grads_list[node]
+            self._accumulate_gradients(node, grad_list)
+
             if hasattr(node, 'apply_hooks'):
                 node.apply_hooks(node.grad)
-            
+
             # Propagate gradients to input nodes
-            if hasattr(node, 'creator') and node.creator is not None:
-                for nd in node.creator.inputs:
-                    if nd not in node_to_output_grads_list:
-                        node_to_output_grads_list[nd] = []
-                        
-                # Use current node's gradient for backward computation
-                grad = node.grad
-                
-                # Compute backward gradients
-                if hasattr(node.creator, 'is_tuple_result') and node.creator.is_tuple_result:
-                    backward_grad = node.creator.backward(node.creator.ctx, grad, node.idx)
-                else:
-                    backward_grad = node.creator.backward(node.creator.ctx, grad)
-                
-                # Distribute gradients to input tensors
-                for i, nd in enumerate(node.creator.inputs):
-                    if nd.requires_grad is False:
-                        continue
-                    node_to_output_grads_list[nd].append(backward_grad[i])
+            self._propagate_gradients(node, node_to_output_grads_list)
     
     def to(self, *args, **kwargs):
         """Move tensor to device and/or change dtype - compatible with torch.Tensor.to"""
@@ -302,7 +332,6 @@ class Tensor:
 
     def to_dtype(self, dtype) -> 'Tensor':
         """Convert tensor to different dtype - compatible with PyTorch"""
-        from genesis.dtypes import get_dtype
         target_dtype = get_dtype(dtype)
 
         # Convert storage to new dtype
@@ -423,15 +452,14 @@ class Tensor:
     def all(self, dim=None, keepdim=False):
         """
         Test whether all tensor elements evaluate to True.
-        
+
         Args:
             dim: Dimension or dimensions along which to check. None means check all dimensions.
             keepdim: Whether to keep reduced dimensions as size 1
-            
+
         Returns:
             Boolean tensor indicating if all elements are True
         """
-        import genesis
         # Convert to boolean tensor (non-zero is True) 
         bool_tensor = self != 0
         
@@ -471,15 +499,14 @@ class Tensor:
     def any(self, dim=None, keepdim=False):
         """
         Test whether any tensor elements evaluate to True.
-        
+
         Args:
             dim: Dimension or dimensions along which to check. None means check all dimensions.
             keepdim: Whether to keep reduced dimensions as size 1
-            
+
         Returns:
             Boolean tensor indicating if any elements are True
         """
-        import genesis
         # Convert to boolean tensor (non-zero is True) 
         bool_tensor = self != 0
         

@@ -6,30 +6,40 @@ implementing automatic differentiation operations.
 
 import genesis
 from genesis.tensor import Tensor
-from typing import List, Optional, NamedTuple, Tuple, Union
+from typing import List, Optional, NamedTuple, Tuple, Union, Any
 
 
 class Context:
     """Stores intermediate values during forward pass for backward computation."""
     
     def __init__(self):
-        self.saved_tensors = []
+        """Initialize context for storing intermediate values."""
+        self._saved_tensors: List[Tensor] = []
 
-    def save_for_backward(self, *tensors):
-        """Save tensors needed for backward pass."""
-        self.saved_tensors.extend(tensors)
+    def save_for_backward(self, *tensors: Tensor) -> None:
+        """Save tensors needed for backward pass.
+
+        Args:
+            *tensors: Tensors to save for backward computation
+        """
+        self._saved_tensors.extend(tensors)
 
     @property
-    def saved_tensors(self):
+    def saved_tensors(self) -> List[Tensor]:
+        """Get saved tensors for backward computation."""
         return self._saved_tensors
 
-    @saved_tensors.setter
-    def saved_tensors(self, tensors):
-        self._saved_tensors = tensors
 
+def _cast(value: Any, dtype: 'genesis.DType') -> Any:
+    """Cast tensors to target dtype for mixed precision training.
 
-def _cast(value, dtype):
-    """Cast tensors to target dtype for mixed precision training."""
+    Args:
+        value: Value to cast (tensor, dict, list, tuple, or other)
+        dtype: Target data type for casting
+
+    Returns:
+        Casted value with same structure but converted tensors
+    """
     if hasattr(value, 'is_floating_point') and value.is_floating_point():
         if dtype == genesis.float16:
             return value.half()
@@ -43,8 +53,16 @@ def _cast(value, dtype):
         return value
 
 
-def check_dtype(value, dtype): 
-    """Check if value contains tensors of specified dtype."""
+def check_dtype(value: Any, dtype: 'genesis.DType') -> bool:
+    """Check if value contains tensors of specified dtype.
+
+    Args:
+        value: Value to check (tensor, dict, list, tuple, or other)
+        dtype: Data type to check for
+
+    Returns:
+        bool: True if value contains tensors of the specified dtype
+    """
     if hasattr(value, 'dtype') and value.dtype == dtype:
         return True
     elif isinstance(value, dict):
@@ -63,6 +81,7 @@ class Function:
     """
     
     def __init__(self):
+        """Initialize Function with empty inputs and context."""
         self.inputs = []
         self.ctx = Context()
 

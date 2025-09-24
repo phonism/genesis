@@ -19,11 +19,22 @@ from genesis.dtypes import get_dtype, DType
 from dataclasses import dataclass
 from enum import Enum
 
+# Optional torch import for cpu() method
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    TORCH_AVAILABLE = False
+
 from genesis.backends.cuda_memory import (
     allocate_memory, free_memory, memory_stats, get_memory_manager,
     increase_ref_count, decrease_ref_count, trigger_gc
 )
 from genesis.backends.base import Storage
+from genesis.dtypes import get_dtype
+import genesis
+from .cuda_error import check_cuda_error
 
 # Import new indexing operations module
 from genesis.backends.cuda_kernels import CUDAIndexingOps
@@ -54,19 +65,6 @@ class IndexPlan:
     is_mixed_2d: bool = False
     # Mixed list + slice indexing metadata
     slices: Optional[Tuple] = None
-
-# CUDA error checking
-def check_cuda_error(result):
-    if isinstance(result, tuple):
-        err = result[0]
-        if err != cuda.CUresult.CUDA_SUCCESS:
-            error_name = cuda.cuGetErrorName(err)[1].decode() if len(cuda.cuGetErrorName(err)) > 1 else "Unknown"
-            error_string = cuda.cuGetErrorString(err)[1].decode() if len(cuda.cuGetErrorString(err)) > 1 else "Unknown error"
-            raise RuntimeError(f"CUDA error: {error_name} - {error_string}")
-        return result[1:] if len(result) > 1 else None
-    else:
-        if result != cuda.CUresult.CUDA_SUCCESS:
-            raise RuntimeError(f"CUDA error: {result}")
 
 # CUDA initialization handled by memory manager
 
@@ -348,19 +346,16 @@ class CUDAStorage(Storage):
     @property
     def device(self):
         """Device property - returns cuda device"""
-        import genesis
         return genesis.device("cuda")
     
     @property
     def size_bytes(self) -> int:
         """Return size in bytes"""
-        from genesis.dtypes import get_dtype
         dtype_obj = get_dtype(self._dtype)
         return self.size * dtype_obj.itemsize
 
     def element_size(self) -> int:
         """Return bytes per element"""
-        from genesis.dtypes import get_dtype
         dtype_obj = get_dtype(self._dtype)
         return dtype_obj.itemsize
     
@@ -1124,7 +1119,8 @@ class CUDAStorage(Storage):
     
     def cpu(self):
         """Move tensor to CPU and convert to PyTorch tensor"""
-        import torch
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch is not available. Cannot convert to CPU tensor.")
         np_data = self.to_numpy()
         
         # Handle read-only numpy arrays (e.g., from broadcast operations)

@@ -39,7 +39,10 @@ class BatchNorm1d(Module):
             # Use keepdims to maintain shape consistency
             mean = F.summation(x, axis=0, keepdims=True) / batch
             mean_squeezed = mean.squeeze(0)
-            self.running_mean = (self.momentum * mean_squeezed.detach() + (1 - self.momentum) * self.running_mean).detach()
+            # Update running mean with exponential moving average
+            momentum_term = self.momentum * mean_squeezed.detach()
+            prev_term = (1 - self.momentum) * self.running_mean
+            self.running_mean = (momentum_term + prev_term).detach()
             
             # Compute variance with keepdims
             centered = x - mean

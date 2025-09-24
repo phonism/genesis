@@ -13,31 +13,30 @@ from .dtypes import (
 )
 
 # Global runtime configuration
-enable_autocast = False  # Automatic mixed precision training
-upgrade = False         # Framework upgrade mode  
-use_triton = True       # Enable Triton GPU kernels
+enable_autocast: bool = False  # Automatic mixed precision training
+upgrade: bool = False           # Framework upgrade mode
+use_triton: bool = True         # Enable Triton GPU kernels
 
-from . import utils
 from .init import (
-        rand,
-        randn,
-        randint,
-        ones,
-        zeros,
-        full,
-        empty,
-        empty_like,
-        zeros_like,
-        ones_like,
-        one_hot,
-        eye,
-        arange,
-        outer,
-        from_numpy,
+    rand,
+    randn,
+    randint,
+    ones,
+    zeros,
+    full,
+    empty,
+    empty_like,
+    zeros_like,
+    ones_like,
+    one_hot,
+    eye,
+    arange,
+    outer,
+    from_numpy,
 )
 from .serialization import (
-        save, load, 
-        save_checkpoint, load_checkpoint
+    save, load,
+    save_checkpoint, load_checkpoint
 )
 from .tensor import Tensor, tensor
 from . import nn
