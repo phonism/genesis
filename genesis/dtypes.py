@@ -161,7 +161,6 @@ def infer_dtype_from_data(array):
             return float32  # PyTorch default for Python float
     else:
         # Handle arrays and lists
-        import numpy as np
         if not hasattr(array, 'dtype'):
             array = np.array(array)
         

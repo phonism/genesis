@@ -41,6 +41,13 @@ class CrossEntropyLoss(Module):
     """
     
     def __init__(self, weight=None, ignore_index=-100, reduction="mean"):
+        """Initialize CrossEntropyLoss.
+
+        Args:
+            weight: Manual rescaling weight for each class
+            ignore_index: Index to ignore in loss computation
+            reduction: Reduction method ('mean', 'sum', 'none')
+        """
         super().__init__()
         self.weight = weight
         self.ignore_index = ignore_index

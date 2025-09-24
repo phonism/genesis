@@ -21,6 +21,7 @@ except ImportError:
 
 from ..dtypes import get_dtype
 from . import cuda_utils
+from .cuda_error import check_cuda_error
 
 
 class IndexKind(Enum):
@@ -545,12 +546,6 @@ class CUDAIndexingOps:
     @staticmethod
     def _copy_data_to_view(storage, target_view, value):
         """Copy data to target view - pixel-level copy from old architecture"""
-        # Import CUDA
-        try:
-            from cuda.bindings import driver as cuda
-        except ImportError:
-            from cuda import cuda
-        from ..backends.cuda import check_cuda_error
 
         # Pixel-level copy of old architecture logic (line 688-706 from cuda_storage.py)
         if hasattr(value, 'shape') and hasattr(value, 'ptr'):  # CUDAStorage check
@@ -716,8 +711,7 @@ class CUDAIndexingOps:
         CUDAIndexingOps._count_mask_kernel[grid](mflat, counter, N, BLOCK_SIZE=BLOCK)
 
         # Read back K and validate
-        import numpy as _np
-        k_host = _np.empty(1, dtype=_np.int32)
+        k_host = np.empty(1, dtype=np.int32)
         cuda.cuMemcpyDtoH(k_host, counter.ptr, 4)
         k = int(k_host[0])
         if val_flat.size != k:
@@ -862,8 +856,7 @@ class CUDAIndexingOps:
         CUDAIndexingOps._compact_mask_atomic_i32[grid](flat, idx_buf_i32, counter, N, BLOCK=BLOCK, num_warps=4)
 
         # Read back counter (4 bytes)
-        import numpy as _np
-        k_host = _np.empty(1, dtype=_np.int32)
+        k_host = np.empty(1, dtype=np.int32)
         cuda.cuMemcpyDtoH(k_host, counter.ptr, 4)
         k = int(k_host[0])
 
@@ -1013,8 +1006,7 @@ class CUDAIndexingOps:
         )
 
         # Read back the count
-        import numpy as _np
-        k_host = _np.empty(1, dtype=_np.int32)
+        k_host = np.empty(1, dtype=np.int32)
         cuda.cuMemcpyDtoH(k_host, counter.ptr, 4)
         k = int(k_host[0])
 

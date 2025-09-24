@@ -9,6 +9,8 @@ import torch
 import numpy as np
 from typing import Union, Tuple, Optional, Any
 from .base import Storage
+from genesis.dtypes import float32, float16, float64, int32, int64, int16, int8, uint8, bool as genesis_bool, bfloat16
+
 
 
 class CPUStorage(torch.Tensor):
@@ -37,8 +39,15 @@ class CPUStorage(torch.Tensor):
             tensor = torch.tensor(data)
             return tensor.as_subclass(cls)
     
-    def fill(self, value):
-        """Fill storage with a constant value."""
+    def fill(self, value: Union[int, float]) -> 'CPUStorage':
+        """Fill storage with a constant value.
+
+        Args:
+            value: Value to fill with
+
+        Returns:
+            Self for chaining
+        """
         self.fill_(value)
         return self
     
@@ -54,12 +63,20 @@ class CPUStorage(torch.Tensor):
         """Convert to numpy array (PyTorch-compatible method)."""
         return self.to_numpy()
     
-    def clone(self):
-        """Create a deep copy of the storage."""
+    def clone(self) -> 'CPUStorage':
+        """Create a deep copy of the storage.
+
+        Returns:
+            Deep copy of this storage
+        """
         return super().clone().as_subclass(CPUStorage)
     
-    def contiguous(self):
-        """Return contiguous version of storage."""
+    def contiguous(self) -> 'CPUStorage':
+        """Return contiguous version of storage.
+
+        Returns:
+            Contiguous version of this storage
+        """
         if self.is_contiguous():
             return self
         return super().contiguous().as_subclass(CPUStorage)
@@ -76,7 +93,6 @@ class CPUStorage(torch.Tensor):
     @property
     def dtype(self):
         """Return Genesis DType for this storage."""
-        from genesis.dtypes import float32, float16, float64, int32, int64, int16, int8, uint8, bool as genesis_bool, bfloat16
         
         torch_dtype = super().dtype
         dtype_map = {
