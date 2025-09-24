@@ -11,7 +11,7 @@ import traceback
 import signal
 import sys
 import os
-from tests.test_logger import test_logger, log_test_start, log_test_end, log_hang_detection, log_operation
+# Test logger functionality removed - not needed
 
 @pytest.fixture(scope="session", autouse=True)
 def cuda_warmup(pytestconfig):
@@ -62,8 +62,9 @@ def _timeout_handler(signum, frame):
     """Signal handler for test timeouts."""
     if _current_test_name:
         stack = traceback.format_stack(frame)
-        log_hang_detection(_current_test_name, 300.0, ''.join(stack))
-    test_logger.error("🚨 Test execution timed out - sending SIGTERM")
+        print(f"Test {_current_test_name} timed out after 300s")
+        print(''.join(stack))
+    print("🚨 Test execution timed out - sending SIGTERM")
     os._exit(1)  # Force exit
 
 # Simplified watchdog - only enable if explicitly requested
@@ -95,6 +96,6 @@ def pytest_runtest_makereport(item, call):
     rep = outcome.get_result()
     setattr(item, f"rep_{rep.when}", rep)
     
-    # Only log failures
+    # Only print failures
     if rep.when == "call" and rep.failed:
-        test_logger.error(f"❌ {item.nodeid} FAILED: {rep.longrepr}")
+        print(f"❌ {item.nodeid} FAILED")

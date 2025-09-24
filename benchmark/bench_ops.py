@@ -620,7 +620,7 @@ class BenchmarkTimer:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()  # 清理GPU缓存确保一致环境
         
-        # 充分warmup: 增加迭代次数并确保编译完成
+        # 充分warmup确保编译完成
         for i in range(self.warmup_iters):
             try:
                 _ = fn(*args, **kwargs)
@@ -697,7 +697,7 @@ class BenchmarkTimer:
         median_time = np.median(filtered_times)
         mean_time = np.mean(filtered_times)
         std_time = np.std(filtered_times)
-        
+
         # Calculate reliability score based on coefficient of variation and sample size
         cv = std_time / mean_time if mean_time > 0 else float("inf")
         reliability_score = max(0, 1.0 - min(cv, 1.0)) * min(1.0, len(filtered_times) / 10.0)

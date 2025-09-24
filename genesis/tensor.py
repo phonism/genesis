@@ -6,9 +6,10 @@ import numpy as np
 from typing import List, Optional, Tuple, Union
 from functools import reduce
 import operator
-from genesis.dtypes import DType, default_dtype, float32
+from genesis.dtypes import DType, default_dtype, float32, get_dtype
 from genesis.device import device as make_device, cpu, Device
 from genesis import init
+from genesis.storage import Storage
 
 class Tensor:
     """
@@ -562,10 +563,15 @@ class Tensor:
             def __repr__(self):
                 return repr(self._stride_tuple)
 
-        return StrideAccessor(self._stride)
+        # Always get stride from backend to ensure consistency
+        # This eliminates stride synchronization issues in view operations
+        backend_strides = getattr(self.storage._backend, 'strides', self._stride)
+        return StrideAccessor(backend_strides)
 
     def __repr__(self):
-        return f"Tensor(shape={self.shape}, dtype={self.storage.dtype}, device={self.device}, stride={self._stride}, offset={self.offset})"
+        # Use actual stride from backend for accurate representation
+        actual_stride = getattr(self.storage._backend, 'strides', self._stride)
+        return f"Tensor(shape={self.shape}, dtype={self.storage.dtype}, device={self.device}, stride={actual_stride}, offset={self.offset})"
 
 def tensor(data, dtype: Optional[DType] = None, device = None, requires_grad: bool = False) -> Tensor:
     """
@@ -581,13 +587,11 @@ def tensor(data, dtype: Optional[DType] = None, device = None, requires_grad: bo
     t.requires_grad = requires_grad
     return t
 
-def make_tensor(data, dtype: Optional[DType] = None, device=None, shape: Optional[Tuple[int, ...]] = None) -> Tensor:
+def make_tensor(data, dtype = None, device=None, shape: Optional[Tuple[int, ...]] = None) -> Tensor:
     """Create tensor from data - PyTorch internal style make_tensor"""
-    from genesis.storage import Storage
-    
-    # Set defaults
-    if dtype is None:
-        dtype = default_dtype
+    # Handle dtype - support both string and DType object
+    dtype = get_dtype(dtype)
+
     if device is None:
         device = cpu()
     else:
