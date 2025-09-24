@@ -92,7 +92,12 @@ class CPUStorage(torch.Tensor):
             torch.bfloat16: bfloat16
         }
         return dtype_map.get(torch_dtype, float32)
-    
+
+    @property
+    def strides(self):
+        """Return strides as tuple for compatibility with CUDAStorage."""
+        return tuple(self.stride())
+
     @classmethod
     def from_numpy(cls, array: np.ndarray, dtype=None):
         """Create CPUStorage from numpy array.

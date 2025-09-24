@@ -730,42 +730,58 @@ class CUDAStorage(Storage):
     
     def fill_(self, value):
         """Fill tensor with a constant value (in-place) using GPU kernel"""
-        if not self.is_contiguous():
-            # For non-contiguous tensors, make contiguous first
-            contig = self.contiguous()
-            self.data = contig.data
-            self.strides = contig.strides
+        if self.is_contiguous():
+            # Fast path for contiguous tensors
+            n_elements = self.size
+            grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+            _fill_kernel[grid](
+                self, float(value), n_elements, BLOCK_SIZE=1024
+            )
+        else:
+            # Smart strided path - no contiguous() needed!
+            n_elements = self.size
+            ndim = len(self.shape)
 
-        n_elements = self.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+            if ndim <= 4:
+                # Use optimized strided kernel for common cases
+                grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK"]), )
 
-        _fill_kernel[grid](
-            self, float(value), n_elements, BLOCK_SIZE=1024
-        )
+                # Pad shapes and strides to 4D
+                shape_padded = list(self.shape) + [1] * (4 - ndim)
+                strides_padded = list(self.strides) + [1] * (4 - ndim)
+
+                _fill_strided_kernel[grid](
+                    self, float(value), n_elements,
+                    shape_padded[0], strides_padded[0],
+                    shape_padded[1], strides_padded[1],
+                    shape_padded[2], strides_padded[2],
+                    shape_padded[3], strides_padded[3],
+                    ndim, BLOCK=1024
+                )
+            else:
+                # Use general strided kernel for high-dimensional tensors
+                grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK"]), )
+
+                # Create GPU arrays for sizes and strides
+                sizes_gpu = from_numpy(np.array(self.shape, dtype=np.int64))
+                strides_gpu = from_numpy(np.array(self.strides, dtype=np.int64))
+
+                _fill_strided_kernel_general[grid](
+                    self, sizes_gpu, strides_gpu,
+                    float(value), n_elements, ndim, BLOCK=1024
+                )
         return self
 
     def fill(self, value):
         """Fill tensor with a constant value (in-place) using GPU kernel"""
-        if not self.is_contiguous():
-            # For non-contiguous tensors, make contiguous first
-            contig = self.contiguous()
-            self.data = contig.data
-            self.strides = contig.strides
-
-        # Optimization: use fast cuMemsetD8 for zeros
-        if value == 0.0:
+        # Special optimization for zeros on contiguous tensors
+        if value == 0.0 and self.is_contiguous():
             result = cuda.cuMemsetD8(self.ptr, 0, self.nbytes)
             check_cuda_error(result)
             return self
 
-        # Default path for non-zero values
-        n_elements = self.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-
-        _fill_kernel[grid](
-            self, float(value), n_elements, BLOCK_SIZE=1024
-        )
-        return self
+        # For all other cases, use the optimized fill_ method
+        return self.fill_(value)
     
     
     def _preprocess_index_key(self, key):

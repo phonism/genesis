@@ -381,7 +381,7 @@ def install_deep_profilers(model: QwenModel):
 
 def build_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--batch', type=int, default=4)
+    p.add_argument('--batch', type=int, default=2)
     p.add_argument('--seqlen', type=int, default=1024)
     p.add_argument('--layers', type=int, default=2)
     p.add_argument('--hidden', type=int, default=896)
@@ -395,8 +395,10 @@ def build_args():
     p.add_argument('--dtype', type=str, default='float16', choices=['float16','float32','bfloat16'])
     p.add_argument('--export-trace', type=str, default='')
     p.add_argument('--show-memory', action='store_true')
-    p.add_argument('--profile-backward', action='store_true')
-    p.add_argument('--deep', action='store_true', help='Enable per-module deep profiling (Linear/Embedding/SDPA)')
+    p.add_argument('--profile-backward', default=True, type=lambda x: x.lower() in ['true', '1', 'yes'],
+                   help='Profile backward pass (default: True)')
+    p.add_argument('--deep', default=True, type=lambda x: x.lower() in ['true', '1', 'yes'],
+                   help='Enable per-module deep profiling (Linear/Embedding/SDPA) (default: True)')
     return p.parse_args()
 
 
