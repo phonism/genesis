@@ -3,6 +3,8 @@
 
 numpy>=1.20.0
 torch>=2.0.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.23.0
 
 # GPU computation (Linux/Windows only)
 triton>=2.0.0; platform_system != "Darwin"
