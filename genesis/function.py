@@ -7,6 +7,38 @@ implementing automatic differentiation operations.
 import genesis
 from genesis.tensor import Tensor
 from typing import List, Optional, NamedTuple, Tuple, Union, Any
+import weakref
+
+
+class AccumulateGrad:
+    """Special function node for leaf tensors.
+
+    Leaf tensors (requires_grad=True, creator=None) need a grad_fn
+    to participate in the backward graph. AccumulateGrad holds a
+    weak reference to the leaf tensor and accumulates gradients to it.
+    """
+
+    def __init__(self, tensor):
+        """Initialize AccumulateGrad for a leaf tensor.
+
+        Args:
+            tensor: The leaf tensor to accumulate gradients for
+        """
+        self.variable = weakref.ref(tensor)
+        self.next_functions = []  # Leaf nodes have no inputs
+
+    def apply_grad(self, grad):
+        """Accumulate gradient to the leaf tensor.
+
+        Args:
+            grad: Gradient to accumulate
+        """
+        tensor = self.variable()
+        if tensor is not None:  # If tensor still exists
+            if tensor.grad is None:
+                tensor.grad = grad
+            else:
+                tensor.grad = tensor.grad + grad
 
 
 class Context:
@@ -75,14 +107,14 @@ def check_dtype(value: Any, dtype: 'genesis.DType') -> bool:
 
 class Function:
     """Base class for differentiable operations.
-    
+
     Implements the dual-number automatic differentiation paradigm where
     operations define both forward computation and backward gradient propagation.
     """
-    
+
     def __init__(self):
-        """Initialize Function with empty inputs and context."""
-        self.inputs = []
+        """Initialize Function with empty next_functions and context."""
+        self.next_functions = []  # List of (creator, output_idx) tuples
         self.ctx = Context()
 
     @staticmethod
@@ -144,13 +176,30 @@ class Function:
                 if hasattr(result, 'set_creator'):
                     result.set_creator(instance)
 
-        # Store input tensors for backward pass
-        instance.inputs = []
+        # Build next_functions graph (creator graph, not tensor graph)
+        # This allows intermediate tensors to be garbage collected
+        instance.next_functions = []
         for t in args:
-            if hasattr(t, 'requires_grad'):  # Check if it's a tensor-like object
-                instance.inputs.append(t)
-            if isinstance(t, list) and all(hasattr(item, 'requires_grad') for item in t):
+            if hasattr(t, 'requires_grad') and t.requires_grad:
+                if hasattr(t, 'creator') and t.creator is not None:
+                    # Intermediate tensor: save its creator
+                    idx = t.idx if hasattr(t, 'idx') else 0
+                    instance.next_functions.append((t.creator, idx))
+                else:
+                    # Leaf tensor: get or create AccumulateGrad node
+                    if not hasattr(t, '_grad_fn'):
+                        t._grad_fn = AccumulateGrad(t)
+                    instance.next_functions.append((t._grad_fn, 0))
+            elif isinstance(t, list):
+                # Handle list of tensors
                 for tt in t:
-                    instance.inputs.append(tt)
-        
+                    if hasattr(tt, 'requires_grad') and tt.requires_grad:
+                        if hasattr(tt, 'creator') and tt.creator is not None:
+                            idx = tt.idx if hasattr(tt, 'idx') else 0
+                            instance.next_functions.append((tt.creator, idx))
+                        else:
+                            if not hasattr(tt, '_grad_fn'):
+                                tt._grad_fn = AccumulateGrad(tt)
+                            instance.next_functions.append((tt._grad_fn, 0))
+
         return result

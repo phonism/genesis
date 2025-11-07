@@ -618,3 +618,210 @@ def reduce_max(x, axis=None, keepdims=False):
     else:
         final_shape = tuple(shape[i] for i in axes_to_keep)
         return temp_output.reshape(final_shape)
+
+# ========== MIN REDUCTION (mirroring MAX implementation) ==========
+
+@triton.jit
+def min_kernel_stage1(
+    inp_ptr,
+    mid_ptr,
+    M,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Stage 1 of two-stage min reduction."""
+    pid = tl.program_id(0)
+    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offset < M
+
+    vals = tl.load(inp_ptr + offset, mask=mask, other=float("inf"))
+    min_val = tl.min(vals)
+
+    tl.store(mid_ptr + pid, min_val)
+
+
+@triton.jit
+def min_kernel_stage2(
+    mid_ptr,
+    out_ptr,
+    mid_size,
+    BLOCK_SIZE: tl.constexpr
+):
+    """Stage 2 of two-stage min reduction."""
+    offset = tl.arange(0, BLOCK_SIZE)
+    mask = offset < mid_size
+
+    vals = tl.load(mid_ptr + offset, mask=mask, other=float("inf"))
+    min_val = tl.min(vals)
+
+    tl.store(out_ptr, min_val)
+
+
+@triton.jit
+def min_kernel_inner(
+    output_ptr,
+    input_ptr,
+    M,
+    N,
+    TILE_N: tl.constexpr,
+):
+    """Min reduction for innermost dimension."""
+    pid_m = tl.program_id(0)
+
+    # Initialize with +inf
+    min_val = tl.full([], float("inf"), dtype=tl.float32)
+
+    # Process row in chunks
+    for start_n in range(0, N, TILE_N):
+        n_offsets = start_n + tl.arange(0, TILE_N)
+        inp_offsets = pid_m * N + n_offsets
+        mask = n_offsets < N
+
+        chunk = tl.load(input_ptr + inp_offsets, mask=mask, other=float("inf"))
+        min_val = tl.minimum(min_val, tl.min(chunk))
+
+    tl.store(output_ptr + pid_m, min_val)
+
+
+@triton.jit
+def min_kernel_atomic(
+    x_ptr,
+    output_ptr,
+    N,
+    BLOCK_SIZE: tl.constexpr
+):
+    """Atomic min reduction kernel."""
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+
+    values = tl.load(x_ptr + offsets, mask=mask, other=float("inf"))
+    block_min = tl.min(values)
+
+    tl.atomic_min(output_ptr, block_min)
+
+
+@register_cuda("min")
+def reduce_min(x, axis=None, keepdims=False):
+    """Optimized reduce min operation."""
+    shape = x.shape
+    ndim = len(shape)
+
+    # Ensure contiguous
+    if not x.is_contiguous():
+        x = x.contiguous()
+
+    # Full tensor reduction
+    if axis is None:
+        n_elements = x.size
+        output_shape = (1,) if keepdims else ()
+        output = CUDAStorage(output_shape, dtype=x.dtype)
+
+        if n_elements == 0:
+            output.fill(float('inf'))
+            return output
+
+        # Adaptive strategy
+        if n_elements <= 4096:
+            # Small tensor: single kernel
+            output.fill(float('inf'))
+            block_size = min(1024, triton.next_power_of_2(n_elements))
+            grid = (triton.cdiv(n_elements, block_size),)
+            min_kernel_atomic[grid](x, output, n_elements, block_size)
+        else:
+            # Large tensor: two-stage
+            block_size = triton.next_power_of_2(min(1024, max(32, int(math.sqrt(n_elements)))))
+            mid_size = triton.cdiv(n_elements, block_size)
+
+            # Stage 1
+            mid = CUDAStorage((mid_size,), dtype=x.dtype)
+            grid1 = (mid_size,)
+            min_kernel_stage1[grid1](x, mid, n_elements, block_size)
+
+            # Stage 2
+            block_mid = triton.next_power_of_2(min(2048, mid_size))
+            grid2 = (1,)
+            min_kernel_stage2[grid2](mid, output, mid_size, block_mid)
+
+        return output
+
+    # Normalize axis
+    if isinstance(axis, int):
+        axis = (axis,)
+    axis = tuple(ax % ndim for ax in axis)
+
+    # Single axis reduction
+    if len(axis) == 1:
+        ax = axis[0]
+
+        # Calculate output shape
+        output_shape = list(shape)
+        if keepdims:
+            output_shape[ax] = 1
+        else:
+            output_shape.pop(ax)
+        output_shape = tuple(output_shape)
+
+        # Innermost dimension
+        if ax == ndim - 1:
+            M = functools_reduce(operator.mul, shape[:-1], 1)
+            N = shape[-1]
+
+            output = CUDAStorage((M,), dtype=x.dtype)
+            x_flat = x.reshape((M, N))
+
+            tile_n = min(2048, triton.next_power_of_2(N)) if N > 32 else triton.next_power_of_2(N)
+
+            grid = (M,)
+            min_kernel_inner[grid](output, x_flat, M, N, tile_n)
+
+            return output.reshape(output_shape)
+
+        # For other axes, fallback to permute + inner reduction
+        else:
+            axes_to_keep = tuple(i for i in range(ndim) if i != ax)
+            new_order = axes_to_keep + (ax,)
+            x = x.permute(new_order)
+
+            M = functools_reduce(operator.mul, [shape[i] for i in axes_to_keep], 1)
+            N = shape[ax]
+
+            x_2d = x.reshape((M, N))
+            temp_output = CUDAStorage((M,), dtype=x.dtype)
+
+            tile_n = min(1024, triton.next_power_of_2(N)) if N > 32 else triton.next_power_of_2(N)
+
+            grid = (M,)
+            min_kernel_inner[grid](temp_output, x_2d, M, N, tile_n)
+
+            return temp_output.reshape(output_shape)
+
+    # Multi-axis reduction
+    axes_to_keep = tuple(i for i in range(ndim) if i not in axis)
+
+    if not axes_to_keep:
+        return reduce_min(x, axis=None, keepdims=keepdims)
+
+    # Permute and reshape
+    new_order = axes_to_keep + axis
+
+    keep_size = functools_reduce(operator.mul, [shape[i] for i in axes_to_keep], 1)
+    reduce_size = functools_reduce(operator.mul, [shape[i] for i in axis], 1)
+
+    x_2d = x.reshape((keep_size, reduce_size))
+    temp_output = CUDAStorage((keep_size,), dtype=x.dtype)
+
+    tile_n = min(1024, triton.next_power_of_2(reduce_size)) if reduce_size > 32 else triton.next_power_of_2(reduce_size)
+
+    grid = (keep_size,)
+    min_kernel_inner[grid](temp_output, x_2d, keep_size, reduce_size, tile_n)
+
+    # Reshape to final output
+    if keepdims:
+        final_shape = list(shape)
+        for i in axis:
+            final_shape[i] = 1
+        return temp_output.reshape(tuple(final_shape))
+    else:
+        final_shape = tuple(shape[i] for i in axes_to_keep)
+        return temp_output.reshape(final_shape)

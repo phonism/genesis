@@ -141,10 +141,18 @@ def randb(*shape, p=0.5, device=None, dtype="bool", requires_grad=False):
     return bool_tensor
 
 def one_hot(n, i, device=None, dtype=genesis.float32, requires_grad=False):
-    """ Generate one-hot encoding Tensor """
+    """Generate one-hot encoding Tensor."""
     device = genesis.device('cpu') if device is None else device
-    # i should be an NDArray, pass it directly to device.one_hot
-    return genesis.Tensor(device.one_hot(n, i, dtype=genesis.float32), device=device, requires_grad=requires_grad)
+    # Convert i to Tensor if needed
+    if not isinstance(i, genesis.Tensor):
+        i = genesis.Tensor(Storage.from_numpy(i, device), shape=tuple(i.shape if hasattr(i, 'shape') else [len(i)]))
+    # Normalize dtype: get_dtype handles DType/str/numpy.dtype/torch.dtype
+    dtype_obj = get_dtype(dtype)
+    # Dispatcher expects positional args: (indices_tensor, n_classes, dtype_string)
+    # Dispatcher returns Tensor directly
+    result_tensor = OperationDispatcher.dispatch("one_hot", i, n, dtype_obj.name)
+    result_tensor.requires_grad = requires_grad
+    return result_tensor
 
 def xavier_uniform(fan_in, fan_out, gain=1.0, **kwargs):
     a = gain * math.sqrt(6 / (fan_in + fan_out))

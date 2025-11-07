@@ -397,17 +397,18 @@ def prod(x):
     """
     return reduce(operator.mul, x, 1)
 
-def one_hot(n_classes, indices, dtype="float32"):
+@register_cpu("one_hot")
+def one_hot(indices, n_classes, dtype="float32"):
     """
     Create one-hot encoding using PyTorch.
-    
+
     Args:
+        indices: Indices tensor (CPUStorage)
         n_classes: Number of classes
-        indices: Indices tensor (flat)
-        dtype: Data type
-        
+        dtype: Data type string
+
     Returns:
-        torch.Tensor: One-hot encoded tensor
+        CPUStorage: One-hot encoded tensor
     """
     torch_dtype = torch.float32
     if dtype == "float16":
@@ -418,15 +419,13 @@ def one_hot(n_classes, indices, dtype="float32"):
         torch_dtype = torch.int32
     elif dtype == "int64":
         torch_dtype = torch.int64
-    
-    # Convert indices to long for one_hot
-    if not isinstance(indices, torch.Tensor):
-        indices = torch.tensor(indices)
+
+    # indices is already a torch tensor from CPUStorage
     indices_long = indices.long()
-    
+
     # Create one-hot encoding
     one_hot_result = torch.nn.functional.one_hot(indices_long, num_classes=n_classes)
-    return one_hot_result.to(torch_dtype)
+    return CPUStorage(one_hot_result.to(torch_dtype))
 
 @register_cpu("arange")
 def arange(start, end, step, dtype="float32"):
@@ -516,6 +515,36 @@ def triu(x, k=0):
     """Upper triangular part of matrix."""
     tensor = torch.triu(x, diagonal=k)
     return CPUStorage(tensor)
+
+
+@register_cpu("tril")
+def tril(x, k=0):
+    """Lower triangular part of matrix.
+
+    Args:
+        x: Input tensor
+        k: Diagonal offset (0 for main diagonal, positive for above, negative for below)
+
+    Returns:
+        Tensor with elements above the k-th diagonal zeroed
+    """
+    tensor = torch.tril(x, diagonal=k)
+    return CPUStorage(tensor)
+
+
+@register_cpu("gelu")
+def gelu(x):
+    """Apply GELU (Gaussian Error Linear Unit) activation function.
+
+    Args:
+        x: Input tensor
+
+    Returns:
+        Tensor with GELU activation applied
+    """
+    tensor = torch.nn.functional.gelu(x)
+    return CPUStorage(tensor)
+
 
 @register_cpu("scatter")
 def scatter(x, dim, index, src):

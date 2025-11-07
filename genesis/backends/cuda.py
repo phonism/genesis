@@ -27,10 +27,26 @@ except ImportError:
     torch = None
     TORCH_AVAILABLE = False
 
-from genesis.backends.cuda_memory import (
-    allocate_memory, free_memory, memory_stats, get_memory_manager,
-    increase_ref_count, decrease_ref_count, trigger_gc
-)
+import os
+_USE_TORCH_ALLOC = os.environ.get('GENESIS_USE_TORCH_ALLOCATOR', '0') == '1'
+
+if _USE_TORCH_ALLOC:
+    print("[Genesis] Using PyTorch allocator for CUDA memory")
+    from genesis.backends.torch_allocator import get_torch_allocator
+    _alloc = get_torch_allocator()
+    allocate_memory = lambda size, stream=None: _alloc.allocate_memory(size)
+    free_memory = _alloc.free_memory
+    decrease_ref_count = _alloc.decrease_ref_count
+    memory_stats = lambda: {}
+    get_memory_manager = lambda: None
+    increase_ref_count = lambda ptr: None
+    trigger_gc = lambda: None
+else:
+    # Use lightweight caching allocator optimized for stable training
+    from genesis.backends.cuda_memory import (
+        allocate_memory, free_memory, memory_stats, get_memory_manager,
+        increase_ref_count, decrease_ref_count, trigger_gc
+    )
 from genesis.backends.base import Storage
 from genesis.dtypes import get_dtype
 import genesis
@@ -92,7 +108,7 @@ def _allocate_memory_stream_safe(nbytes, stream):
 
 def _free_memory(ptr, nbytes):
     """Free GPU memory using optimized manager"""
-    free_memory(ptr, _ensure_stream())
+    free_memory(ptr, nbytes, _ensure_stream())
 
 # ============= User API (PyTorch-like) =============
 # ---- helpers ----
@@ -261,7 +277,9 @@ class CUDAStorage(Storage):
                         free_memory(self.ptr, nbytes, stream)
 
                     self.ptr = None
-            except:
+            except Exception:
+                # Silently ignore errors during shutdown
+                # (logging during __del__ is unsafe when Python is shutting down)
                 pass
 
     @classmethod
@@ -420,7 +438,7 @@ class CUDAStorage(Storage):
             new_shape = list(args)
         neg_idx = None
         total_size = 1
-        
+
         for i, dim in enumerate(new_shape):
             if dim == -1:
                 if neg_idx is not None:
@@ -428,16 +446,16 @@ class CUDAStorage(Storage):
                 neg_idx = i
             else:
                 total_size *= dim
-        
+
         if neg_idx is not None:
             new_shape[neg_idx] = self.size // total_size
-            
+
         new_shape = tuple(new_shape)
-        
+
         # Verify size matches
         if reduce(operator.mul, new_shape, 1) != self.size:
             raise ValueError(f"Cannot reshape array of size {self.size} into shape {new_shape}")
-        
+
         # If contiguous memory, can create new view directly
         if self.is_contiguous():
             return CUDAStorage(new_shape, self.dtype_obj, self.ptr, None, base=self)

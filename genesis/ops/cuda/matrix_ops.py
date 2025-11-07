@@ -150,6 +150,15 @@ def bmm_kernel(
     M,
     N,
     K,
+    stride_ab,
+    stride_am,
+    stride_ak,
+    stride_bb,
+    stride_bk,
+    stride_bn,
+    stride_ob,
+    stride_om,
+    stride_on,
     TILE_M: tl.constexpr,
     TILE_N: tl.constexpr,
     TILE_K: tl.constexpr,
@@ -158,12 +167,12 @@ def bmm_kernel(
     DIVISIBLE_N: tl.constexpr,
     DIVISIBLE_K: tl.constexpr,
 ):
-    """Batch matrix multiplication kernel optimized for transformers."""
+    """Batch matrix multiplication kernel with strided tensor support."""
     # Get batch index
     pid_b = tl.program_id(2)
-    A += pid_b * M * K
-    B += pid_b * K * N
-    O += pid_b * M * N
+    A += pid_b * stride_ab
+    B += pid_b * stride_bb
+    O += pid_b * stride_ob
 
     pidx = tl.program_id(0)
     pidy = tl.program_id(1)
@@ -194,9 +203,9 @@ def bmm_kernel(
     if not DIVISIBLE_N:
         mask_n = offs_n < N
 
-    a_ptrs = A + offs_m[:, None] * K + offs_k[None, :]
-    b_ptrs = B + offs_k[:, None] * N + offs_n[None, :]
-    o_ptrs = O + offs_m[:, None] * N + offs_n[None, :]
+    a_ptrs = A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+    b_ptrs = B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+    o_ptrs = O + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
 
     num_iters = tl.cdiv(K, TILE_K)
     o = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
@@ -233,8 +242,8 @@ def bmm_kernel(
             b = tl.load(b_ptrs, mask=mask_b, other=0.0)
 
         offs_k += TILE_K
-        a_ptrs += TILE_K
-        b_ptrs += TILE_K * N
+        a_ptrs += TILE_K * stride_ak
+        b_ptrs += TILE_K * stride_bk
 
         o += tl.dot(a, b, allow_tf32=False)
 
@@ -287,15 +296,14 @@ def get_matmul_config(M, N, K):
 @register_cuda("matmul")
 def matmul(a, b, activation=""):
     """
-    Optimized matrix multiplication operation.
+    Optimized matrix multiplication operation with strided tensor support.
+
+    Supports non-contiguous (strided) tensors to avoid unnecessary copies.
     """
     assert a.shape[-1] == b.shape[-2], "Incompatible dimensions"
 
-    # Always ensure contiguous for safety
-    if not a.is_contiguous():
-        a = a.contiguous()
-    if not b.is_contiguous():
-        b = b.contiguous()
+    # Removed forced contiguous - kernels handle strides directly
+    # This avoids 11GB of wasted copies in backward pass!
 
     if len(a.shape) == 2 and len(b.shape) == 2:
         M, K = a.shape
@@ -399,15 +407,13 @@ def matmul(a, b, activation=""):
             batch_size,
         )
 
-        # Ensure contiguous for batch matmul
-        if not aa.is_contiguous():
-            aa = aa.contiguous()
-        if not bb.is_contiguous():
-            bb = bb.contiguous()
-
+        # Now supports strided tensors! No need for contiguous copies
         bmm_kernel[grid](
             aa, bb, c,
             M, N, K,
+            aa.stride(0), aa.stride(1), aa.stride(2),
+            bb.stride(0), bb.stride(1), bb.stride(2),
+            c.stride(0), c.stride(1), c.stride(2),
             TILE_M=config['TILE_M'],
             TILE_N=config['TILE_N'],
             TILE_K=config['TILE_K'],

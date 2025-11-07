@@ -2222,8 +2222,94 @@ def test_isinf_isnan_isfinite(device):
     
     finite_result = genesis.isfinite(mat)
     expected_finite = genesis.tensor([[True, False], [False, True]], device=device)
-    np.testing.assert_allclose(finite_result.float().numpy(), expected_finite.float().numpy(), 
+    np.testing.assert_allclose(finite_result.float().numpy(), expected_finite.float().numpy(),
                               atol=atol, rtol=rtol, err_msg="2D finite detection failed")
+
+
+def test_gelu_forward():
+    """Test GELU forward pass against PyTorch (CUDA only)."""
+    device = 'cuda'
+    # Test on various input ranges
+    test_inputs = [
+        [[-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0]],
+        np.random.randn(10, 20).tolist(),
+        np.random.randn(5, 10, 15).tolist(),
+    ]
+
+    for input_data in test_inputs:
+        # Genesis
+        x_genesis = genesis.tensor(input_data, device=device, dtype=genesis.float32)
+        y_genesis = F.gelu(x_genesis)
+
+        # PyTorch
+        x_torch = torch.tensor(input_data, device=device, dtype=torch.float32)
+        y_torch = torch.nn.functional.gelu(x_torch)
+
+        # Compare (relaxed tolerance due to tanh approximation differences)
+        np.testing.assert_allclose(
+            y_genesis.numpy(),
+            y_torch.cpu().numpy(),
+            rtol=0.1,
+            atol=1e-3,
+            err_msg=f"GELU forward pass mismatch for input shape {x_genesis.shape}"
+        )
+
+
+def test_gelu_backward():
+    """Test GELU backward pass against PyTorch (CUDA only)."""
+    device = 'cuda'
+    # Test on various input ranges
+    test_inputs = [
+        [[1.0, 2.0, 3.0, -1.0, -2.0, -3.0]],
+        np.random.randn(10, 20).tolist(),
+        np.random.randn(3, 5, 7).tolist(),
+    ]
+
+    for input_data in test_inputs:
+        # Genesis
+        x_genesis = genesis.tensor(input_data, device=device, dtype=genesis.float32, requires_grad=True)
+        y_genesis = F.gelu(x_genesis)
+        loss_genesis = y_genesis.sum()
+        loss_genesis.backward()
+        grad_genesis = x_genesis.grad
+
+        # PyTorch
+        x_torch = torch.tensor(input_data, device=device, dtype=torch.float32, requires_grad=True)
+        y_torch = torch.nn.functional.gelu(x_torch)
+        loss_torch = y_torch.sum()
+        loss_torch.backward()
+        grad_torch = x_torch.grad
+
+        # Compare (slightly relaxed tolerance due to tanh approximation)
+        np.testing.assert_allclose(
+            grad_genesis.numpy(),
+            grad_torch.cpu().numpy(),
+            rtol=1e-2,
+            atol=1e-3,
+            err_msg=f"GELU backward pass mismatch for input shape {x_genesis.shape}"
+        )
+
+
+def test_gelu_edge_cases():
+    """Test GELU on edge cases (CUDA only)."""
+    device = 'cuda'
+    # Test with zeros
+    x = genesis.tensor([[0.0, 0.0, 0.0]], device=device)
+    y = F.gelu(x)
+    expected = torch.tensor([[0.0, 0.0, 0.0]], device=device)
+    np.testing.assert_allclose(y.numpy(), expected.cpu().numpy(), atol=1e-6)
+
+    # Test with large positive values
+    x = genesis.tensor([[10.0, 20.0, 30.0]], device=device)
+    y = F.gelu(x)
+    # GELU(x) ≈ x for large positive x
+    np.testing.assert_allclose(y.numpy(), x.numpy(), rtol=1e-3, atol=1e-3)
+
+    # Test with large negative values
+    x = genesis.tensor([[-10.0, -20.0, -30.0]], device=device)
+    y = F.gelu(x)
+    # GELU(x) ≈ 0 for large negative x
+    np.testing.assert_allclose(y.numpy(), np.zeros((1, 3)), atol=1e-6)
 
 
 if __name__ == "__main__":

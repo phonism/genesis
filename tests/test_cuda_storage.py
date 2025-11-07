@@ -14,6 +14,7 @@ from genesis.backends.cuda import (
     CUDAStorage, empty, zeros, ones, from_numpy,
     check_cuda_error
 )
+from genesis.backends.cuda_memory import get_memory_manager, memory_stats
 
 
 def test_basic_creation():
@@ -245,25 +246,23 @@ def test_cuda_memory_manager():
         - Error handling for invalid operations
     """
     try:
-        from genesis.backends.cuda_memory import get_memory_manager
-        
         # Test initialization - this should work without cuCtxCreate error
         manager = get_memory_manager()
-        
+
         # Test basic allocation - use same stream for alloc/free
         test_stream = manager.default_stream
-        ptr = manager.allocate(1024, stream=test_stream)  # 1KB
+        ptr = manager.allocate_memory(1024, stream=test_stream)  # 1KB
         assert ptr != 0, "Should return valid pointer"
-        
-        # Test deallocation - use same stream
-        manager.free(ptr, stream=test_stream)
-        
+
+        # Test deallocation - use same stream and provide size
+        manager.free_memory(ptr, 1024, stream=test_stream)
+
         # Test stats
-        stats = manager.get_stats()
-        
+        stats = memory_stats()
+
         # Test larger allocation - use same stream
-        large_ptr = manager.allocate(1024 * 1024, stream=test_stream)  # 1MB
-        manager.free(large_ptr, stream=test_stream)
+        large_ptr = manager.allocate_memory(1024 * 1024, stream=test_stream)  # 1MB
+        manager.free_memory(large_ptr, 1024 * 1024, stream=test_stream)
     except Exception as e:
         import traceback
         traceback.print_exc()

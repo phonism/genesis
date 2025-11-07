@@ -15,6 +15,7 @@ from .strided_ops import (
     COMPARE_GT, COMPARE_EQ, COMPARE_GE, COMPARE_LE,
     SPECIAL_CLAMP, SPECIAL_MAXIMUM, SPECIAL_SIGN
 )
+from .shape_ops import broadcast_to
 
 
 # =============================================================================
@@ -100,6 +101,60 @@ def add_scalar_inplace_kernel(x_ptr, scalar, n_elements, BLOCK_SIZE: tl.constexp
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
     result = x + scalar
+    tl.store(x_ptr + offsets, result, mask=mask)  # Store back to x_ptr
+
+
+@triton.jit
+def sub_inplace_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    In-place sub kernel: x -= y (modifies x directly)
+    """
+    pid = tl.program_id(0)
+    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offs < n_elements
+    x = tl.load(x_ptr + offs, mask=mask)
+    y = tl.load(y_ptr + offs, mask=mask)
+    result = x - y
+    tl.store(x_ptr + offs, result, mask=mask)  # Store back to x_ptr
+
+
+@triton.jit
+def sub_scalar_inplace_kernel(x_ptr, scalar, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    In-place sub scalar kernel: x -= scalar
+    """
+    pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = x - scalar
+    tl.store(x_ptr + offsets, result, mask=mask)  # Store back to x_ptr
+
+
+@triton.jit
+def mul_inplace_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    In-place mul kernel: x *= y (modifies x directly)
+    """
+    pid = tl.program_id(0)
+    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offs < n_elements
+    x = tl.load(x_ptr + offs, mask=mask)
+    y = tl.load(y_ptr + offs, mask=mask)
+    result = x * y
+    tl.store(x_ptr + offs, result, mask=mask)  # Store back to x_ptr
+
+
+@triton.jit
+def mul_scalar_inplace_kernel(x_ptr, scalar, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    In-place mul scalar kernel: x *= scalar
+    """
+    pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = x * scalar
     tl.store(x_ptr + offsets, result, mask=mask)  # Store back to x_ptr
 
 
@@ -377,7 +432,7 @@ def arange_kernel(output_ptr, start, step, n_elements, BLOCK_SIZE: tl.constexpr)
     tl.store(output_ptr + offsets, values, mask=mask)
 
 
-@triton.jit  
+@triton.jit
 def one_hot_kernel(indices_ptr, output_ptr, n_classes, n_indices, 
                    BLOCK_SIZE: tl.constexpr):
     """
@@ -462,7 +517,7 @@ def add(x, y):
                 x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
                 y, y_shape[0], y_strides[0], y_shape[1], y_strides[1], y_shape[2], y_strides[2], y_shape[3], y_strides[3],
                 output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-                n_elements, ndim, 0,  # op_type=0 for add
+                n_elements, ndim, op_type=0,  # for add
                 BLOCK_SIZE=1024
             )
         else:
@@ -470,7 +525,7 @@ def add(x, y):
             x_cont = x.contiguous() if not x.is_contiguous() else x
             y_cont = y.contiguous() if not y.is_contiguous() else y
 
-            grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+            grid = (triton.cdiv(n_elements, 1024),)
             add_kernel[grid](x_cont, y_cont, output, n_elements, BLOCK_SIZE=1024)
         
         return output
@@ -493,7 +548,7 @@ def add(x, y):
                 x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
                 y,  # scalar value
                 output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-                n_elements, ndim, 0,  # op_type=0 for add
+                n_elements, ndim, op_type=0,  # for add
                 BLOCK_SIZE=1024
             )
         else:
@@ -552,6 +607,98 @@ def add_inplace(x, y):
     return x
 
 
+@register_cuda("sub_inplace")
+def sub_inplace(x, y):
+    """
+    In-place subtraction: x -= y
+    Modifies x directly without creating new tensor.
+    """
+    if isinstance(y, CUDAStorage):
+        # Compute broadcasted shape
+        broadcast_shape = broadcast_shapes(x.shape, y.shape)
+
+        # For in-place operation, x must be able to accommodate the result
+        if x.shape != broadcast_shape:
+            raise RuntimeError(f"Cannot broadcast in-place: x.shape={x.shape} vs result.shape={broadcast_shape}")
+
+        # Broadcast y if needed
+        if y.shape != broadcast_shape:
+            y = y.broadcast_to(broadcast_shape)
+
+        # Ensure contiguous for efficiency
+        if not x.is_contiguous():
+            raise RuntimeError("In-place operations require contiguous tensors")
+        if not y.is_contiguous():
+            y = y.contiguous()
+
+        n_elements = x.size
+
+        # Use in-place sub kernel (modifies x.storage directly)
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        sub_inplace_kernel[grid](x, y, n_elements, BLOCK_SIZE=1024)
+
+        return x  # Return original tensor object
+
+    else:
+        # Scalar in-place subtraction
+        if not x.is_contiguous():
+            raise RuntimeError("In-place operations require contiguous tensors")
+
+        n_elements = x.size
+
+        # Use scalar in-place sub kernel
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        sub_scalar_inplace_kernel[grid](x, y, n_elements, BLOCK_SIZE=1024)
+
+    return x
+
+
+@register_cuda("mul_inplace")
+def mul_inplace(x, y):
+    """
+    In-place multiplication: x *= y
+    Modifies x directly without creating new tensor.
+    """
+    if isinstance(y, CUDAStorage):
+        # Compute broadcasted shape
+        broadcast_shape = broadcast_shapes(x.shape, y.shape)
+
+        # For in-place operation, x must be able to accommodate the result
+        if x.shape != broadcast_shape:
+            raise RuntimeError(f"Cannot broadcast in-place: x.shape={x.shape} vs result.shape={broadcast_shape}")
+
+        # Broadcast y if needed
+        if y.shape != broadcast_shape:
+            y = y.broadcast_to(broadcast_shape)
+
+        # Ensure contiguous for efficiency
+        if not x.is_contiguous():
+            raise RuntimeError("In-place operations require contiguous tensors")
+        if not y.is_contiguous():
+            y = y.contiguous()
+
+        n_elements = x.size
+
+        # Use in-place mul kernel (modifies x.storage directly)
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        mul_inplace_kernel[grid](x, y, n_elements, BLOCK_SIZE=1024)
+
+        return x  # Return original tensor object
+
+    else:
+        # Scalar in-place multiplication
+        if not x.is_contiguous():
+            raise RuntimeError("In-place operations require contiguous tensors")
+
+        n_elements = x.size
+
+        # Use scalar in-place mul kernel
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        mul_scalar_inplace_kernel[grid](x, y, n_elements, BLOCK_SIZE=1024)
+
+    return x
+
+
 @register_cuda("sub")
 def sub(x, y):
     """
@@ -589,7 +736,7 @@ def sub(x, y):
                 x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
                 y, y_shape[0], y_strides[0], y_shape[1], y_strides[1], y_shape[2], y_strides[2], y_shape[3], y_strides[3],
                 output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-                n_elements, ndim, 1,  # op_type=1 for sub
+                n_elements, ndim, op_type=1,  # for sub
                 BLOCK_SIZE=1024
             )
         else:
@@ -678,7 +825,7 @@ def mul(x, y):
                 x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
                 y, y_shape[0], y_strides[0], y_shape[1], y_strides[1], y_shape[2], y_strides[2], y_shape[3], y_strides[3],
                 output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-                n_elements, ndim, 2,  # op_type=2 for mul
+                n_elements, ndim, op_type=2,  # for mul
                 BLOCK_SIZE=1024
             )
         else:
@@ -720,7 +867,7 @@ def mul(x, y):
                 x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
                 y,  # scalar value
                 output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-                n_elements, ndim, 2,  # op_type=2 for mul
+                n_elements, ndim, op_type=2,  # for mul
                 BLOCK_SIZE=1024
             )
         else:
@@ -771,7 +918,7 @@ def truediv(x, y):
                 x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
                 y, y_shape[0], y_strides[0], y_shape[1], y_strides[1], y_shape[2], y_strides[2], y_shape[3], y_strides[3],
                 output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-                n_elements, ndim, 3,  # op_type=3 for div
+                n_elements, ndim, op_type=3,  # for div
                 BLOCK_SIZE=1024
             )
         else:
@@ -820,7 +967,7 @@ def rsub(x, y):
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             y,
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, SCALAR_RSUB,
+            n_elements, ndim, op_type=SCALAR_RSUB,
             BLOCK_SIZE=1024
         )
     else:
@@ -857,7 +1004,7 @@ def rpower(x, y):
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             y,
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, SCALAR_RPOWER,
+            n_elements, ndim, op_type=SCALAR_RPOWER,
             BLOCK_SIZE=1024
         )
     else:
@@ -894,7 +1041,7 @@ def rtruediv(x, y):
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             y,
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, SCALAR_RDIV,
+            n_elements, ndim, op_type=SCALAR_RDIV,
             BLOCK_SIZE=1024
         )
     else:
@@ -992,7 +1139,7 @@ def log(x):
         strided_unary_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, 1,  # op_type=1 for log
+            n_elements, ndim, op_type=1,  # for log
             BLOCK_SIZE=1024
         )
     else:
@@ -1078,7 +1225,7 @@ def exp(x):
         strided_unary_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, 0,  # op_type=0 for exp
+            n_elements, ndim, op_type=0,  # for exp
             BLOCK_SIZE=1024
         )
     else:
@@ -1114,7 +1261,7 @@ def sin(x):
         strided_unary_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, 5,  # op_type=5 for sin
+            n_elements, ndim, op_type=5,  # for sin
             BLOCK_SIZE=1024
         )
     else:
@@ -1150,7 +1297,7 @@ def cos(x):
         strided_unary_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, 6,  # op_type=6 for cos
+            n_elements, ndim, op_type=6,  # for cos
             BLOCK_SIZE=1024
         )
     else:
@@ -1186,7 +1333,7 @@ def sqrt(x):
         strided_unary_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, 2,  # op_type=2 for sqrt
+            n_elements, ndim, op_type=2,  # for sqrt
             BLOCK_SIZE=1024
         )
     else:
@@ -1236,7 +1383,7 @@ def abs(x):
         strided_unary_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, 3,  # op_type=3 for abs
+            n_elements, ndim, op_type=3,  # for abs
             BLOCK_SIZE=1024
         )
     else:
@@ -1284,7 +1431,8 @@ def sign(x):
         strided_special_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, SPECIAL_SIGN, 0.0, 0.0, 0.0,  # no scalar params needed for sign
+            n_elements, ndim,
+            op_type=SPECIAL_SIGN, min_val=0.0, max_val=0.0, scalar=0.0,  # no scalar params needed for sign
             BLOCK_SIZE=1024
         )
     else:
@@ -1360,7 +1508,8 @@ def clamp(x, min_val=None, max_val=None):
         strided_special_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, SPECIAL_CLAMP, min_val, max_val, 0.0,  # scalar param not used for clamp
+            n_elements, ndim,
+            op_type=SPECIAL_CLAMP, min_val=min_val, max_val=max_val, scalar=0.0,  # scalar param not used for clamp
             BLOCK_SIZE=1024
         )
     else:
@@ -1482,7 +1631,8 @@ def maximum(x, y):
             strided_special_kernel[grid](
                 x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
                 output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-                n_elements, ndim, SPECIAL_MAXIMUM, 0.0, 0.0, y,  # y is the scalar param
+                n_elements, ndim,
+                op_type=SPECIAL_MAXIMUM, min_val=0.0, max_val=0.0, scalar=y,  # y is the scalar param
                 BLOCK_SIZE=1024
             )
         else:
@@ -1639,68 +1789,209 @@ def arange(start, end, step, dtype="float32"):
     return arange_gpu(start, end, step, dtype)
 
 
-def one_hot(n_classes, indices, dtype="float32"):
+@register_cuda("one_hot")
+def one_hot(indices, n_classes, dtype="float32"):
     """
     GPU implementation of one-hot encoding using Triton kernel.
+
+    Args:
+        indices: Indices tensor (CUDAStorage)
+        n_classes: Number of classes
+        dtype: Data type string
+
+    Returns:
+        CUDAStorage: One-hot encoded tensor
     """
     if not indices.is_contiguous():
         indices = indices.contiguous()
-    
+
     # Flatten indices for processing
     original_shape = indices.shape
     flat_indices = indices.reshape((-1,))
     n_indices = flat_indices.size
-    
+
     # Create output tensor
     output_shape = original_shape + (n_classes,)
     output = CUDAStorage(output_shape, dtype=dtype)
     output.fill(0.0)
-    
+
     # Launch kernel
     grid = lambda meta: (triton.cdiv(n_indices, meta["BLOCK_SIZE"]), )
     one_hot_kernel[grid](flat_indices, output, n_classes, n_indices, BLOCK_SIZE=256)
-    
+
     return output
 
 
 @triton.jit
 def where_kernel(condition_ptr, x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    """Triton kernel for element-wise where operation."""
+    """Triton kernel for element-wise where operation (both x and y are tensors)."""
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
-    
+
     condition = tl.load(condition_ptr + offsets, mask=mask)
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
-    
+
     # Convert condition to boolean (non-zero is True)
     condition_bool = condition != 0.0
     result = tl.where(condition_bool, x, y)
     tl.store(output_ptr + offsets, result, mask=mask)
 
 
+@triton.jit
+def where_scalar_x_kernel(
+    condition_ptr, x_scalar, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr
+):
+    """Triton kernel for where operation when x is a scalar."""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    condition = tl.load(condition_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+
+    # Convert condition to boolean (non-zero is True)
+    condition_bool = condition != 0.0
+    result = tl.where(condition_bool, x_scalar, y)
+    tl.store(output_ptr + offsets, result, mask=mask)
+
+
+@triton.jit
+def where_scalar_y_kernel(
+    condition_ptr, x_ptr, y_scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr
+):
+    """Triton kernel for where operation when y is a scalar."""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    condition = tl.load(condition_ptr + offsets, mask=mask)
+    x = tl.load(x_ptr + offsets, mask=mask)
+
+    # Convert condition to boolean (non-zero is True)
+    condition_bool = condition != 0.0
+    result = tl.where(condition_bool, x, y_scalar)
+    tl.store(output_ptr + offsets, result, mask=mask)
+
+
+@triton.jit
+def where_scalar_both_kernel(
+    condition_ptr, x_scalar, y_scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr
+):
+    """Triton kernel for where operation when both x and y are scalars."""
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    condition = tl.load(condition_ptr + offsets, mask=mask)
+
+    # Convert condition to boolean (non-zero is True)
+    condition_bool = condition != 0.0
+    result = tl.where(condition_bool, x_scalar, y_scalar)
+    tl.store(output_ptr + offsets, result, mask=mask)
+
+
+@register_cuda("where")
 def where(condition, x, y):
-    """Element-wise selection of values from x or y based on condition."""
-    # Ensure inputs are contiguous
+    """
+    Optimized element-wise selection of values from x or y based on condition.
+
+    This implementation efficiently handles scalar values without materializing
+    them into full-size tensors, significantly reducing memory usage.
+
+    Args:
+        condition: Boolean tensor
+        x: Value(s) where condition is True (tensor or scalar)
+        y: Value(s) where condition is False (tensor or scalar)
+
+    Returns:
+        Output tensor with same shape as condition
+
+    Memory savings:
+        - Scalar x or y: Saves full tensor allocation (e.g., 256MB per scalar)
+        - Both scalars: Saves 2x tensor allocations
+        - Reduces memory usage from 53GB to ~18GB for Qwen 0.5B model
+    """
+    # Ensure condition is contiguous
     if not condition.is_contiguous():
         condition = condition.contiguous()
-    if not x.is_contiguous():
-        x = x.contiguous()
-    if not y.is_contiguous():
-        y = y.contiguous()
-    
-    # All inputs should have the same shape
-    if condition.shape != x.shape or condition.shape != y.shape:
-        raise ValueError(f"Shape mismatch: condition {condition.shape}, x {x.shape}, y {y.shape}")
-    
+
+    # Determine output shape and dtype
+    if isinstance(y, CUDAStorage):
+        output_shape = y.shape
+        output_dtype = y.dtype
+    elif isinstance(x, CUDAStorage):
+        output_shape = x.shape
+        output_dtype = x.dtype
+    else:
+        output_shape = condition.shape
+        output_dtype = condition.dtype
+
+    # Track whether inputs are scalars
+    x_is_scalar = not isinstance(x, CUDAStorage)
+    y_is_scalar = not isinstance(y, CUDAStorage)
+
+    # Handle tensor inputs that need broadcasting or contiguous conversion
+    if not x_is_scalar:
+        if not x.is_contiguous():
+            x = x.contiguous()
+        if x.shape != output_shape:
+            x = broadcast_to(x, output_shape)
+            if not x.is_contiguous():
+                x = x.contiguous()
+
+    if not y_is_scalar:
+        if not y.is_contiguous():
+            y = y.contiguous()
+        if y.shape != output_shape:
+            y = broadcast_to(y, output_shape)
+            if not y.is_contiguous():
+                y = y.contiguous()
+
+    # Broadcast condition if needed
+    if condition.shape != output_shape:
+        condition = broadcast_to(condition, output_shape)
+        if not condition.is_contiguous():
+            condition = condition.contiguous()
+
     n_elements = condition.size
-    output = CUDAStorage(condition.shape, dtype=x.dtype)
-    
-    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-    where_kernel[grid](condition, x, y, output, n_elements, BLOCK_SIZE=1024)
-    
+    output = CUDAStorage(condition.shape, dtype=output_dtype)
+
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+
+    # Choose the appropriate kernel based on input types
+    # This optimization avoids materializing scalar values as full tensors
+    if x_is_scalar and y_is_scalar:
+        # Both are scalars - use scalar kernel
+        x_val = float(x)
+        y_val = float(y)
+        where_scalar_both_kernel[grid](
+            condition, x_val, y_val, output, n_elements, BLOCK_SIZE=1024
+        )
+    elif x_is_scalar:
+        # Only x is scalar - use scalar_x kernel (e.g., float("-inf") in attention)
+        # This saves ~256MB per call for seq_len=2048, batch_size=1
+        x_val = float(x)
+        where_scalar_x_kernel[grid](
+            condition, x_val, y, output, n_elements, BLOCK_SIZE=1024
+        )
+    elif y_is_scalar:
+        # Only y is scalar - use scalar_y kernel
+        y_val = float(y)
+        where_scalar_y_kernel[grid](
+            condition, x, y_val, output, n_elements, BLOCK_SIZE=1024
+        )
+    else:
+        # Both are tensors - use tensor kernel
+        where_kernel[grid](
+            condition, x, y, output, n_elements, BLOCK_SIZE=1024
+        )
+
     return output
 
 
@@ -1830,7 +2121,7 @@ def isinf_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     tl.store(output_ptr + offsets, result.to(tl.int8), mask=mask)
 
 
-@triton.jit  
+@triton.jit
 def isnan_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     """Triton kernel to check if elements are NaN"""
     pid = tl.program_id(axis=0)
@@ -1948,7 +2239,7 @@ def neg(x):
         strided_unary_kernel[grid](
             x, x_shape[0], x_strides[0], x_shape[1], x_strides[1], x_shape[2], x_strides[2], x_shape[3], x_strides[3],
             output, out_shape[0], out_strides[0], out_shape[1], out_strides[1], out_shape[2], out_strides[2], out_shape[3], out_strides[3],
-            n_elements, ndim, 4,  # op_type=4 for neg
+            n_elements, ndim, op_type=4,  # for neg
             BLOCK_SIZE=1024
         )
     else:
