@@ -9,7 +9,7 @@ from genesis.device import Device
 from typing import Optional, Union, Tuple, Any
 from .nn.functional import *
 
-def triu(a: Tensor, k: int, device: Optional[Union[str, Device]] = None) -> Tensor:
+def triu(a: Tensor, k: int = 0, device: Optional[Union[str, Device]] = None) -> Tensor:
     """Return upper triangular part of tensor.
 
     Args:
@@ -21,6 +21,31 @@ def triu(a: Tensor, k: int, device: Optional[Union[str, Device]] = None) -> Tens
         Tensor: Upper triangular tensor
     """
     return Dispatcher.dispatch('triu', a, k)
+
+
+def tril(a: Tensor, k: int = 0, device: Optional[Union[str, Device]] = None) -> Tensor:
+    """Return lower triangular part of tensor.
+
+    Returns a copy of the input tensor with elements above the k-th diagonal zeroed.
+    Compatible with PyTorch's torch.tril API.
+
+    Args:
+        a: Input tensor (2D or batched)
+        k: Diagonal offset (0 for main diagonal, positive for above, negative for below)
+        device: Device placement (unused, kept for compatibility)
+
+    Returns:
+        Tensor: Lower triangular tensor
+
+    Example:
+        >>> x = genesis.ones((3, 3))
+        >>> genesis.tril(x)
+        tensor([[1., 0., 0.],
+                [1., 1., 0.],
+                [1., 1., 1.]])
+    """
+    return Dispatcher.dispatch('tril', a, k)
+
 
 def empty(*shape: int, device: Optional[Union[str, Device]] = None, dtype: DType = genesis.float32, requires_grad: bool = False) -> Tensor:
     """Create tensor with uninitialized values.

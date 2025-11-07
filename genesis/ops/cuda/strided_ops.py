@@ -60,32 +60,37 @@ def strided_binary_kernel(
     mask = offsets < n_elements
 
     # Calculate multi-dimensional indices for each element
+    # CRITICAL FIX: Use output shape for index calculation, not x_shape!
+    # When tensors are broadcast, x/y/out shapes can differ, causing OOB writes
     if ndim == 1:
         idx = offsets
         x_offset = idx * x_stride_0
         y_offset = idx * y_stride_0
         out_offset = idx * out_stride_0
     elif ndim == 2:
-        idx_0 = offsets // x_shape_1
-        idx_1 = offsets % x_shape_1
+        # Use output shape for decomposing linear offset to 2D indices
+        idx_0 = offsets // out_shape_1
+        idx_1 = offsets % out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1
         y_offset = idx_0 * y_stride_0 + idx_1 * y_stride_1
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1
     elif ndim == 3:
-        tmp = offsets // x_shape_2
-        idx_2 = offsets % x_shape_2
-        idx_1 = tmp % x_shape_1
-        idx_0 = tmp // x_shape_1
+        # Use output shape for decomposing linear offset to 3D indices
+        tmp = offsets // out_shape_2
+        idx_2 = offsets % out_shape_2
+        idx_1 = tmp % out_shape_1
+        idx_0 = tmp // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2
         y_offset = idx_0 * y_stride_0 + idx_1 * y_stride_1 + idx_2 * y_stride_2
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2
     else:  # ndim == 4
-        tmp = offsets // x_shape_3
-        idx_3 = offsets % x_shape_3
-        tmp2 = tmp // x_shape_2
-        idx_2 = tmp % x_shape_2
-        idx_1 = tmp2 % x_shape_1
-        idx_0 = tmp2 // x_shape_1
+        # Use output shape for decomposing linear offset to 4D indices
+        tmp = offsets // out_shape_3
+        idx_3 = offsets % out_shape_3
+        tmp2 = tmp // out_shape_2
+        idx_2 = tmp % out_shape_2
+        idx_1 = tmp2 % out_shape_1
+        idx_0 = tmp2 // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2 + idx_3 * x_stride_3
         y_offset = idx_0 * y_stride_0 + idx_1 * y_stride_1 + idx_2 * y_stride_2 + idx_3 * y_stride_3
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2 + idx_3 * out_stride_3
@@ -126,29 +131,30 @@ def strided_scalar_kernel(
     mask = offsets < n_elements
 
     # Calculate multi-dimensional indices for each element
+    # CRITICAL FIX: Use output shape for index calculation!
     if ndim == 1:
         idx = offsets
         x_offset = idx * x_stride_0
         out_offset = idx * out_stride_0
     elif ndim == 2:
-        idx_0 = offsets // x_shape_1
-        idx_1 = offsets % x_shape_1
+        idx_0 = offsets // out_shape_1
+        idx_1 = offsets % out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1
     elif ndim == 3:
-        tmp = offsets // x_shape_2
-        idx_2 = offsets % x_shape_2
-        idx_1 = tmp % x_shape_1
-        idx_0 = tmp // x_shape_1
+        tmp = offsets // out_shape_2
+        idx_2 = offsets % out_shape_2
+        idx_1 = tmp % out_shape_1
+        idx_0 = tmp // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2
     else:  # ndim == 4
-        tmp = offsets // x_shape_3
-        idx_3 = offsets % x_shape_3
-        tmp2 = tmp // x_shape_2
-        idx_2 = tmp % x_shape_2
-        idx_1 = tmp2 % x_shape_1
-        idx_0 = tmp2 // x_shape_1
+        tmp = offsets // out_shape_3
+        idx_3 = offsets % out_shape_3
+        tmp2 = tmp // out_shape_2
+        idx_2 = tmp % out_shape_2
+        idx_1 = tmp2 % out_shape_1
+        idx_0 = tmp2 // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2 + idx_3 * x_stride_3
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2 + idx_3 * out_stride_3
 
@@ -196,29 +202,30 @@ def strided_unary_kernel(
     mask = offsets < n_elements
 
     # Calculate multi-dimensional indices for each element
+    # CRITICAL FIX: Use output shape for index calculation!
     if ndim == 1:
         idx = offsets
         x_offset = idx * x_stride_0
         out_offset = idx * out_stride_0
     elif ndim == 2:
-        idx_0 = offsets // x_shape_1
-        idx_1 = offsets % x_shape_1
+        idx_0 = offsets // out_shape_1
+        idx_1 = offsets % out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1
     elif ndim == 3:
-        tmp = offsets // x_shape_2
-        idx_2 = offsets % x_shape_2
-        idx_1 = tmp % x_shape_1
-        idx_0 = tmp // x_shape_1
+        tmp = offsets // out_shape_2
+        idx_2 = offsets % out_shape_2
+        idx_1 = tmp % out_shape_1
+        idx_0 = tmp // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2
     else:  # ndim == 4
-        tmp = offsets // x_shape_3
-        idx_3 = offsets % x_shape_3
-        tmp2 = tmp // x_shape_2
-        idx_2 = tmp % x_shape_2
-        idx_1 = tmp2 % x_shape_1
-        idx_0 = tmp2 // x_shape_1
+        tmp = offsets // out_shape_3
+        idx_3 = offsets % out_shape_3
+        tmp2 = tmp // out_shape_2
+        idx_2 = tmp % out_shape_2
+        idx_1 = tmp2 % out_shape_1
+        idx_0 = tmp2 // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2 + idx_3 * x_stride_3
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2 + idx_3 * out_stride_3
 
@@ -269,29 +276,30 @@ def strided_compare_scalar_kernel(
     mask = offsets < n_elements
 
     # Calculate multi-dimensional indices for each element
+    # CRITICAL FIX: Use output shape for index calculation!
     if ndim == 1:
         idx = offsets
         x_offset = idx * x_stride_0
         out_offset = idx * out_stride_0
     elif ndim == 2:
-        idx_0 = offsets // x_shape_1
-        idx_1 = offsets % x_shape_1
+        idx_0 = offsets // out_shape_1
+        idx_1 = offsets % out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1
     elif ndim == 3:
-        tmp = offsets // x_shape_2
-        idx_2 = offsets % x_shape_2
-        idx_1 = tmp % x_shape_1
-        idx_0 = tmp // x_shape_1
+        tmp = offsets // out_shape_2
+        idx_2 = offsets % out_shape_2
+        idx_1 = tmp % out_shape_1
+        idx_0 = tmp // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2
     else:  # ndim == 4
-        tmp = offsets // x_shape_3
-        idx_3 = offsets % x_shape_3
-        tmp2 = tmp // x_shape_2
-        idx_2 = tmp % x_shape_2
-        idx_1 = tmp2 % x_shape_1
-        idx_0 = tmp2 // x_shape_1
+        tmp = offsets // out_shape_3
+        idx_3 = offsets % out_shape_3
+        tmp2 = tmp // out_shape_2
+        idx_2 = tmp % out_shape_2
+        idx_1 = tmp2 % out_shape_1
+        idx_0 = tmp2 // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2 + idx_3 * x_stride_3
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2 + idx_3 * out_stride_3
 
@@ -329,29 +337,30 @@ def strided_special_kernel(
     mask = offsets < n_elements
 
     # Calculate multi-dimensional indices for each element
+    # CRITICAL FIX: Use output shape for index calculation!
     if ndim == 1:
         idx = offsets
         x_offset = idx * x_stride_0
         out_offset = idx * out_stride_0
     elif ndim == 2:
-        idx_0 = offsets // x_shape_1
-        idx_1 = offsets % x_shape_1
+        idx_0 = offsets // out_shape_1
+        idx_1 = offsets % out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1
     elif ndim == 3:
-        tmp = offsets // x_shape_2
-        idx_2 = offsets % x_shape_2
-        idx_1 = tmp % x_shape_1
-        idx_0 = tmp // x_shape_1
+        tmp = offsets // out_shape_2
+        idx_2 = offsets % out_shape_2
+        idx_1 = tmp % out_shape_1
+        idx_0 = tmp // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2
     else:  # ndim == 4
-        tmp = offsets // x_shape_3
-        idx_3 = offsets % x_shape_3
-        tmp2 = tmp // x_shape_2
-        idx_2 = tmp % x_shape_2
-        idx_1 = tmp2 % x_shape_1
-        idx_0 = tmp2 // x_shape_1
+        tmp = offsets // out_shape_3
+        idx_3 = offsets % out_shape_3
+        tmp2 = tmp // out_shape_2
+        idx_2 = tmp % out_shape_2
+        idx_1 = tmp2 % out_shape_1
+        idx_0 = tmp2 // out_shape_1
         x_offset = idx_0 * x_stride_0 + idx_1 * x_stride_1 + idx_2 * x_stride_2 + idx_3 * x_stride_3
         out_offset = idx_0 * out_stride_0 + idx_1 * out_stride_1 + idx_2 * out_stride_2 + idx_3 * out_stride_3
 

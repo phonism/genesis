@@ -19,21 +19,48 @@ def triu_kernel(input_ptr, output_ptr, M, N, k, BLOCK_SIZE_M: tl.constexpr, BLOC
     """
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
-    
+
     offs_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    
+
     mask_m = offs_m < M
     mask_n = offs_n < N
-    
+
     # Load input
     input_ptrs = input_ptr + offs_m[:, None] * N + offs_n[None, :]
     input_vals = tl.load(input_ptrs, mask=mask_m[:, None] & mask_n[None, :], other=0.0)
-    
+
     # Apply upper triangle condition: keep if j >= i + k
     condition = offs_n[None, :] >= offs_m[:, None] + k
     output_vals = tl.where(condition, input_vals, 0.0)
-    
+
+    # Store output
+    output_ptrs = output_ptr + offs_m[:, None] * N + offs_n[None, :]
+    tl.store(output_ptrs, output_vals, mask=mask_m[:, None] & mask_n[None, :])
+
+
+@triton.jit
+def tril_kernel(input_ptr, output_ptr, M, N, k, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
+    """
+    Lower triangle kernel.
+    """
+    pid_m = tl.program_id(axis=0)
+    pid_n = tl.program_id(axis=1)
+
+    offs_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+
+    mask_m = offs_m < M
+    mask_n = offs_n < N
+
+    # Load input
+    input_ptrs = input_ptr + offs_m[:, None] * N + offs_n[None, :]
+    input_vals = tl.load(input_ptrs, mask=mask_m[:, None] & mask_n[None, :], other=0.0)
+
+    # Apply lower triangle condition: keep if j <= i + k
+    condition = offs_n[None, :] <= offs_m[:, None] + k
+    output_vals = tl.where(condition, input_vals, 0.0)
+
     # Store output
     output_ptrs = output_ptr + offs_m[:, None] * N + offs_n[None, :]
     tl.store(output_ptrs, output_vals, mask=mask_m[:, None] & mask_n[None, :])
@@ -64,23 +91,57 @@ def triu(x, k=0):
     """
     if len(x.shape) != 2:
         raise ValueError("triu only supports 2D tensors")
-    
+
     M, N = x.shape
     output = CUDAStorage(x.shape, dtype=x.dtype)
-    
+
     if not x.is_contiguous():
         x = x.contiguous()
-    
+
     BLOCK_SIZE_M = 32
     BLOCK_SIZE_N = 32
     grid = (triton.cdiv(M, BLOCK_SIZE_M), triton.cdiv(N, BLOCK_SIZE_N))
-    
+
     triu_kernel[grid](
         x, output, M, N, k,
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_N=BLOCK_SIZE_N
     )
-    
+
+    return output
+
+
+@register_cuda("tril")
+def tril(x, k=0):
+    """
+    Lower triangle of tensor using Triton kernel.
+
+    Args:
+        x: Input 2D tensor
+        k: Diagonal offset (0 for main diagonal, positive for above, negative for below)
+
+    Returns:
+        Tensor with elements above the k-th diagonal zeroed
+    """
+    if len(x.shape) != 2:
+        raise ValueError("tril only supports 2D tensors")
+
+    M, N = x.shape
+    output = CUDAStorage(x.shape, dtype=x.dtype)
+
+    if not x.is_contiguous():
+        x = x.contiguous()
+
+    BLOCK_SIZE_M = 32
+    BLOCK_SIZE_N = 32
+    grid = (triton.cdiv(M, BLOCK_SIZE_M), triton.cdiv(N, BLOCK_SIZE_N))
+
+    tril_kernel[grid](
+        x, output, M, N, k,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_N=BLOCK_SIZE_N
+    )
+
     return output
 
 
@@ -503,9 +564,19 @@ def bincount(x, weights=None, minlength=0):
     """
     if len(x.shape) != 1:
         raise ValueError("bincount only supports 1D tensors")
-    
+
+    if not x.is_contiguous():
+        x = x.contiguous()
+
+    print("FUCK:", x)
+
     N = x.shape[0]
-    
+
+    # Ensure input is int64 and contiguous
+    if x.dtype_obj.name != "int64":
+        raise ValueError(f"bincount input must be int64, got {x.dtype_obj.name}")
+
+
     # Find maximum value to determine output size
     if x.numel() > 0:
         max_tensor = reduce_max(x, axis=None, keepdims=False)
@@ -513,16 +584,22 @@ def bincount(x, weights=None, minlength=0):
     else:
         max_val = 0
     num_classes = max(max_val + 1, minlength)
-    
+
+    # Sanity check - if num_classes is unreasonably large, something is wrong
+    MAX_REASONABLE_CLASSES = 100_000_000  # 100M classes should be more than enough
+    if num_classes > MAX_REASONABLE_CLASSES:
+        raise ValueError(
+            f"bincount: computed num_classes={num_classes} is unreasonably large. "
+            f"Input max value: {max_val}, minlength: {minlength}. "
+            f"This likely indicates corrupted input data."
+        )
+
     # Create output tensor - int64 for unweighted, float32 for weighted
     output_dtype = "float32" if weights is not None else "int64"
     output = CUDAStorage((num_classes,), dtype=output_dtype)
     
     # Initialize to zero
     output.fill_(0)
-    
-    if not x.is_contiguous():
-        x = x.contiguous()
     
     has_weights = weights is not None
     if has_weights:

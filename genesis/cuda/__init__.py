@@ -140,101 +140,87 @@ def empty_cache() -> Dict[str, Any]:
         - defragmentation_performed: Whether defragmentation was performed
         - stats: Detailed statistics about the cleanup
     """
-    _ensure_config_applied()
-    manager = get_memory_manager()
-    
+    from genesis.backends.cuda_memory import memory_stats as get_memory_stats
+
     # Get stats before cleanup
-    stats_before = manager.get_stats()
-    pool_blocks_before = stats_before['ref_pool']['pool_blocks']
-    pool_size_before = stats_before['ref_pool']['pool_size_mb']
-    
+    stats_before = get_memory_stats()
+    total_cached_before = stats_before['total_cached_bytes']
+    pool_blocks_before = stats_before['small_pool_blocks'] + stats_before['large_pool_blocks']
+
     # Perform aggressive cleanup
-    cleanup_stats = trigger_gc()
-    
-    # Check if defragmentation would be beneficial
-    frag_analysis = analyze_memory_fragmentation()
-    defrag_performed = False
-    defrag_stats = None
-    
-    if frag_analysis['needs_defrag']:
-        defrag_stats = defragment_memory()
-        defrag_performed = defrag_stats is not None
-    
+    trigger_gc()
+
     # Get stats after cleanup
-    stats_after = manager.get_stats()
-    pool_blocks_after = stats_after['ref_pool']['pool_blocks']
-    pool_size_after = stats_after['ref_pool']['pool_size_mb']
-    
+    stats_after = get_memory_stats()
+    total_cached_after = stats_after['total_cached_bytes']
+    pool_blocks_after = stats_after['small_pool_blocks'] + stats_after['large_pool_blocks']
+
     # Calculate freed memory
-    freed_memory_mb = pool_size_before - pool_size_after
+    freed_memory_mb = (total_cached_before - total_cached_after) / (1024 * 1024)
     cleared_pools = pool_blocks_before - pool_blocks_after
-    
+
     result = {
         'freed_memory_mb': freed_memory_mb,
         'cleared_pools': cleared_pools,
-        'defragmentation_performed': defrag_performed,
+        'defragmentation_performed': False,  # Lightweight allocator uses fixed buckets
         'stats': {
-            'cleanup': cleanup_stats,
-            'defragmentation': defrag_stats,
             'before': stats_before,
             'after': stats_after
         }
     }
-    
+
     return result
 
 
 def memory_stats() -> Dict[str, Any]:
     """
     Get detailed CUDA memory statistics.
-    
+
     Similar to torch.cuda.memory_stats(), returns comprehensive information
     about CUDA memory usage, cache performance, and allocation patterns.
-    
+
     Returns:
         Dict containing detailed memory statistics
     """
-    manager = get_memory_manager()
-    stats = manager.get_stats()
-    
-    # Get additional memory info
+    from genesis.backends.cuda_memory import memory_stats as get_memory_stats
+
+    stats = get_memory_stats()
     memory_info = get_memory_info()
-    frag_stats = get_fragmentation_stats()
-    
-    # Enhance stats with additional information
+
+    # Format stats for compatibility with tests
     enhanced_stats = {
         'allocation': {
-            'total_allocations': stats['total_alloc_count'],
-            'active_blocks': stats['active_blocks'],
-            'current_active_memory_mb': stats.get('current_memory_mb', 0)
+            'total_allocations': stats['alloc_count'],
+            'active_blocks': stats['small_pool_blocks'] + stats['large_pool_blocks'],
+            'current_active_memory_mb': stats['total_cached_bytes'] / (1024 * 1024)
         },
         'cache': {
-            'pool_hits': stats['ref_pool']['pool_hits'],
-            'pool_misses': stats['ref_pool']['pool_misses'],
-            'hit_rate': stats['ref_pool']['hit_rate'],
-            'pool_blocks': stats['ref_pool']['pool_blocks'],
-            'pool_size_mb': stats['ref_pool']['pool_size_mb'],
-            'ref_count_saves': stats['ref_pool']['ref_count_saves']
+            'pool_hits': stats['cache_hits'],
+            'pool_misses': stats['alloc_count'] - stats['cache_hits'],
+            'hit_rate': stats['cache_hit_rate'],
+            'pool_blocks': stats['small_pool_blocks'] + stats['large_pool_blocks'],
+            'pool_size_mb': stats['total_cached_bytes'] / (1024 * 1024),
+            'ref_count_saves': 0  # Not tracked in lightweight allocator
         },
         'pressure': {
-            'memory_pressure': stats['ref_pool']['memory_pressure'],
-            'critical_pressure': stats['ref_pool']['critical_pressure'],
-            'pressure_cleanups': stats['ref_pool']['pressure_cleanups'],
-            'critical_cleanups': stats['ref_pool']['critical_cleanups'],
-            'pressure_threshold': stats['ref_pool']['pressure_monitor']['pressure_threshold'],
-            'critical_threshold': stats['ref_pool']['pressure_monitor']['critical_threshold']
+            'memory_pressure': stats['memory_pressure'],
+            'critical_pressure': stats['memory_pressure'] > stats['memory_critical_threshold'],
+            'pressure_cleanups': 0,  # Not tracked separately
+            'critical_cleanups': 0,  # Not tracked separately
+            'pressure_threshold': stats['memory_pressure_threshold'],
+            'critical_threshold': stats['memory_critical_threshold']
         },
         'fragmentation': {
-            'overall_fragmentation': float(frag_stats.get('current_fragmentation', {}).get('overall_fragmentation', 0.0)),
-            'pool_fragmentation': float(frag_stats.get('current_fragmentation', {}).get('pool_fragmentation', {}).get('fragmentation_ratio', 0.0)),
-            'defrag_operations': int(frag_stats.get('defrag_history', {}).get('defrag_operations', 0)),
-            'fragmentation_threshold': float(frag_stats.get('defrag_history', {}).get('fragmentation_threshold', 0.3)),
-            'trend': str(frag_stats.get('defrag_history', {}).get('trend', 'stable')),
-            'recommendation': str(frag_stats.get('defrag_history', {}).get('recommendation', 'monitor'))
+            'overall_fragmentation': 0.0,  # Fixed-size buckets prevent fragmentation
+            'pool_fragmentation': 0.0,
+            'defrag_operations': 0,
+            'fragmentation_threshold': 0.3,
+            'trend': 'stable',
+            'recommendation': 'No action needed - using fixed-size bucket allocator'
         },
         'memory_info': memory_info
     }
-    
+
     return enhanced_stats
 
 
@@ -270,17 +256,17 @@ def memory_summary() -> str:
         "CACHE PERFORMANCE:",
         f"  Pool hits: {cache['pool_hits']:,}",
         f"  Pool misses: {cache['pool_misses']:,}",
-        f"  Hit rate: {cache['hit_rate']}",
+        f"  Hit rate: {cache['hit_rate']:.2%}",
         f"  Pool blocks: {cache['pool_blocks']:,}",
         f"  Pool size: {cache['pool_size_mb']:.2f} MB",
         f"  Reference count saves: {cache['ref_count_saves']:,}",
         "",
         "MEMORY PRESSURE:",
-        f"  Current pressure: {'Yes' if pressure['memory_pressure'] else 'No'}",
+        f"  Current pressure: {pressure['memory_pressure']:.2%}",
         f"  Critical pressure: {'Yes' if pressure['critical_pressure'] else 'No'}",
         f"  Pressure cleanups: {pressure['pressure_cleanups']:,}",
         f"  Critical cleanups: {pressure['critical_cleanups']:,}",
-        f"  Pressure threshold: {pressure['pressure_threshold']}",
+        f"  Pressure threshold: {pressure['pressure_threshold']:.2%}",
         "",
         "FRAGMENTATION:",
         f"  Overall fragmentation: {frag['overall_fragmentation']:.3f}",
@@ -299,7 +285,7 @@ def memory_summary() -> str:
             f"  Total: {gpu_mem['total_mb']:.1f} MB",
             f"  Used: {gpu_mem['used_mb']:.1f} MB",
             f"  Free: {gpu_mem['free_mb']:.1f} MB",
-            f"  Usage: {gpu_mem['usage_ratio']:.1%}",
+            f"  Usage: {gpu_mem['usage_ratio']}",
         ])
     
     # Add recommendations
@@ -313,8 +299,8 @@ def memory_summary() -> str:
     
     if frag['overall_fragmentation'] > 0.3:
         summary_lines.append("  🔧 High fragmentation - defragmentation recommended")
-    
-    if cache['hit_rate'].rstrip('%') and float(cache['hit_rate'].rstrip('%')) < 50:
+
+    if cache['hit_rate'] < 0.5:
         summary_lines.append("  📈 Low cache hit rate - memory access patterns may need optimization")
     
     if not any(line.startswith("  ") for line in summary_lines[-10:]):
@@ -359,9 +345,9 @@ def reset_max_memory_allocated() -> None:
 
 def reset_max_memory_cached() -> None:
     """Reset the maximum memory cached tracker."""
-    manager = get_memory_manager()
-    if hasattr(manager.ref_pool, 'max_pool_size_reached'):
-        manager.ref_pool.max_pool_size_reached = 0
+    # Note: Lightweight allocator doesn't track max_cached separately
+    # This is a compatibility function that does nothing
+    pass
 
 
 # Configuration parsing for GENESIS_CUDA_ALLOC_CONF

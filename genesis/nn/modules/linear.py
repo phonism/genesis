@@ -35,7 +35,7 @@ class Linear(Module):
         Forward pass of the linear layer.
         """
         x = x @ self.weight.transpose(0, 1)
-        if self.bias:
+        if self.bias is not None:
             x = x + self.bias
         return x
 

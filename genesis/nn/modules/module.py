@@ -131,12 +131,17 @@ class Module:
 
     def register_buffer(self, name: str, buffer: Tensor, persistent: bool = True):
         """Register a buffer (non-parameter tensor) to the module.
-        
+
+        Buffers are tensors that should be saved/loaded with the model but do not require gradients.
+
         Args:
             name: Name of the buffer
             buffer: Tensor to register as buffer
             persistent: Whether buffer persists during serialization
         """
+        # Buffers should not require gradients (like PyTorch behavior)
+        if buffer is not None and hasattr(buffer, 'requires_grad'):
+            buffer.requires_grad = False
         self.__dict__[name] = buffer
 
     def parameters(self) -> List[Tensor]:
@@ -146,13 +151,21 @@ class Module:
     def num_parameters(self) -> int:
         """
         Return the number of parameters in the module.
+
+        Note: This method correctly handles weight tying by deduplicating
+        parameters that share the same underlying tensor.
         """
+        seen = set()
         num_parameters = 0
         for p in self.parameters():
-            cur = 1
-            for x in p.shape:
-                cur *= x
-            num_parameters += cur
+            # Use id() to check if we've already counted this parameter
+            param_id = id(p.data if hasattr(p, 'data') else p)
+            if param_id not in seen:
+                seen.add(param_id)
+                cur = 1
+                for x in p.shape:
+                    cur *= x
+                num_parameters += cur
         return num_parameters
 
     def named_parameters(self, prefix: str = "", recurse: bool = True) -> Iterator[Tuple[str, Tensor]]:

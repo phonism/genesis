@@ -31,8 +31,8 @@ def bind_tensor_methods():
 
     # In-place operations
     Tensor.__iadd__ = lambda self, other: F.add_inplace(self, other)
-    # Tensor.__isub__ = lambda self, other: F.sub_inplace(self, other)  # TODO: implement
-    # Tensor.__imul__ = lambda self, other: F.mul_inplace(self, other)  # TODO: implement
+    Tensor.__isub__ = lambda self, other: F.sub_inplace(self, other)
+    Tensor.__imul__ = lambda self, other: F.mul_inplace(self, other)
 
     # Method versions
     Tensor.add = lambda self, other: F.add(self, other)
@@ -89,6 +89,8 @@ def bind_tensor_methods():
     # Reduction operations
     Tensor.sum = lambda self, dim=None, keepdim=False: F.sum(self, dim, keepdim)
     Tensor.mean = lambda self, dim=None, keepdim=False: F.mean(self, dim, keepdim)
+    Tensor.var = lambda self, dim=None, keepdim=False, unbiased=True: F.var(self, dim, keepdim, unbiased)
+    Tensor.std = lambda self, dim=None, keepdim=False, unbiased=True: F.std(self, dim, keepdim, unbiased)
     Tensor.max = lambda self, dim=None, keepdim=False: F.max(self, dim, keepdim)
     Tensor.min = lambda self, dim=None, keepdim=False: F.min(self, dim, keepdim)
     Tensor.argmax = lambda self, dim=None, keepdim=False: F.argmax(self, dim, keepdim)

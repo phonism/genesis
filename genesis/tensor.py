@@ -98,6 +98,26 @@ class Tensor:
     def device(self):
         """Return tensor device"""
         return self.storage.device
+
+    @property
+    def data(self):
+        """Return the underlying tensor data (PyTorch compatibility).
+
+        Returns a new Tensor that shares storage with the original but
+        doesn't track gradients. This is useful for in-place operations
+        that should not be tracked by autograd.
+
+        Returns:
+            Tensor: A new tensor view with requires_grad=False
+        """
+        # Create a new Tensor that shares the same storage
+        new_tensor = Tensor(self.storage, self.shape, self._stride, self.offset)
+        new_tensor.requires_grad = False
+        new_tensor.grad = None
+        new_tensor.grad_fn = None
+        new_tensor.is_leaf = True
+        new_tensor.base = self.base if self.base is not None else self
+        return new_tensor
     
     @property
     def ndim(self):
@@ -158,29 +178,30 @@ class Tensor:
             flat_index += idx * stride
         return self.storage[flat_index]
     
-    def _topo_sort(self, root_node):
-        """Perform topological sort on computational graph.
+    def _topo_sort_creators(self, root_creator):
+        """Perform topological sort on creator graph (not tensor graph).
 
         Args:
-            root_node: Root node to start topological sort from
+            root_creator: Root creator to start topological sort from
 
         Returns:
-            List of nodes in topological order
+            List of creators in topological order
         """
         visited = set()
         topo_order = []
 
-        def dfs(node):
-            if node in visited:
+        def dfs(creator):
+            if creator is None or id(creator) in visited:
                 return
-            visited.add(node)
-            if hasattr(node, 'creator') and node.creator is not None:
-                for input_node in node.creator.inputs:
-                    if isinstance(input_node, Tensor):
-                        dfs(input_node)
-            topo_order.append(node)
+            visited.add(id(creator))
 
-        dfs(root_node)
+            # Traverse next_functions instead of inputs
+            for next_creator, _ in creator.next_functions:
+                dfs(next_creator)
+
+            topo_order.append(creator)
+
+        dfs(root_creator)
         return topo_order
 
     def _accumulate_gradients(self, node, grad_list):
@@ -191,51 +212,69 @@ class Tensor:
             grad_list: List of gradients to accumulate
         """
         if node.grad is None:
-            # Use first gradient as base, accumulate rest in-place
+            # Use first gradient as base
             if len(grad_list) == 1:
                 node.grad = grad_list[0]
             else:
-                node.grad = grad_list[0].clone()  # Clone to avoid modifying original
+                # Sum all gradients - result will be contiguous
+                node.grad = grad_list[0]
                 for grad in grad_list[1:]:
-                    node.grad += grad  # In-place accumulation
+                    node.grad += grad
 
-            # Ensure gradient is contiguous only if needed
-            if hasattr(node.grad, 'data') and hasattr(node.grad.data, 'data'):
-                cuda_tensor = node.grad.data.data
-                if hasattr(cuda_tensor, 'is_contiguous') and not cuda_tensor.is_contiguous():
-                    node.grad.data.data = cuda_tensor.contiguous()
         else:
-            # Accumulate all gradients in-place
+            # Accumulate all gradients
             for grad in grad_list:
                 node.grad += grad
 
-    def _propagate_gradients(self, node, node_to_output_grads_list):
-        """Propagate gradients to input nodes.
+    def _propagate_gradients_to_creators(self, creator, out_grad, output_idx, creator_to_grads):
+        """Propagate gradients to next creators using next_functions.
 
         Args:
-            node: Current node to propagate gradients from
-            node_to_output_grads_list: Dictionary tracking gradient lists for each node
+            creator: Current creator to propagate gradients from
+            out_grad: Output gradient for this creator
+            output_idx: Index of the output (for multi-output functions)
+            creator_to_grads: Dictionary tracking gradient lists for each (creator, output_idx)
         """
-        if not (hasattr(node, 'creator') and node.creator is not None):
+        from genesis.function import AccumulateGrad
+
+        # If this is AccumulateGrad, accumulate to leaf tensor
+        if isinstance(creator, AccumulateGrad):
+            creator.apply_grad(out_grad)
             return
 
-        # Initialize gradient lists for input nodes
-        for nd in node.creator.inputs:
-            if nd not in node_to_output_grads_list:
-                node_to_output_grads_list[nd] = []
-
         # Compute backward gradients
-        grad = node.grad
-        if hasattr(node.creator, 'is_tuple_result') and node.creator.is_tuple_result:
-            backward_grad = node.creator.backward(node.creator.ctx, grad, node.idx)
+        if hasattr(creator, 'is_tuple_result') and creator.is_tuple_result:
+            # For multi-output functions, backward needs idx
+            backward_grad = creator.backward(creator.ctx, out_grad, output_idx)
         else:
-            backward_grad = node.creator.backward(node.creator.ctx, grad)
+            backward_grad = creator.backward(creator.ctx, out_grad)
 
-        # Distribute gradients to input tensors
-        for i, nd in enumerate(node.creator.inputs):
-            if nd.requires_grad is False:
+        # 🔥 CRITICAL: Release saved_tensors immediately after backward to save memory
+        # This mimics PyTorch's behavior where saved_tensors are freed as soon as they're used
+        if hasattr(creator, 'ctx') and hasattr(creator.ctx, '_saved_tensors'):
+            creator.ctx._saved_tensors = []  # Clear saved tensors to free memory
+
+        # Ensure backward_grad is a tuple
+        if not isinstance(backward_grad, tuple):
+            backward_grad = (backward_grad,)
+
+        # Propagate gradients to next_functions
+        if len(backward_grad) != len(creator.next_functions):
+            # Some functions may return fewer gradients (for non-tensor inputs)
+            # Pad with None
+            backward_grad = list(backward_grad)
+            while len(backward_grad) < len(creator.next_functions):
+                backward_grad.append(None)
+
+        for (next_creator, next_output_idx), grad in zip(creator.next_functions, backward_grad):
+            if grad is None:  # Some inputs don't need gradients
                 continue
-            node_to_output_grads_list[nd].append(backward_grad[i])
+
+            # Key is (creator_id, output_idx) to handle multi-output functions
+            next_key = (id(next_creator), next_output_idx)
+            if next_key not in creator_to_grads:
+                creator_to_grads[next_key] = []
+            creator_to_grads[next_key].append(grad)
 
     def backward(self, out_grad=None):
         """Compute gradients using reverse-mode automatic differentiation.
@@ -243,35 +282,71 @@ class Tensor:
         Args:
             out_grad: Optional output gradient tensor. Defaults to ones tensor.
 
-        This method implements topological sorting and backward pass computation
-        for the computational graph rooted at this tensor.
+        This method implements creator graph traversal (not tensor graph) for
+        backward pass computation, allowing intermediate tensors to be garbage
+        collected during forward pass.
         """
-        out_grad = out_grad if out_grad else init.ones(*self.shape, dtype=self.dtype, device=self.device)
-        if hasattr(self, 'apply_hooks'):
-            self.apply_hooks(self.grad)
+        if not self.requires_grad:
+            return
 
-        node_to_output_grads_list = {self: [out_grad]}
+        # Initialize output gradient
+        if out_grad is None:
+            if self.shape == ():
+                out_grad = init.ones(*self.shape, dtype=self.dtype, device=self.device)
+            else:
+                raise RuntimeError("grad can be implicitly created only for scalar outputs")
 
-        # Get computation order via topological sort
-        if hasattr(self, 'creator') and self.creator is not None:
-            topo_order = self._topo_sort(self)
-        else:
-            topo_order = [self]
+        # If this is a leaf tensor, just set gradient
+        if self.creator is None:
+            self.grad = out_grad
+            if hasattr(self, 'apply_hooks'):
+                self.apply_hooks(self.grad)
+            return
 
-        # Reverse pass through computation graph
-        for node in reversed(topo_order):
-            if node.requires_grad is False:
+        # === New backward algorithm using creator graph ===
+
+        # 1. Topological sort of creator graph
+        topo_order = self._topo_sort_creators(self.creator)
+
+        # 2. Initialize gradient dictionary ((creator_id, output_idx) -> list of grads)
+        creator_to_grads = {}
+        output_idx = self.idx if hasattr(self, 'idx') else 0
+        creator_key = (id(self.creator), output_idx)
+        creator_to_grads[creator_key] = [out_grad]
+
+        # 3. Reverse pass through creator graph
+        for creator in reversed(topo_order):
+            # Check all possible output indices for this creator
+            # For single-output functions, only idx=0 exists
+            # For multi-output functions, multiple indices may have gradients
+            creator_id = id(creator)
+
+            # Find all output indices that have gradients for this creator
+            output_indices_with_grads = [idx for (cid, idx) in creator_to_grads.keys() if cid == creator_id]
+
+            if not output_indices_with_grads:
                 continue
 
-            # Accumulate gradients for current node
-            grad_list = node_to_output_grads_list[node]
-            self._accumulate_gradients(node, grad_list)
+            # Process each output index separately
+            for out_idx in output_indices_with_grads:
+                creator_key = (creator_id, out_idx)
 
-            if hasattr(node, 'apply_hooks'):
-                node.apply_hooks(node.grad)
+                # Accumulate all gradients for this (creator, output_idx)
+                grad_list = creator_to_grads[creator_key]
+                if len(grad_list) == 1:
+                    accumulated_grad = grad_list[0]
+                else:
+                    # Sum all gradients
+                    accumulated_grad = grad_list[0]
+                    for g in grad_list[1:]:
+                        accumulated_grad = accumulated_grad + g
 
-            # Propagate gradients to input nodes
-            self._propagate_gradients(node, node_to_output_grads_list)
+                # 🔥 CRITICAL: Delete processed gradients immediately to free memory
+                # This mimics PyTorch's behavior where gradients are freed as soon as they're used
+                del creator_to_grads[creator_key]
+
+                # Propagate gradients to next_functions
+                self._propagate_gradients_to_creators(creator, accumulated_grad, out_idx, creator_to_grads)
     
     def to(self, *args, **kwargs):
         """Move tensor to device and/or change dtype - compatible with torch.Tensor.to"""
@@ -599,6 +674,45 @@ class Tensor:
         # Use actual stride from backend for accurate representation
         actual_stride = getattr(self.storage._backend, 'strides', self._stride)
         return f"Tensor(shape={self.shape}, dtype={self.storage.dtype}, device={self.device}, stride={actual_stride}, offset={self.offset})"
+
+    def __float__(self):
+        """Convert scalar tensor to Python float (PyTorch compatibility).
+
+        Returns:
+            float: Python float value
+
+        Raises:
+            TypeError: If tensor has more than one element
+        """
+        if self.numel() != 1:
+            raise TypeError(f"only one element tensors can be converted to Python scalars, got {self.numel()} elements")
+        return float(self.item())
+
+    def __int__(self):
+        """Convert scalar tensor to Python int (PyTorch compatibility).
+
+        Returns:
+            int: Python int value
+
+        Raises:
+            TypeError: If tensor has more than one element
+        """
+        if self.numel() != 1:
+            raise TypeError(f"only one element tensors can be converted to Python scalars, got {self.numel()} elements")
+        return int(self.item())
+
+    def __bool__(self):
+        """Convert scalar tensor to Python bool (PyTorch compatibility).
+
+        Returns:
+            bool: Python bool value
+
+        Raises:
+            TypeError: If tensor has more than one element
+        """
+        if self.numel() != 1:
+            raise TypeError(f"only one element tensors can be converted to Python scalars, got {self.numel()} elements")
+        return bool(self.item())
 
 def tensor(data, dtype: Optional[DType] = None, device = None, requires_grad: bool = False) -> Tensor:
     """

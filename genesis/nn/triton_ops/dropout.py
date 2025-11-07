@@ -133,20 +133,34 @@ class DropoutFunction(Function):
         
         # Create output tensor using Genesis
         dx = genesis.empty_like(dy)
-        
+
         # Ensure contiguity
         dy_contiguous = dy.contiguous()
-        
-        BLOCK_SIZE = 1024
+
+        # Grid function for autotune - BLOCK_SIZE auto-selected
         grid = lambda meta: (triton.cdiv(dy.numel(), meta["BLOCK_SIZE"]),)
-        
-        # Pass Genesis tensors directly to Triton kernel
+
+        # Pass Genesis tensors directly to Triton kernel (no manual BLOCK_SIZE)
         _dropout_backward[grid](
-            dy_contiguous, mask, dx, prob, dy.numel(), 
-            BLOCK_SIZE=BLOCK_SIZE
+            dy_contiguous, mask, dx, prob, dy.numel()
         )
-        
+
         return dx, None
 
-def dropout(x, prob):
-    return DropoutFunction.apply(x, prob)
+def dropout(x, p=0.5, training=True, inplace=False):
+    """Apply dropout to input tensor.
+
+    PyTorch-compatible dropout API.
+
+    Args:
+        x: Input tensor
+        p: Probability of an element to be zeroed (default: 0.5)
+        training: Apply dropout if True (default: True)
+        inplace: Whether to modify input in-place (default: False, not implemented)
+
+    Returns:
+        Tensor: Output tensor with dropout applied
+    """
+    if not training or p == 0:
+        return x
+    return DropoutFunction.apply(x, p)
