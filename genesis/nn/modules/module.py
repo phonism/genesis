@@ -20,7 +20,7 @@ class Parameter(Tensor):
     """
 
     def __new__(cls, data, requires_grad=True):
-        """Create a Parameter from a Tensor using __new__ like PyTorch."""
+        """Create a Parameter from a Tensor using proper initialization."""
         # Always convert to tensor first if needed
         if not isinstance(data, Tensor):
             data = genesis.tensor(data, requires_grad=requires_grad)
@@ -139,7 +139,7 @@ class Module:
             buffer: Tensor to register as buffer
             persistent: Whether buffer persists during serialization
         """
-        # Buffers should not require gradients (like PyTorch behavior)
+        # Buffers should not require gradients by design
         if buffer is not None and hasattr(buffer, 'requires_grad'):
             buffer.requires_grad = False
         self.__dict__[name] = buffer
@@ -394,7 +394,7 @@ class Module:
         for name, value in self.__dict__.items():
             if isinstance(value, Tensor) and not isinstance(value, Parameter):
                 # This is likely a buffer - move it to CUDA
-                # Use detach to break the computation graph like PyTorch does
+                # Use detach to break the computation graph for buffers
                 if hasattr(value, 'detach'):
                     self.__dict__[name] = value.detach().to(device_name)
                 else:

@@ -28,6 +28,7 @@ BACKEND = os.environ.get("NANOCHAT_BACKEND", "genesis")
 if BACKEND == "torch":
     print("Using PyTorch backend")
     import torch
+    from torch.cuda import amp
     genesis = torch
     nn = torch.nn
     F = torch.nn.functional
@@ -39,6 +40,7 @@ else:
     import genesis
     import genesis.distributed as dist
     from genesis import nn
+    from genesis.cuda import amp
     import genesis.nn.functional as F
 
 from model import ModelConfig, NanoChatModel
@@ -62,6 +64,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-interval", type=int, default=100, help="Checkpoint save interval in steps")
     parser.add_argument("--max-steps", type=int, default=None, help="Maximum training steps (None for unlimited)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--amp", action="store_true", help="Enable automatic mixed precision training")
+    parser.add_argument("--dtype", type=str, default="fp16", choices=["fp16", "bf16"],
+                        help="Mixed precision dtype (fp16 or bf16)")
     return parser.parse_args()
 
 
@@ -88,11 +93,12 @@ def setup_ddp() -> tuple[bool, int, int, int]:
         world_size = int(os.environ["WORLD_SIZE"])
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
+        # Set device for this process FIRST (required before init_process_group)
+        # This prevents hangs and excessive memory utilization on GPU:0
+        genesis.cuda.set_device(local_rank)
+
         # Initialize process group
         dist.init_process_group(backend="nccl")
-
-        # Set device for this process
-        genesis.cuda.set_device(local_rank)
 
         print(f"DDP initialized: rank={rank}, local_rank={local_rank}, world_size={world_size}")
         return True, rank, local_rank, world_size
@@ -185,6 +191,8 @@ config = ModelConfig(
     n_embd=1216,
     dropout=0.1
 )
+
+# Create model and move to device (PyTorch standard pattern)
 model = NanoChatModel(config)
 model.to(genesis.device(device))
 
@@ -194,10 +202,22 @@ if ddp_enabled:
     if rank == 0:
         print(f"Model wrapped with DDP on {world_size} GPUs")
 
+    # CRITICAL: Barrier to ensure all ranks finish initialization before training
+    # This is standard PyTorch DDP practice to avoid race conditions
+    dist.barrier()
+    if rank == 0:
+        print("All ranks synchronized after DDP initialization")
+
 optimizer = genesis.optim.AdamW(model.parameters(), lr=learning_rate)
+
+# Initialize GradScaler for AMP
+scaler = amp.GradScaler() if args.amp else None
+
 if rank == 0:
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Training config: batch_size={batch_size}, block_size={block_size}, lr={learning_rate}")
+    if args.amp:
+        print(f"Mixed precision training: enabled ({args.dtype})")
     if ddp_enabled:
         print(f"Global batch size: {batch_size * world_size * accumulation_steps}")
 
@@ -245,26 +265,49 @@ for inputs_np, targets_np in train_loader:
     inputs = genesis.tensor(inputs_np, device=genesis.device(device), dtype=genesis.int64)
     targets = genesis.tensor(targets_np, device=genesis.device(device), dtype=genesis.int64)
 
-    # Forward pass
-    logits = model(inputs)
+    # Forward pass with optional mixed precision
+    if args.amp:
+        with amp.autocast():
+            logits = model(inputs)
 
-    # Compute loss
-    B, T, C = logits.shape
-    logits = genesis.reshape(logits, (B * T, C))
-    targets = genesis.reshape(targets, (B * T,))
-    loss = nn.CrossEntropyLoss()(logits, targets)
-    loss = loss / accumulation_steps
+            # Compute loss
+            B, T, C = logits.shape
+            logits = genesis.reshape(logits, (B * T, C))
+            targets = genesis.reshape(targets, (B * T,))
+            loss = nn.CrossEntropyLoss()(logits, targets)
+            loss = loss / accumulation_steps
 
-    # Backward pass
-    loss.backward()
+        # Backward pass with gradient scaling
+        scaled_loss = scaler.scale(loss)
+        scaled_loss.backward()
+    else:
+        # Standard fp32 training
+        logits = model(inputs)
+
+        # Compute loss
+        B, T, C = logits.shape
+        logits = genesis.reshape(logits, (B * T, C))
+        targets = genesis.reshape(targets, (B * T,))
+        loss = nn.CrossEntropyLoss()(logits, targets)
+        loss = loss / accumulation_steps
+
+        # Backward pass
+        loss.backward()
 
     # Accumulate loss (convert to Python float for printing)
     batch_loss += float(loss.item() if hasattr(loss, "item") else loss.data)
 
     # Update parameters after accumulation steps
     if (total_cnt + 1) % accumulation_steps == 0:
-        optimizer.step()
-        optimizer.zero_grad()
+        if args.amp:
+            # Step with GradScaler (PyTorch-compatible pattern)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+        else:
+            # Standard optimizer step
+            optimizer.step()
+            optimizer.zero_grad()
 
         step_num = (total_cnt + 1) // accumulation_steps
 
@@ -287,8 +330,10 @@ for inputs_np, targets_np in train_loader:
 
         # Save checkpoint periodically (only rank 0)
         if (total_cnt + 1) % save_interval == 0 and rank == 0:
-            # For DDP, save the underlying model's state dict
-            state_dict = model.module.state_dict() if ddp_enabled else model.state_dict()
+            # Get underlying model for checkpoint saving
+            # Genesis DDP wraps the model, access it via .model attribute
+            checkpoint_model = model.model if ddp_enabled else model
+            state_dict = checkpoint_model.state_dict()
             save_path = checkpoint_dir / f"model_step_{step_num}.pth"
             genesis.save(state_dict, str(save_path))
             print(f"Checkpoint saved to {save_path}")

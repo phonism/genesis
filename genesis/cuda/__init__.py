@@ -1,7 +1,7 @@
 """
 CUDA utilities and memory management for Genesis.
 
-This module provides PyTorch-compatible interfaces for CUDA device management
+This module provides standard interfaces for CUDA device management
 and memory operations, organized similarly to torch.cuda.
 """
 
@@ -26,6 +26,9 @@ from ..backends.cuda_memory import (
     defragment_memory, analyze_memory_fragmentation,
     get_fragmentation_stats, set_memory_config
 )
+
+# Import AMP (Automatic Mixed Precision) module for mixed precision training
+from . import amp
 
 # CUDA initialization state
 _cuda_initialized = False
@@ -73,24 +76,39 @@ def current_device() -> int:
 
 def set_device(device: int) -> None:
     """Set the current CUDA device."""
-    # Initialize CUDA if not already done
-    cuda.cuInit(0)
-    
+    # Initialize CUDA if not already done (thread-safe)
+    if not _ensure_cuda_initialized():
+        raise RuntimeError("CUDA is not available")
+
+    # Validate device index
+    num_devices = device_count()
+    if device < 0 or device >= num_devices:
+        raise RuntimeError(f"Invalid device {device}, available devices: 0-{num_devices-1}")
+
     # Get device handle
     dev_result = cuda.cuDeviceGet(device)
     if dev_result[0] != cuda.CUresult.CUDA_SUCCESS:
-        raise RuntimeError(f"Failed to get CUDA device {device}")
+        raise RuntimeError(f"Failed to get CUDA device {device}: {dev_result[0]}")
     dev = dev_result[1]
-    
+
+    # Check if there's already a current context
+    ctx_check = cuda.cuCtxGetCurrent()
+    if ctx_check[0] == cuda.CUresult.CUDA_SUCCESS and ctx_check[1] is not None:
+        # Context exists, check if it's for the right device
+        dev_check = cuda.cuCtxGetDevice()
+        if dev_check[0] == cuda.CUresult.CUDA_SUCCESS and dev_check[1] == device:
+            # Already on the correct device
+            return
+
     # Get primary context and set it as current
     ctx_result = cuda.cuDevicePrimaryCtxRetain(dev)
     if ctx_result[0] != cuda.CUresult.CUDA_SUCCESS:
-        raise RuntimeError(f"Failed to retain primary context for device {device}")
+        raise RuntimeError(f"Failed to retain primary context for device {device}: {ctx_result[0]}")
     ctx = ctx_result[1]
-    
+
     set_result = cuda.cuCtxSetCurrent(ctx)
-    if set_result != cuda.CUresult.CUDA_SUCCESS:
-        raise RuntimeError(f"Failed to set CUDA device {device}")
+    if set_result[0] != cuda.CUresult.CUDA_SUCCESS:
+        raise RuntimeError(f"Failed to set CUDA device {device}: {set_result[0]}")
 
 
 def get_device_name(device: Optional[int] = None) -> str:

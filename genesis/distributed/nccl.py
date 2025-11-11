@@ -230,12 +230,11 @@ def genesis_reduce_op_to_nccl(op) -> int:
 
 def get_tensor_ptr(tensor: genesis.Tensor) -> ctypes.c_void_p:
     """Get ctypes pointer from Genesis tensor."""
-    if hasattr(tensor.data, 'ptr'):
-        # GPU tensor
-        return ctypes.c_void_p(tensor.data.ptr)
-    else:
-        # CPU tensor - this shouldn't happen in NCCL context
-        raise ValueError("NCCL requires GPU tensors")
+    # Use data_ptr() method to get pointer
+    ptr = tensor.data_ptr()
+    if ptr is None or ptr == 0:
+        raise ValueError(f"NCCL requires GPU tensors, but got tensor on device: {tensor.storage.device}")
+    return ctypes.c_void_p(ptr)
 
 
 def check_nccl_result(result: int, operation: str = "NCCL operation"):
@@ -318,13 +317,13 @@ class NCCLCommunicator:
         """Perform all-reduce operation."""
         if not self.initialized:
             raise RuntimeError("Communicator not initialized")
-            
+
         nccl_lib = get_nccl_library()
-        
+
         ptr = get_tensor_ptr(tensor)
         dtype = genesis_dtype_to_nccl(tensor.dtype)
-        count = tensor.data.size
-        
+        count = tensor.numel()  # Get total element count
+
         result = nccl_lib.ncclAllReduce(
             ptr,                           # sendbuff
             ptr,                           # recvbuff (in-place)
@@ -334,8 +333,31 @@ class NCCLCommunicator:
             self.comm,                     # comm
             ctypes.c_void_p(stream)        # stream
         )
-        
+
         check_nccl_result(result, "ncclAllReduce")
+
+    def broadcast(self, tensor: genesis.Tensor, root: int, stream: int = 0):
+        """Perform broadcast operation using native NCCL."""
+        if not self.initialized:
+            raise RuntimeError("Communicator not initialized")
+
+        nccl_lib = get_nccl_library()
+
+        ptr = get_tensor_ptr(tensor)
+        dtype = genesis_dtype_to_nccl(tensor.dtype)
+        count = tensor.numel()
+
+        result = nccl_lib.ncclBroadcast(
+            ptr,                           # sendbuff
+            ptr,                           # recvbuff (in-place)
+            count,                         # count
+            dtype,                         # datatype
+            root,                          # root rank
+            self.comm,                     # comm
+            ctypes.c_void_p(stream)        # stream
+        )
+
+        check_nccl_result(result, "ncclBroadcast")
 
 
 def generate_unique_id() -> ncclUniqueId:

@@ -27,6 +27,36 @@ atol = 1e-5
 rtol = 1e-5
 
 
+@pytest.fixture
+def cleanup_distributed():
+    """Clean up distributed state before each test to ensure isolation.
+
+    This fixture is specifically for distributed tests that may leave
+    process groups or CUDA state that interferes with subsequent tests.
+    """
+    import gc
+
+    # Run before test - aggressive cleanup
+    if genesis.cuda.is_available():
+        # Ensure any previous process group is destroyed
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        gc.collect()
+        genesis.cuda.empty_cache()
+        genesis.cuda.synchronize()
+
+    yield
+
+    # Run after test - aggressive cleanup
+    if genesis.cuda.is_available():
+        # Ensure process group is destroyed
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        gc.collect()
+        genesis.cuda.empty_cache()
+        genesis.cuda.synchronize()
+
+
 def test_import_structure():
     """Test that distributed module imports work correctly."""
     # Test basic imports
@@ -54,7 +84,7 @@ def test_nccl_availability():
 
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cuda"])
-def test_single_process_init(device):
+def test_single_process_init(device, cleanup_distributed):
     """Test single process initialization and cleanup.
     
     Args:
@@ -85,7 +115,7 @@ def test_single_process_init(device):
 
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cuda"])
-def test_collective_ops_single_process(device):
+def test_collective_ops_single_process(device, cleanup_distributed):
     """Test collective communication operations in single process.
     
     Args:
@@ -133,8 +163,8 @@ def test_collective_ops_single_process(device):
             raise
 
 
-@pytest.mark.parametrize("device", _DEVICES, ids=["cuda"])  
-def test_all_gather_single_process(device):
+@pytest.mark.parametrize("device", _DEVICES, ids=["cuda"])
+def test_all_gather_single_process(device, cleanup_distributed):
     """Test all_gather operation in single process.
     
     Args:
@@ -168,7 +198,7 @@ def test_all_gather_single_process(device):
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cuda"])
 @pytest.mark.parametrize("model_size", [(10, 5), (64, 32), (128, 64)])
-def test_ddp_single_process(model_size, device):
+def test_ddp_single_process(model_size, device, cleanup_distributed):
     """Test DistributedDataParallel wrapper in single process.
     
     Args:
@@ -191,7 +221,10 @@ def test_ddp_single_process(model_size, device):
             genesis.nn.ReLU(),
             genesis.nn.Linear(output_size, 1)
         ])
-        
+
+        # Move model to device BEFORE wrapping with DDP (standard PyTorch DDP behavior)
+        model = model.to(device)
+
         # Test DDP wrapper creation
         ddp_model = dist.DistributedDataParallel(model, device_ids=[device.index])
         assert isinstance(ddp_model, dist.DistributedDataParallel)
@@ -237,7 +270,7 @@ def test_ddp_single_process(model_size, device):
 
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cuda"])
-def test_ddp_gradient_synchronization(device):
+def test_ddp_gradient_synchronization(device, cleanup_distributed):
     """Test gradient synchronization in DDP.
     
     Args:
@@ -253,6 +286,10 @@ def test_ddp_gradient_synchronization(device):
         
         # Create simple model with known parameters
         model = genesis.nn.Linear(4, 1)
+
+        # Move model to device BEFORE wrapping with DDP (standard PyTorch DDP behavior)
+        model = model.to(device)
+
         ddp_model = dist.DistributedDataParallel(model, device_ids=[device.index])
         
         # Create deterministic input and target
@@ -281,7 +318,7 @@ def test_ddp_gradient_synchronization(device):
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cuda"])
 @pytest.mark.parametrize("dtype", [genesis.float32, genesis.float16])
-def test_reduce_operations_dtypes(device, dtype):
+def test_reduce_operations_dtypes(device, dtype, cleanup_distributed):
     """Test reduce operations with different data types.
     
     Args:

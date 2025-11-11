@@ -1,8 +1,8 @@
 """
 Genesis Distributed Training Module
 
-A PyTorch-independent distributed training framework using NCCL for GPU communication.
-Provides high-performance multi-GPU and multi-node training capabilities.
+A high-performance distributed training framework using NCCL for GPU communication.
+Provides scalable multi-GPU and multi-node training capabilities.
 """
 
 from .process_group import (

@@ -91,16 +91,18 @@ class NCCLBackend:
         print("NCCL: Destroyed")
         
     def barrier(self):
-        """Synchronization barrier."""
+        """Synchronization barrier (standard API)."""
         if not self.initialized:
             raise RuntimeError("Backend not initialized")
-            
+
         if self.communicator is None:
             # Single process - no-op
             return
-            
+
         # Use all_reduce on dummy data as barrier
-        dummy = genesis.ones([1], dtype=genesis.float32, device=genesis.device('cuda'))
+        # Use current rank's GPU device
+        device = genesis.device(f'cuda:{self.local_rank}')
+        dummy = genesis.ones([1], dtype=genesis.float32, device=device)
         self.all_reduce(dummy, ReduceOp.SUM)
         
     def all_reduce(self, tensor: genesis.Tensor, op: ReduceOp, async_op: bool = False):
@@ -141,61 +143,61 @@ class NCCLBackend:
         # A full implementation would use ncclAllGather directly
         for i in range(self.world_size):
             if i == self.rank:
-                # Copy own tensor to output list
-                tensor_list[i].data = tensor.data.clone()
+                # Copy own tensor to output list (standard API)
+                tensor_list[i].copy_(tensor)
             else:
                 # Broadcast from rank i to current rank
-                tensor_list[i].data = tensor.data.clone()  # Initialize with same shape
+                tensor_list[i].copy_(tensor)  # Initialize with same shape
                 self.broadcast(tensor_list[i], i, async_op)
                 
         return None
         
     def broadcast(self, tensor: genesis.Tensor, src: int, async_op: bool = False):
-        """Perform broadcast operation."""
+        """Perform broadcast operation using native NCCL broadcast."""
         if not self.initialized:
             raise RuntimeError("Backend not initialized")
-            
+
         if self.communicator is None:
             # Single process - no-op
             return None
-            
-        # Use NCCL broadcast (would need to implement in nccl_native.py)
-        # For now, use all_reduce with special handling
-        if self.rank != src:
-            # Zero out tensor on non-source ranks
-            tensor.data = tensor.data * 0
-            
-        # All-reduce will sum, so only source has non-zero values
-        self.all_reduce(tensor, ReduceOp.SUM, async_op)
-        
+
+        # Get CUDA stream for async operation
+        stream_ptr = 0  # Use default stream
+        if async_op:
+            # Could create custom stream here for async operations
+            pass
+
+        # Use native NCCL broadcast (efficient, single operation)
+        self.communicator.broadcast(tensor, src, stream_ptr)
+
         return None
         
-    def reduce_scatter(self, output: genesis.Tensor, input_list: List[genesis.Tensor], 
+    def reduce_scatter(self, output: genesis.Tensor, input_list: List[genesis.Tensor],
                       op: ReduceOp, async_op: bool = False):
         """Perform reduce_scatter operation."""
         if not self.initialized:
             raise RuntimeError("Backend not initialized")
-            
+
         if self.communicator is None:
-            # Single process - just copy first input to output
+            # Single process - just copy first input to output (standard API)
             if input_list:
-                output.data = input_list[0].data.clone()
+                output.copy_(input_list[0])
             return None
-            
+
         # Simplified implementation: concatenate inputs, reduce, then slice
         if input_list:
             # Concatenate all inputs
             concat_tensor = genesis.cat(input_list, dim=0)
-            
+
             # All-reduce the concatenated tensor
             self.all_reduce(concat_tensor, op, async_op)
-            
-            # Extract the portion for current rank
-            chunk_size = output.data.size
+
+            # Extract the portion for current rank (standard API)
+            chunk_size = output.numel()
             start_idx = self.rank * chunk_size
             end_idx = start_idx + chunk_size
-            
-            output.data = concat_tensor.data[start_idx:end_idx].clone()
+
+            output.copy_(concat_tensor[start_idx:end_idx])
             
         return None
         

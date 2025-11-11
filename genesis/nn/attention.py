@@ -7,6 +7,7 @@ from ..function import Function
 from ..tensor import Tensor
 from genesis import init
 import genesis
+from genesis.cuda.amp import AMPPolicy
 
 import triton
 import triton.language as tl
@@ -405,6 +406,9 @@ def _attn_bwd(
 
 
 class FusedAttention(Function):
+    """Fused multi-head attention with Triton."""
+    amp_policy = AMPPolicy.FP16  # Tensor Core accelerated
+
     @staticmethod
     def forward(ctx, qq, kk, vv):
         # shape constraints
@@ -425,7 +429,7 @@ class FusedAttention(Function):
         HEAD_DIM_V = v.shape[-1]
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
         assert HEAD_DIM_K in {4, 8, 16, 32, 64, 128, 256}
-        # Use Genesis tensors instead of PyTorch
+        # Create output tensor with same shape as input
         o = genesis.empty_like(qq)
         stage = 3 if causal else 1
         extra_kern_args = {}
@@ -476,7 +480,7 @@ class FusedAttention(Function):
         if not M.is_contiguous():
             M = M.contiguous()
 
-        # Use Genesis tensors instead of PyTorch
+        # Initialize gradient tensors
         dq = genesis.zeros(q.shape, dtype=genesis.float32, device=device)
         dk = genesis.zeros(k.shape, dtype=genesis.float32, device=device)
         dv = genesis.zeros(v.shape, dtype=genesis.float32, device=device)

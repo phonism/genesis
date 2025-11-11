@@ -117,9 +117,10 @@ def is_initialized() -> bool:
 def barrier():
     """
     Synchronize all processes.
-    
+
     This collective blocks processes until the whole group reaches this point.
     """
     if not _initialized:
         raise RuntimeError("Process group not initialized")
+
     _backend_instance.barrier()

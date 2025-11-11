@@ -56,14 +56,17 @@ class CrossEntropyLoss(Module):
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         """
         Forward pass of cross-entropy loss.
-        
+
         Args:
             input: Predicted logits of shape (N, C) where N is batch size, C is num classes
             target: Ground truth class indices of shape (N,)
-            
+
         Returns:
             Scalar loss tensor
         """
+        # Note: log_softmax will handle FP32 conversion internally with gradient support
+        # No need to manually convert here
+
         # Handle ignored indices
         if self.ignore_index != -100:
             mask = (target != self.ignore_index)
@@ -71,32 +74,37 @@ class CrossEntropyLoss(Module):
             target = target[mask]
             if input.shape[0] == 0:
                 return genesis.tensor(0.0, device=input.device, dtype=input.dtype)
-        
-        # Compute log-softmax for numerical stability
+
+        # Compute log-softmax for numerical stability (auto FP32 in AMP mode)
         log_prob = F.log_softmax(input, dim=1)
-        
-        # Create one-hot encoding for target
+
+        # Create one-hot encoding matching log_prob dtype
         num_classes = input.shape[1]
-        target_one_hot = init.one_hot(num_classes, target, dtype=input.dtype, device=input.device)
-        
+        target_one_hot = init.one_hot(num_classes, target, dtype=log_prob.dtype, device=input.device)
+
         # Compute negative log-likelihood
-        nll = -F.summation(log_prob * target_one_hot, axis=1)
-        
+        mul_result = log_prob * target_one_hot
+        sum_result = F.summation(mul_result, axis=1)
+        nll = -sum_result
+
         # Apply class weights if provided
         if self.weight is not None:
             # Apply weight for each sample based on its class
             class_weights = self.weight[target]
             nll = nll * class_weights
-        
+
         # Apply reduction
         if self.reduction == "none":
-            return nll
+            loss = nll
         elif self.reduction == "sum":
-            return F.summation(nll)
+            loss = F.summation(nll)
         elif self.reduction == "mean":
-            return F.summation(nll) / nll.shape[0]
+            loss = F.summation(nll) / nll.shape[0]
         else:
             raise ValueError(f"Invalid reduction mode: {self.reduction}")
+
+        # Keep loss in FP32 for gradient scaling (standard practice in AMP)
+        return loss
 
 
 class MSELoss(Module):

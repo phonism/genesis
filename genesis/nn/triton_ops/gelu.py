@@ -2,6 +2,7 @@
 
 from ...function import Function
 from ...tensor import Tensor
+from ...cuda.amp import AMPPolicy
 
 import genesis
 import triton
@@ -138,6 +139,9 @@ def _gelu_backward(x_ptr, dy_ptr, dx_ptr, size, BLOCK_SIZE: tl.constexpr):
 
 
 class GELUFunction(Function):
+    """GELU activation function optimized with Triton."""
+    amp_policy = AMPPolicy.FP16  # Fast activation, stable in FP16
+
     @staticmethod
     def forward(ctx, x):
         """

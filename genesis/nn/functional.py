@@ -4,13 +4,50 @@ from functools import reduce as functools_reduce
 import operator
 from numbers import Number
 from typing import Optional, List
-from ..function import Function
+from ..function import Function, cast_to_fp32, cast_to_fp16
 from genesis.tensor import Tensor
 import genesis
 from genesis import init
 import math
 # Import new dispatcher system
 from genesis.ops import OperationDispatcher, DeviceType
+# Import AMP policy for operation classification
+from genesis.cuda.amp import AMPPolicy
+
+
+# ============================================================================
+# Type Casting with Gradient Support
+# ============================================================================
+
+class CastFP32(Function):
+    """Cast tensor to FP32 with gradient support."""
+
+    amp_policy = AMPPolicy.PRESERVE  # Already handling dtype explicitly
+
+    @staticmethod
+    def forward(ctx, x):
+        ctx.original_dtype = x.dtype
+        if x.dtype == genesis.float32:
+            return x
+        # Direct storage conversion
+        new_storage = x.storage.to_dtype(genesis.float32)
+        result = Tensor(new_storage, x.shape, x._stride, x.offset)
+        result.requires_grad = x.requires_grad
+        return result
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Cast gradient back to original dtype
+        if grad_output.dtype == ctx.original_dtype:
+            return (grad_output,)
+        new_storage = grad_output.storage.to_dtype(ctx.original_dtype)
+        grad_input = Tensor(new_storage, grad_output.shape, grad_output._stride, grad_output.offset)
+        return (grad_input,)
+
+
+def cast_fp32(x):
+    """Cast tensor to FP32 with gradient support."""
+    return CastFP32.apply(x)
 try:
     # import fused ops
     from .layer_norm import (
@@ -31,6 +68,9 @@ def sum_to_shape(data, shape):
     return OperationDispatcher.dispatch("sum_to_shape", data, shape)
 
 class EWiseAdd(Function):
+    """Element-wise addition with automatic dtype promotion."""
+    # Uses default PROMOTE policy for safe mixed-dtype handling
+
     @staticmethod
     def forward(ctx, a, b):
         # OPTIMIZATION: Only save shapes, not tensors! Backward only needs shapes for broadcasting
@@ -93,11 +133,11 @@ def add_inplace(a, b):
         a (same object, modified in-place)
     """
     # Check if this is a leaf variable that requires grad
-    # BUT allow it if we're in no_grad context (matches PyTorch behavior)
+    # Allow it only in no_grad context for safety
     if hasattr(a, 'is_leaf') and a.is_leaf and a.requires_grad and genesis.is_grad_enabled():
         raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
 
-    # Handle non-contiguous tensors like PyTorch does
+    # Handle non-contiguous tensors properly
     if not a.is_contiguous():
         # For non-contiguous tensors, compute result and copy back
         result = add(a, b)  # Regular add creates contiguous result
@@ -120,7 +160,7 @@ def sub_inplace(a, b):
         a (same object, modified in-place)
     """
     # Check if this is a leaf variable that requires grad
-    # BUT allow it if we're in no_grad context (matches PyTorch behavior)
+    # Allow it only in no_grad context for safety
     if hasattr(a, 'is_leaf') and a.is_leaf and a.requires_grad and genesis.is_grad_enabled():
         raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
 
@@ -145,7 +185,7 @@ def mul_inplace(a, b):
         a (same object, modified in-place)
     """
     # Check if this is a leaf variable that requires grad
-    # BUT allow it if we're in no_grad context (matches PyTorch behavior)
+    # Allow it only in no_grad context for safety
     if hasattr(a, 'is_leaf') and a.is_leaf and a.requires_grad and genesis.is_grad_enabled():
         raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
 
@@ -158,6 +198,9 @@ def mul_inplace(a, b):
         return OperationDispatcher.dispatch_inplace("mul", a, b)
 
 class EWiseSub(Function):
+    """Element-wise subtraction with automatic dtype promotion."""
+    # Uses default PROMOTE policy for safe mixed-dtype handling
+
     @staticmethod
     def forward(ctx, a, b):
         # OPTIMIZATION: Only save shapes, not tensors! Backward only needs shapes for broadcasting
@@ -205,6 +248,8 @@ def sub(a, b):
 
 
 class AddScalar(Function):
+    amp_policy = AMPPolicy.PRESERVE
+
     @staticmethod
     def forward(ctx, a, scalar):
         # OPTIMIZATION: Don't save anything! Backward doesn't need a or scalar
@@ -224,6 +269,8 @@ def add_scalar(a, scalar):
 
 
 class SubScalar(Function):
+    amp_policy = AMPPolicy.PRESERVE
+
     @staticmethod
     def forward(ctx, a, scalar, reverse=False):
         # OPTIMIZATION: Don't save anything! Backward doesn't need a or scalar
@@ -274,13 +321,22 @@ def negate(a):
     return Negate.apply(a)
 
 def neg(a):
-    """Alias for negate function - PyTorch compatibility."""
+    """Alias for negate function."""
     return negate(a)
 
 
 class EWiseMul(Function):
+    """Element-wise multiplication with automatic dtype promotion."""
+    # Uses default PROMOTE policy for safe mixed-dtype handling
+
     @staticmethod
     def forward(ctx, a, b):
+        # Debug: print dtype mismatch
+        if not hasattr(EWiseMul, '_debug_printed') and hasattr(a, 'dtype') and hasattr(b, 'dtype'):
+            if a.dtype != b.dtype:
+                print(f"[DEBUG EWiseMul] dtype mismatch: a={a.dtype}, b={b.dtype}, autocast={genesis.enable_autocast}")
+            EWiseMul._debug_printed = True
+
         ctx.save_for_backward(a, b)
         requires_grad = a.requires_grad or b.requires_grad
         # Use new dispatcher system - pass tensors, get tensor back
@@ -320,6 +376,8 @@ def div(a, b):
 
 
 class MulScalar(Function):
+    amp_policy = AMPPolicy.PRESERVE
+
     @staticmethod
     def forward(ctx, a, scalar):
         # OPTIMIZATION: Only save scalar, don't save a! Saves 6.1GB for large models
@@ -343,6 +401,9 @@ def mul_scalar(a, scalar):
 
 
 class EWiseDiv(Function):
+    """Element-wise division with automatic dtype promotion."""
+    # Uses default PROMOTE policy for safe mixed-dtype handling
+
     @staticmethod
     def forward(ctx, a, b):
         ctx.save_for_backward(a, b)
@@ -393,6 +454,8 @@ def floordiv(a, b):
     return result.to(genesis.int64)
 
 class DivScalar(Function):
+    amp_policy = AMPPolicy.PRESERVE  # Preserve input dtype
+
     @staticmethod
     def forward(ctx, a, scalar, reverse=False):
         # OPTIMIZATION: For normal division, only save scalar (not a)
@@ -432,6 +495,9 @@ def divide_scalar(a, scalar, reverse=False):
     return DivScalar.apply(a, scalar, reverse=reverse)
 
 class PowScalar(Function):
+    """Raise tensor to scalar power."""
+    amp_policy = AMPPolicy.FP32  # Numerical sensitivity in power operation
+
     @staticmethod
     def forward(ctx, a, scalar, reverse=False):
         ctx.save_for_backward(a, scalar)
@@ -543,6 +609,10 @@ def cos(a):
 
 
 class Log(Function):
+    """Logarithm operation requiring FP32 for numerical stability."""
+
+    amp_policy = AMPPolicy.FP32  # Requires FP32 for numerical stability
+
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
@@ -572,6 +642,10 @@ def log(a):
 
 
 class Exp(Function):
+    """Exponential operation requiring FP32 for numerical stability."""
+
+    amp_policy = AMPPolicy.FP32  # Requires FP32 for numerical stability
+
     @staticmethod
     def forward(ctx, a):
         # Use new dispatcher system - pass tensor, get tensor back
@@ -600,6 +674,9 @@ def exp(a):
     return Exp.apply(a)
 
 class Sqrt(Function):
+    """Square root operation."""
+    amp_policy = AMPPolicy.FP32  # Gradient instability near zero
+
     @staticmethod
     def forward(ctx, a):
         # Use new dispatcher system - pass tensor, get tensor back
@@ -783,6 +860,9 @@ def argmin(a, dim=None, keepdim=False):
     return Argmin.apply(a, dim, keepdim)
 
 class Permute(Function):
+    """Permute tensor dimensions."""
+    amp_policy = AMPPolicy.PRESERVE  # Axis permutation, no computation
+
     @staticmethod
     def forward(ctx, a, dims):
         """Permute the dimensions of the input tensor."""
@@ -810,6 +890,9 @@ def permute(a, dims):
     return Permute.apply(a, dims)
 
 class Gather(Function):
+    """Gather values along dimension using indices."""
+    amp_policy = AMPPolicy.PRESERVE  # Index selection, no computation
+
     @staticmethod
     def forward(ctx, input, dim, index):
         """Gather values along dimension using indices."""
@@ -847,6 +930,9 @@ class Gather(Function):
         return tuple(grads)
 
 class Scatter(Function):
+    """Scatter values into tensor at indices."""
+    amp_policy = AMPPolicy.PRESERVE  # Index assignment, no computation
+
     @staticmethod
     def forward(ctx, input, dim, index, src):
         """Scatter values from src along dimension using indices."""
@@ -898,6 +984,9 @@ def scatter(input, dim, index, src):
     return Scatter.apply(input, dim, index, src)
 
 class Transpose(Function):
+    """Transpose tensor dimensions."""
+    amp_policy = AMPPolicy.PRESERVE  # Axis permutation, no computation
+
     @staticmethod
     def forward(ctx, a, axis=None):
         # OPTIMIZATION: Don't save tensor! Backward only needs axis to transpose back
@@ -924,9 +1013,9 @@ class Transpose(Function):
 def transpose(a, dim0=None, dim1=None, axis=None):
     """Transpose dimensions of a tensor.
 
-    PyTorch-compatible transpose API. Can be called in two ways:
-    1. transpose(x, dim0, dim1) - PyTorch style
-    2. transpose(x, axis=(dim0, dim1)) - Original style
+    Flexible transpose API. Can be called in multiple ways:
+    1. transpose(x, dim0, dim1) - Two separate dimension arguments
+    2. transpose(x, axis=(dim0, dim1)) - Tuple of dimensions
 
     Args:
         a: Input tensor
@@ -940,7 +1029,7 @@ def transpose(a, dim0=None, dim1=None, axis=None):
     # Handle tuple passed as second argument: transpose(x, (0, 1))
     if isinstance(dim0, (tuple, list)) and dim1 is None and axis is None:
         axis = tuple(dim0)
-    # Support PyTorch-style: transpose(x, dim0, dim1)
+    # Support standard style: transpose(x, dim0, dim1)
     elif dim0 is not None and dim1 is not None:
         axis = (dim0, dim1)
     # Support original style: transpose(x, axis=(dim0, dim1))
@@ -952,7 +1041,7 @@ def transpose(a, dim0=None, dim1=None, axis=None):
 
 def t(a):
     """
-    Transpose a 2D tensor (PyTorch compatible).
+    Transpose a 2D tensor.
 
     Args:
         a: 2D tensor to transpose
@@ -969,6 +1058,9 @@ def t(a):
 
 
 class Reshape(Function):
+    """Reshape tensor to new shape."""
+    amp_policy = AMPPolicy.PRESERVE  # Shape change only, no computation
+
     @staticmethod
     def forward(ctx, a, shape):
         # OPTIMIZATION: Only save original shape, not full tensor!
@@ -985,7 +1077,7 @@ class Reshape(Function):
         return (grad,)
 
 def reshape(a, *shape):
-    """Reshape tensor to new shape - PyTorch compatible API.
+    """Reshape tensor to new shape with flexible API.
 
     Args:
         a: Input tensor
@@ -996,7 +1088,7 @@ def reshape(a, *shape):
         reshape(tensor, (3, 4))    # Tuple argument
         reshape(tensor, -1)        # Single dimension
     """
-    # Handle different argument patterns like PyTorch
+    # Handle different argument patterns flexibly
     if len(shape) == 1:
         # Single argument - could be tuple, list, or single int
         if isinstance(shape[0], (tuple, list)):
@@ -1008,6 +1100,33 @@ def reshape(a, *shape):
         new_shape = shape
 
     return Reshape.apply(a, new_shape)
+
+class Contiguous(Function):
+    """Make tensor contiguous with gradient support."""
+    amp_policy = AMPPolicy.PRESERVE  # No computation, just memory layout change
+
+    @staticmethod
+    def forward(ctx, a):
+        # Check if already contiguous
+        if a.is_contiguous():
+            # Return as-is (Function.apply will handle gradient tracking)
+            return a
+
+        # Make contiguous using storage-level operation
+        contig_storage = a.storage.contiguous(a.shape, a.stride, a.offset)
+        # Create new tensor with contiguous storage
+        result = Tensor(contig_storage, a.shape, stride=None, offset=0)
+        result.requires_grad = a.requires_grad
+        return result
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        # Gradient passes through unchanged (contiguous is just memory layout)
+        return (out_grad,)
+
+def contiguous(a):
+    """Make tensor contiguous in memory layout."""
+    return Contiguous.apply(a)
 
 class Expand(Function):
     @staticmethod
@@ -1029,7 +1148,7 @@ class Expand(Function):
         return (grad_input,)
 
 def expand(a, *shape):
-    # Handle both expand(tensor, (2, 3, 4)) and expand(tensor, 2, 3, 4) like PyTorch
+    # Handle both expand(tensor, (2, 3, 4)) and expand(tensor, 2, 3, 4) flexibly
     if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
         shape = shape[0]
     elif len(shape) > 1:
@@ -1040,6 +1159,9 @@ def expand(a, *shape):
 
 
 class View(Function):
+    """View tensor with new shape."""
+    amp_policy = AMPPolicy.PRESERVE  # View operation, no computation
+
     @staticmethod
     def forward(ctx, a, shape):
         ctx.save_for_backward(a)
@@ -1062,6 +1184,9 @@ def view(a, *shape):
     return Reshape.apply(a, shape)
 
 class Flatten(Function):
+    """Flatten tensor dimensions."""
+    amp_policy = AMPPolicy.PRESERVE  # Shape change only, no computation
+
     @staticmethod
     def forward(ctx, a, start_dim=0, end_dim=None):
         ctx.original_shape = a.shape
@@ -1240,6 +1365,10 @@ def broadcast_to(a, shape):
 
 
 class Summation(Function):
+    """Summation operation requiring FP32 for accumulation accuracy."""
+
+    amp_policy = AMPPolicy.FP32  # Requires FP32 for accurate accumulation
+
     @staticmethod
     def forward(ctx, a, axis=None, keepdims=False):
         if isinstance(axis, int):
@@ -1248,8 +1377,10 @@ class Summation(Function):
         ctx.input_shape = a.shape
         ctx.axis = axis
         ctx.keepdims = keepdims
+        # Save original dtype for backward pass
+        ctx.original_dtype = a.dtype
 
-        # For bool tensors, sum should return int64 (like PyTorch)
+        # For bool tensors, sum should return int64 for standard behavior
         result_dtype = genesis.int64 if a.dtype == genesis.bool else a.dtype
 
         # Get the sum result using dispatcher
@@ -1269,6 +1400,8 @@ class Summation(Function):
         input_shape = ctx.input_shape
         axis = ctx.axis
         keepdims = ctx.keepdims
+        original_dtype = ctx.original_dtype
+
         if axis is None:
             axis = input_shape
         grad_shape = list(out_grad.shape)
@@ -1286,6 +1419,12 @@ class Summation(Function):
         reshaped_grad = OperationDispatcher.dispatch("reshape", out_grad, new_shape=grad_shape)
         # Broadcast to original input shape
         grad = OperationDispatcher.dispatch("broadcast_to", reshaped_grad, new_shape=input_shape)
+
+        # Convert gradient back to original input dtype for precision consistency
+        # This ensures FP16 gradients even if sum output was FP32
+        if grad.dtype != original_dtype and original_dtype in (genesis.float16, genesis.float32):
+            grad = grad.to_dtype(original_dtype)
+
         grad.requires_grad = False
         return (grad, )
 
@@ -1296,6 +1435,9 @@ def sum(a, axis=None, keepdims=False):
     return Summation.apply(a, axis=axis, keepdims=keepdims)
 
 class Mean(Function):
+    """Mean reduction operation."""
+    amp_policy = AMPPolicy.FP32  # Accumulation + division sensitive
+
     @staticmethod
     def forward(ctx, a, axis=None, keepdims=False):
         """
@@ -1318,7 +1460,7 @@ class Mean(Function):
             normalized_axis = tuple(ax if ax >= 0 else ax + ndim for ax in axis)
             ctx.num_elements = functools_reduce(operator.mul, [shape[ax] for ax in normalized_axis], 1)
         
-        # Use sum + divide approach directly with dispatcher (like PyTorch)
+        # Use sum + divide approach directly with dispatcher for numerical stability
         sum_result = OperationDispatcher.dispatch("sum", a, axis=axis, keepdims=keepdims)
         output = OperationDispatcher.dispatch("truediv", sum_result, ctx.num_elements)
         output.requires_grad = a.requires_grad
@@ -1428,8 +1570,17 @@ def std(a, axis=None, keepdims=False, unbiased=True):
     return OperationDispatcher.dispatch("sqrt", variance)
 
 class Matmul(Function):
+    """Matrix multiplication operation with Tensor Core acceleration support."""
+
+    amp_policy = AMPPolicy.FP16  # Use FP16 for Tensor Core acceleration
+
     @staticmethod
     def forward(ctx, a, b):
+        """Forward pass of matmul operation.
+
+        Note: Dtype conversion for AMP is handled by Function.apply's cached_cast
+        mechanism. Do NOT manually convert dtypes here, as it bypasses the cache.
+        """
         ctx.save_for_backward(a, b)
         requires_grad = a.requires_grad or b.requires_grad
         # Use new dispatcher system - pass tensors, get tensor back
@@ -1439,7 +1590,18 @@ class Matmul(Function):
 
     @staticmethod
     def backward(ctx, out_grad: Tensor):
+        """Backward pass of matmul operation.
+
+        Note: Dtype conversion for AMP is handled by Function.apply. The saved
+        tensors (a, b) will already be in the correct dtype from forward pass.
+        """
         a, b = ctx.saved_tensors
+
+        # Ensure dtype consistency for backward pass
+        # If out_grad dtype differs from saved tensors, convert to match
+        if out_grad.dtype != a.dtype:
+            out_grad = out_grad.to_dtype(a.dtype)
+
         # Use dispatcher for transpose and matmul operations
         b_transposed = OperationDispatcher.dispatch("transpose", b, -1, -2)
         a_grad = OperationDispatcher.dispatch("matmul", out_grad, b_transposed)
@@ -1447,8 +1609,7 @@ class Matmul(Function):
         a_transposed = OperationDispatcher.dispatch("transpose", a, -1, -2)
         b_grad = OperationDispatcher.dispatch("matmul", a_transposed, out_grad)
 
-        # PyTorch returns contiguous gradients from matmul backward
-        # Ensure our gradients are also contiguous to match PyTorch behavior
+        # Ensure gradients are contiguous to maintain memory efficiency
         # and avoid issues with downstream operations expecting contiguous tensors
         if hasattr(a_grad, 'is_contiguous') and not a_grad.is_contiguous():
             a_grad = a_grad.reshape(a_grad.shape)
@@ -1474,6 +1635,9 @@ def matmul(a, b):
 
 
 class ReLU(Function):
+    """ReLU activation function."""
+    amp_policy = AMPPolicy.FP16  # Simple activation, stable in FP16
+
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
@@ -1518,6 +1682,10 @@ def gelu(x):
 
 
 class LogSumExp(Function):
+    """LogSumExp operation requiring FP32 for numerical stability."""
+
+    amp_policy = AMPPolicy.FP32  # Requires FP32 for numerical stability
+
     @staticmethod
     def forward(ctx, a, axis=None):
         ctx.save_for_backward(a)
@@ -1813,6 +1981,9 @@ def split(a, dim):
     return Split.apply(a, dim=dim)
 
 class Norm(Function):
+    """Norm operation (sqrt of sum of squares)."""
+    amp_policy = AMPPolicy.FP32  # Sqrt of sum of squares sensitive
+
     @staticmethod
     def forward(ctx, a):
         ctx.save_for_backward(a)
@@ -1830,6 +2001,8 @@ class Sigmoid(Function):
     """
     Sigmoid activation function: 1 / (1 + exp(-x))
     """
+    amp_policy = AMPPolicy.FP32  # Can saturate in FP16
+
     @staticmethod
     def forward(ctx, a):
         # sigmoid(x) = 1 / (1 + exp(-x))
@@ -1860,6 +2033,8 @@ class Tanh(Function):
     """
     Tanh activation function
     """
+    amp_policy = AMPPolicy.FP32  # Can saturate in FP16
+
     @staticmethod
     def forward(ctx, a):
         # tanh(x) = (exp(x) - exp(-x)) / (exp(x) + exp(-x))
@@ -1890,6 +2065,9 @@ def tanh(a):
 
 
 class ScatterAddFunction(Function):
+    """Scatter and accumulate values into tensor."""
+    amp_policy = AMPPolicy.PRESERVE  # Index-based accumulation
+
     @staticmethod
     def forward(ctx, input, dim, index, src):
         ctx.dim = dim
@@ -1978,19 +2156,40 @@ def one_hot(indices, num_classes):
 def log_softmax(input, dim=-1):
     """
     Log softmax function for numerical stability.
-    
+
     Args:
         input: Input tensor
         dim: Dimension to apply log_softmax along
-        
+
     Returns:
         Log softmax of input
     """
+    # Store original dtype and autocast state
+    original_dtype = input.dtype
+    saved_autocast = genesis.enable_autocast
+
+    # Disable autocast temporarily to force FP32 computation (numerical stability)
+    if saved_autocast:
+        genesis.enable_autocast = False
+
+    # Ensure input is FP32 with gradient support
+    if input.dtype != genesis.float32:
+        input = cast_to_fp32(input)
+
     # Use log-sum-exp trick for numerical stability
     max_vals = max(input, dim, keepdims=True)
     shifted = input - max_vals
     log_sum_exp = log(summation(exp(shifted), axis=dim, keepdims=True))
-    return shifted - log_sum_exp
+    result = shifted - log_sum_exp
+
+    # Restore autocast state
+    genesis.enable_autocast = saved_autocast
+
+    # Convert back to original dtype if in AMP mode (keeps backward in FP16)
+    if saved_autocast and original_dtype == genesis.float16:
+        result = cast_to_fp16(result)
+
+    return result
 
 
 def softmax(input, dim=-1):
@@ -2004,12 +2203,27 @@ def softmax(input, dim=-1):
     Returns:
         Softmax of input
     """
+    # Disable autocast temporarily to force FP32 computation
+    saved_autocast = genesis.enable_autocast
+    if saved_autocast:
+        genesis.enable_autocast = False
+
+    # Ensure input is FP32 with gradient support
+    if input.dtype != genesis.float32:
+        input = cast_to_fp32(input)
+
     # CPU path or Triton disabled: numerically-stable softmax
     if input.device == genesis.device('cpu') or getattr(genesis, 'use_triton', True) is False:
         x_exp = exp(input - max(input, dim, keepdims=True))
-        return x_exp / summation(x_exp, axis=dim, keepdims=True)
-    # GPU Triton path
-    return triton_softmax(input, dim)
+        result = x_exp / summation(x_exp, axis=dim, keepdims=True)
+    else:
+        # GPU Triton path
+        result = triton_softmax(input, dim)
+
+    # Restore autocast state
+    genesis.enable_autocast = saved_autocast
+
+    return result
 
 
 def maximum(input, other):
@@ -2075,9 +2289,9 @@ def cross_entropy(input, target, weight=None, ignore_index=-100, reduction='mean
 def sparse_cross_entropy(input, target, weight=None, ignore_index=-100, reduction='mean'):
     """
     Efficient sparse cross entropy implementation avoiding one-hot conversion.
-    
+
     This implementation uses sparse indexing to gather log probabilities
-    directly from the log_softmax output, similar to PyTorch's CUDA kernel.
+    directly from the log_softmax output for optimal performance.
     """
     # Flatten input to 2D for easier indexing: (N*..., C)
     original_shape = input.shape

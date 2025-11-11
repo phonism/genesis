@@ -1,5 +1,6 @@
 from ...function import Function
 from ...tensor import Tensor
+from ...cuda.amp import AMPPolicy
 import genesis
 import torch
 import triton
@@ -93,6 +94,9 @@ def _safe_softmax_backward_kernel(
 
 
 class SafeSoftmaxFunction(Function):
+    """Safe softmax with numerical stability."""
+    amp_policy = AMPPolicy.FP32  # Numerical stability critical
+
     @staticmethod
     def forward(ctx, x, dim, dtype):
         assert dim >= -x.ndim and dim < x.ndim, "Invalid dim"
@@ -472,6 +476,9 @@ def _online_softmax_backward_kernel_inner(
             offsets += TILE_N
 
 class OnlineSoftmaxFunction(Function):
+    """Online softmax with streaming computation."""
+    amp_policy = AMPPolicy.FP32  # Numerical stability critical
+
     @staticmethod
     def forward(ctx, x, dim, dtype):
         assert dim >= -x.ndim and dim < x.ndim, "Invalid dim"

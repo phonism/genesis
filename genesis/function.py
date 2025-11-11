@@ -6,6 +6,8 @@ implementing automatic differentiation operations.
 
 import genesis
 from genesis.tensor import Tensor
+from genesis.cuda.amp import AMPPolicy, get_amp_dtype
+from genesis.cuda.amp_cache import get_amp_cache
 from typing import List, Optional, NamedTuple, Tuple, Union, Any
 import weakref
 
@@ -65,6 +67,11 @@ class Context:
 def _cast(value: Any, dtype: 'genesis.DType') -> Any:
     """Cast tensors to target dtype for mixed precision training.
 
+    CRITICAL: Uses Function-based casting with caching optimization!
+    - For leaf tensors (parameters): cache FP16 versions to avoid repeated conversion
+    - For intermediate tensors: use Function-based casting
+    - All paths preserve gradient flow through the computation graph
+
     Args:
         value: Value to cast (tensor, dict, list, tuple, or other)
         dtype: Target data type for casting
@@ -72,14 +79,34 @@ def _cast(value: Any, dtype: 'genesis.DType') -> Any:
     Returns:
         Casted value with same structure but converted tensors
     """
-    if hasattr(value, 'is_floating_point') and value.is_floating_point():
+    if isinstance(value, Tensor) and value.is_floating_point():
+        # Use Function-based casting for FP16 and FP32
         if dtype == genesis.float16:
-            return value.half()
+            # Optimization: cache leaf tensor conversions (parameters)
+            # Intermediate tensors still use Function-based casting
+            if value.is_leaf and value.requires_grad:
+                # Use cache for parameters (with Function-based conversion)
+                cache = get_amp_cache()
+                tensor_id = id(value)
+
+                if tensor_id in cache._cache:
+                    return cache._cache[tensor_id]
+
+                # Convert using Function (preserves gradients)
+                converted = cast_to_fp16(value)
+                cache._cache[tensor_id] = converted
+                return converted
+            else:
+                # Intermediate tensors: always use Function-based casting
+                return cast_to_fp16(value)
+        elif dtype == genesis.float32:
+            # CRITICAL: Use Function-based casting to preserve creator chain!
+            return cast_to_fp32(value)
         else:
-            return value.float()
+            return value.to(dtype)
     elif isinstance(value, dict):
         return {_cast(k, dtype): _cast(v, dtype) for k, v in value.items()}
-    elif isinstance(value, list) or isinstance(value, tuple):
+    elif isinstance(value, (list, tuple)):
         return type(value)(_cast(v, dtype) for v in value)
     else:
         return value
@@ -95,11 +122,11 @@ def check_dtype(value: Any, dtype: 'genesis.DType') -> bool:
     Returns:
         bool: True if value contains tensors of the specified dtype
     """
-    if hasattr(value, 'dtype') and value.dtype == dtype:
+    if isinstance(value, Tensor) and value.dtype == dtype:
         return True
     elif isinstance(value, dict):
         return any(check_dtype(k, dtype) or check_dtype(v, dtype) for k, v in value.items())
-    elif isinstance(value, list) or isinstance(value, tuple):
+    elif isinstance(value, (list, tuple)):
         return any(check_dtype(v, dtype) for v in value)
     else:
         return False
@@ -110,7 +137,28 @@ class Function:
 
     Implements the dual-number automatic differentiation paradigm where
     operations define both forward computation and backward gradient propagation.
+
+    AMP Policy System:
+        Subclasses can declare their AMP behavior by setting the `amp_policy` class attribute:
+        - AMPPolicy.FP16: Cast to FP16 (for Tensor Core ops like matmul)
+        - AMPPolicy.FP32: Cast to FP32 (for numerical stability like softmax)
+        - AMPPolicy.PROMOTE: Promote mixed dtypes to FP32
+        - AMPPolicy.PRESERVE: Preserve input dtype
+        - AMPPolicy.DEFAULT: No special handling (default)
+
+    Example:
+        from genesis.cuda.amp import AMPPolicy
+
+        class MatMul(Function):
+            amp_policy = AMPPolicy.FP16  # Benefit from Tensor Core
+
+            @staticmethod
+            def forward(ctx, a, b):
+                return a @ b
     """
+
+    # Default AMP policy: preserve dtype (no casting)
+    amp_policy = None  # Will use AMPPolicy.DEFAULT
 
     def __init__(self):
         """Initialize Function with empty next_functions and context."""
@@ -146,42 +194,54 @@ class Function:
 
     @classmethod
     def apply(cls, *args, **kwargs):
-        """Apply operation with automatic mixed precision and gradient tracking."""
+        """Apply operation with automatic mixed precision and gradient tracking.
+
+        Implements metadata-driven AMP: each Function subclass declares its
+        amp_policy, and this method applies the appropriate dtype casting.
+        """
         instance = cls()
 
-        # Handle mixed precision casting
-        if hasattr(genesis, 'enable_autocast') and genesis.enable_autocast and hasattr(genesis, 'upgrade') and genesis.upgrade is False:
-            result = cls.forward(
-                    instance.ctx, *_cast(args, genesis.float16), **_cast(kwargs, genesis.float16))
-        else:
-            has_float32 = check_dtype(args, genesis.float32) or check_dtype(kwargs, genesis.float32)
-            has_float16 = check_dtype(args, genesis.float16) or check_dtype(kwargs, genesis.float16)
-            if has_float32 and has_float16:
-                result = cls.forward(instance.ctx, *_cast(args, genesis.float32), **_cast(kwargs, genesis.float32))
-            else:
-                result = cls.forward(instance.ctx, *args, **kwargs)
-        
+        # === AMP Casting Logic ===
+        if genesis.enable_autocast:
+            # Get target dtype based on operation's AMP policy
+            # Default is PROMOTE (safe for mixed dtypes)
+            policy = cls.amp_policy if hasattr(cls, 'amp_policy') and cls.amp_policy is not None else None
+            target_dtype = get_amp_dtype(policy, *args, **kwargs)
+            if target_dtype is not None:
+                args = _cast(args, target_dtype)
+                kwargs = _cast(kwargs, target_dtype)
+
+        # Handle mixed dtypes when autocast is disabled (promote to FP32)
+        elif not genesis.enable_autocast:
+            has_fp32 = check_dtype(args, genesis.float32) or check_dtype(kwargs, genesis.float32)
+            has_fp16 = check_dtype(args, genesis.float16) or check_dtype(kwargs, genesis.float16)
+            if has_fp32 and has_fp16:
+                args = _cast(args, genesis.float32)
+                kwargs = _cast(kwargs, genesis.float32)
+
+        # Execute forward pass
+        result = cls.forward(instance.ctx, *args, **kwargs)
+
         instance.is_tuple_result = isinstance(result, tuple)
 
-        # Only set creator for gradient tracking if gradients are enabled
+        # Set creator for gradient tracking
         if genesis.is_grad_enabled():
-            # Set creator for gradient tracking - check both tensor types
-            
             if instance.is_tuple_result:
+                # For tuple results, count how many outputs need backward
+                # Only clear saved_tensors after all outputs have done backward
+                instance.ctx._backward_count = len(result)
                 for idx, res in enumerate(result):
-                    if hasattr(res, 'requires_grad') and res.requires_grad:
-                        if hasattr(res, 'set_creator'):
-                            res.set_creator(instance, idx)
-            elif hasattr(result, 'requires_grad') and result.requires_grad:
-                if hasattr(result, 'set_creator'):
-                    result.set_creator(instance)
+                    if isinstance(res, Tensor) and res.requires_grad:
+                        res.set_creator(instance, idx)
+            elif isinstance(result, Tensor) and result.requires_grad:
+                result.set_creator(instance)
 
         # Build next_functions graph (creator graph, not tensor graph)
         # This allows intermediate tensors to be garbage collected
         instance.next_functions = []
         for t in args:
-            if hasattr(t, 'requires_grad') and t.requires_grad:
-                if hasattr(t, 'creator') and t.creator is not None:
+            if isinstance(t, Tensor) and t.requires_grad:
+                if t.creator is not None:
                     # Intermediate tensor: save its creator
                     idx = t.idx if hasattr(t, 'idx') else 0
                     instance.next_functions.append((t.creator, idx))
@@ -193,8 +253,8 @@ class Function:
             elif isinstance(t, list):
                 # Handle list of tensors
                 for tt in t:
-                    if hasattr(tt, 'requires_grad') and tt.requires_grad:
-                        if hasattr(tt, 'creator') and tt.creator is not None:
+                    if isinstance(tt, Tensor) and tt.requires_grad:
+                        if tt.creator is not None:
                             idx = tt.idx if hasattr(tt, 'idx') else 0
                             instance.next_functions.append((tt.creator, idx))
                         else:
@@ -203,3 +263,95 @@ class Function:
                             instance.next_functions.append((tt._grad_fn, 0))
 
         return result
+
+
+class CastToFP16(Function):
+    """Cast tensor to FP16 with gradient support.
+
+    This Function ensures type conversion maintains the computational graph
+    for proper gradient flow in mixed precision training.
+    """
+
+    # CRITICAL: PRESERVE policy prevents recursive AMP casting
+    amp_policy = AMPPolicy.PRESERVE
+
+    @staticmethod
+    def forward(ctx, a):
+        """Forward: convert to FP16."""
+        # Store original dtype for backward
+        ctx.original_dtype = a.dtype
+
+        if a.dtype == genesis.float16:
+            return a
+
+        # Convert to FP16 using storage conversion
+        result = a.to_dtype(genesis.float16)
+        result.requires_grad = a.requires_grad
+        return result
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Backward: convert gradient back to original dtype."""
+        if ctx.original_dtype == genesis.float16:
+            return (out_grad,)
+
+        # Convert gradient back to original dtype (typically FP32)
+        grad = out_grad.to_dtype(ctx.original_dtype)
+        grad.requires_grad = False
+        return (grad,)
+
+
+class CastToFP32(Function):
+    """Cast tensor to FP32 with gradient support.
+
+    This Function ensures type conversion maintains the computational graph
+    for proper gradient flow in mixed precision training.
+    """
+
+    # CRITICAL: PRESERVE policy prevents recursive AMP casting
+    amp_policy = AMPPolicy.PRESERVE
+
+    @staticmethod
+    def forward(ctx, a):
+        """Forward: convert to FP32."""
+        # Store original dtype for backward (even if already FP32)
+        ctx.original_dtype = a.dtype
+
+        if a.dtype == genesis.float32:
+            return a
+
+        # Convert to FP32 using storage conversion
+        result = a.to_dtype(genesis.float32)
+        result.requires_grad = a.requires_grad
+        return result
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Backward: convert gradient back to original dtype."""
+        if ctx.original_dtype == genesis.float32:
+            return (out_grad,)
+
+        # Convert gradient back to original dtype
+        grad = out_grad.to_dtype(ctx.original_dtype)
+        grad.requires_grad = False
+        return (grad,)
+
+
+def cast_to_fp16(a):
+    """Cast tensor to FP16 with gradient support.
+
+    CRITICAL: If already FP16, return immediately to preserve existing creator!
+    """
+    if a.dtype == genesis.float16:
+        return a
+    return CastToFP16.apply(a)
+
+
+def cast_to_fp32(a):
+    """Cast tensor to FP32 with gradient support.
+
+    CRITICAL: If already FP32, return immediately to preserve existing creator!
+    """
+    if a.dtype == genesis.float32:
+        return a
+    return CastToFP32.apply(a)

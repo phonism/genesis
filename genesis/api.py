@@ -60,6 +60,8 @@ def bind_tensor_methods():
     # View operations - direct binding
     Tensor.view = lambda self, *shape: F.view(self, *shape)
     Tensor.reshape = lambda self, *shape: F.reshape(self, *shape)
+    # Note: contiguous() uses native implementation in tensor.py (no gradient tracking)
+    # This is intentional to avoid changing computation graph behavior
     
     # Permutation operations - direct binding
     Tensor.permute = lambda self, *dims: F.permute(self, dims if len(dims) > 1 else dims[0])
@@ -74,7 +76,7 @@ def bind_tensor_methods():
 
     Tensor.T = property(T_getter)
 
-    # t() method for 2D transpose (PyTorch compatible)
+    # t() method for 2D transpose
     Tensor.t = lambda self: F.t(self)
     
     # Shape operations - direct binding
@@ -151,7 +153,7 @@ def bind_nn_functional_methods():
     Tensor.__getitem__ = lambda self, key: NF.getitem(self, key)
     Tensor.__setitem__ = lambda self, key, value: NF.setitem(self, key, value)
 
-    # Length method for PyTorch compatibility
+    # Length method for tensor indexing support
     Tensor.__len__ = lambda self: self.shape[0] if self.shape else 0
     
     # Gather and scatter operations

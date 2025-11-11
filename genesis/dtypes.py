@@ -1,12 +1,12 @@
 """
-Provides dtype objects similar to torch.dtype
+Provides dtype objects for tensor data types
 """
 
 import numpy as np
 
 
 class DType:
-    """Genesis data type, similar to torch.dtype"""
+    """Genesis data type for tensor operations."""
     
     def __init__(self, name, itemsize, numpy_dtype, triton_name=None, is_floating_point=None):
         self.name = name
@@ -174,7 +174,7 @@ def infer_dtype_from_data(array):
             np.uint8: uint8,
             np.float16: float16,
             np.float32: float32,
-            np.float64: float32,  # Convert float64 to float32 by default like PyTorch
+            np.float64: float32,  # Convert float64 to float32 by default for efficiency
         }
         return dtype_map.get(array.dtype.type, float32)
 
