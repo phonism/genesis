@@ -28,25 +28,10 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 import os
-_USE_TORCH_ALLOC = os.environ.get('GENESIS_USE_TORCH_ALLOCATOR', '0') == '1'
-
-if _USE_TORCH_ALLOC:
-    print("[Genesis] Using PyTorch allocator for CUDA memory")
-    from genesis.backends.torch_allocator import get_torch_allocator
-    _alloc = get_torch_allocator()
-    allocate_memory = lambda size, stream=None: _alloc.allocate_memory(size)
-    free_memory = _alloc.free_memory
-    decrease_ref_count = _alloc.decrease_ref_count
-    memory_stats = lambda: {}
-    get_memory_manager = lambda: None
-    increase_ref_count = lambda ptr: None
-    trigger_gc = lambda: None
-else:
-    # Use lightweight caching allocator optimized for stable training
-    from genesis.backends.cuda_memory import (
-        allocate_memory, free_memory, memory_stats, get_memory_manager,
-        increase_ref_count, decrease_ref_count, trigger_gc
-    )
+from genesis.backends.cuda_memory import (
+    allocate_memory, free_memory, memory_stats, get_memory_manager,
+    increase_ref_count, decrease_ref_count, trigger_gc
+)
 from genesis.backends.base import Storage
 from genesis.dtypes import get_dtype
 import genesis
@@ -684,14 +669,14 @@ class CUDAStorage(Storage):
         if not self.ptr:
             raise RuntimeError(f"CUDAStorage has null pointer: {self.ptr}")
         
-        # For contiguous tensors, strides can be None (like PyTorch)
+        # For contiguous tensors, strides can be None for efficiency
         strides = None if self.is_contiguous() else tuple(s * self.itemsize for s in self.strides)
         
         interface = {
             'shape': self.shape,
             'typestr': self._get_typestr(),
             'data': (int(self.ptr), False),  # (pointer, read_only)
-            'version': 2,  # Use version 2 like PyTorch
+            'version': 2,  # Use pickle protocol version 2
             'strides': strides,  # None for contiguous, actual strides for non-contiguous
         }
         

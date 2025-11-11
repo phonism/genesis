@@ -59,13 +59,13 @@ class DistributedDataParallel(genesis.nn.Module):
             
         self.device_ids = device_ids
         self.output_device = output_device if output_device is not None else device_ids[0]
-        
-        # Move model to specified device
-        self.model.to(genesis.device(f'cuda:{self.device_ids[0]}'))
-        
+
+        # Model should already be on the correct device (moved by user before wrapping with DDP)
+        # This is the standard DDP behavior
+
         # Register gradient hooks for automatic synchronization
         self._register_gradient_hooks()
-        
+
         # Broadcast initial parameters from rank 0 to ensure consistency
         self._broadcast_parameters()
         
@@ -98,21 +98,19 @@ class DistributedDataParallel(genesis.nn.Module):
                 param.register_hook(self._make_gradient_hook(param))
                 
     def _make_gradient_hook(self, param):
-        """Create gradient hook for a parameter."""
+        """Create gradient hook for a parameter (standard API)."""
         def gradient_hook(grad):
             if grad is not None:
-                # Average gradients across all processes
+                # All-reduce sums gradients across all processes (in-place)
                 all_reduce(grad, ReduceOp.SUM)
-                # Average by dividing by world size
-                # Return the averaged gradient (creates new tensor but that's ok for hook)
-                grad = grad / self.world_size
+                # Average by dividing by world size (in-place to avoid creating new tensor)
+                grad.data = grad.data / self.world_size
             return grad
         return gradient_hook
         
     def _broadcast_parameters(self):
-        """Broadcast parameters from rank 0 to all other ranks."""
+        """Broadcast parameters from rank 0 to all other ranks (standard API)."""
         for param in self.model.parameters():
-            # Broadcast from rank 0 - use param directly, not .data
             broadcast(param, src=0)
             
     def _broadcast_buffers(self):

@@ -1,8 +1,8 @@
 """
 CPU storage backend for Genesis framework.
 
-This module provides CPU tensor storage using PyTorch as the underlying engine,
-extending PyTorch tensors with additional functionality needed by Genesis.
+This module provides CPU tensor storage with optimized operations,
+providing efficient tensor operations for Genesis framework.
 """
 
 import torch
@@ -14,7 +14,7 @@ from genesis.dtypes import float32, float16, float64, int32, int64, int16, int8,
 
 
 class CPUStorage(torch.Tensor):
-    """CPU tensor storage extending PyTorch tensors.
+    """CPU tensor storage with optimized operations.
     
     Note: Inherits from torch.Tensor only due to metaclass conflicts.
     Implements Storage interface methods manually.
@@ -60,7 +60,7 @@ class CPUStorage(torch.Tensor):
         return torch.Tensor.numpy(super().detach().cpu())
     
     def numpy(self) -> np.ndarray:
-        """Convert to numpy array (PyTorch-compatible method)."""
+        """Convert to numpy array."""
         return self.to_numpy()
     
     def clone(self) -> 'CPUStorage':

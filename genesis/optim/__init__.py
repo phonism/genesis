@@ -1,6 +1,6 @@
 """Optimization algorithms and learning rate scheduling for Genesis.
 
-This package provides PyTorch-compatible optimizers and learning rate schedulers
+This package provides optimizers and learning rate schedulers
 for training neural networks with automatic differentiation.
 """
 

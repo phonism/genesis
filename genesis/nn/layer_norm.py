@@ -9,6 +9,7 @@ import triton.language as tl
 from ..function import Function
 from ..tensor import Tensor
 from genesis import init
+from genesis.cuda.amp import AMPPolicy
 
 @triton.jit
 def _layer_norm_fwd_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK_SIZE: tl.constexpr,):
@@ -45,7 +46,8 @@ def _layer_norm_fwd_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK_SIZE: t
         x = tl.load(X + cols, mask=mask, other=0.).to(tl.float32)
         x_hat = (x - mean) * rstd
         y = x_hat * w + b
-        # Write output
+        # Write output - Triton will automatically handle dtype conversion when storing
+        # LayerNorm computes in FP32 but outputs in input dtype for precision
         tl.store(Y + cols, y, mask=mask)
 
 @triton.jit
@@ -119,9 +121,13 @@ def _layer_norm_bwd_dwdb_kernel(DW, DB, FINAL_DW, FINAL_DB, M, N,
     tl.store(FINAL_DB + cols, sum_db, mask=cols < N)
 
 class FusedLayerNormFunction(Function):
+    """Layer normalization with Triton kernel, requires FP32 for numerical stability."""
+
+    amp_policy = AMPPolicy.FP32  # Requires FP32 for accurate statistics
+
     @staticmethod
     def forward(ctx, x, weight, bias, eps=1e-6):
-        # Use Genesis tensors directly, just like PyTorch!
+        # Use Genesis tensors directly for optimal performance
         device = x.device
         
         # Use Genesis's empty_like (newly added function)

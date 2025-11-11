@@ -1,7 +1,7 @@
 """
 Random number generation state management for Genesis.
 
-This module provides PyTorch-compatible RNG state management including
+This module provides comprehensive RNG state management including
 manual seed setting, state saving/loading, and thread-safe random number generation.
 """
 
@@ -15,8 +15,8 @@ import numpy as np
 
 class Generator:
     """
-    Random number generator similar to torch.Generator.
-    
+    Random number generator for reproducible computations.
+
     Manages random state for reproducible random number generation
     across different Genesis operations.
     """

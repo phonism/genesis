@@ -123,6 +123,9 @@ class RMSNorm(Module):
     def forward(self, x: Tensor) -> Tensor:
         """
         Forward pass of the RMS normalization layer.
+
+        Computes directly in input dtype for optimal performance.
+        FP16 may have slightly lower precision but much faster.
         """
         x_square = x ** 2
         x_mean = F.summation(x_square, axis=-1, keepdims=True) / x_square.shape[-1]

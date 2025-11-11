@@ -19,9 +19,14 @@ class Device:
     
     def __init__(self, device_str: str):
         """Initialize device from string descriptor.
-        
+
         Args:
             device_str: Device string like 'cpu', 'cuda', 'cuda:0'
+
+        Note:
+            'cuda' defaults to device 0 with implicit index
+            'cuda:N' explicitly specifies device N with index=N
+            Both are functionally equivalent for device 0, but have different representations
         """
         if device_str == "cpu":
             self.type = DeviceType.CPU
@@ -29,19 +34,33 @@ class Device:
         elif device_str.startswith("cuda"):
             self.type = DeviceType.CUDA
             if ":" in device_str:
+                # Explicit index specified: 'cuda:0', 'cuda:1', etc.
                 self.index = int(device_str.split(":")[1])
             else:
+                # 'cuda' without index - still points to device 0
+                # Keep index=0 for backward compatibility
                 self.index = 0
         else:
             raise ValueError(f"Unknown device: {device_str}")
     
     def __str__(self):
+        """String representation of device.
+
+        Returns:
+            'cpu' for CPU device
+            'cuda' for default CUDA device (implicitly device 0)
+            'cuda:N' for explicitly specified CUDA device N
+        """
         if self.type == DeviceType.CPU:
             return "cpu"
-        elif self.index is not None and self.index > 0:
-            return f"cuda:{self.index}"
-        else:
-            return "cuda"
+        elif self.type == DeviceType.CUDA:
+            # If index was explicitly specified (not None), show it
+            # Standard behavior: Device('cuda:0') shows 'cuda:0'
+            if self.index is not None:
+                return f"cuda:{self.index}"
+            else:
+                return "cuda"
+        return "cpu"  # fallback
     
     def __repr__(self):
         return f"Device('{str(self)}')"

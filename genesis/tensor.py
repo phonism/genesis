@@ -6,7 +6,7 @@ import numpy as np
 from typing import List, Optional, Tuple, Union
 from functools import reduce
 import operator
-from genesis.dtypes import DType, default_dtype, float32, get_dtype
+from genesis.dtypes import DType, default_dtype, float32, float16, float64, bfloat16, get_dtype
 from genesis.device import device as make_device, cpu, Device
 from genesis import init
 from genesis.storage import Storage
@@ -19,14 +19,14 @@ class Tensor:
     Tensor: lightweight metadata + storage reference
     """
     
-    def __init__(self, 
+    def __init__(self,
                  storage,
                  shape: Tuple[int, ...],
                  stride: Optional[Tuple[int, ...]] = None,
                  offset: int = 0):
         """
-        Initialize tensor from storage - PyTorch internal style
-        
+        Initialize tensor from storage with efficient memory layout.
+
         Args:
             storage: Storage object holding the data
             shape: Tensor shape (sizes)
@@ -101,7 +101,7 @@ class Tensor:
 
     @property
     def data(self):
-        """Return the underlying tensor data (PyTorch compatibility).
+        """Return the underlying tensor data without gradient tracking.
 
         Returns a new Tensor that shares storage with the original but
         doesn't track gradients. This is useful for in-place operations
@@ -128,6 +128,14 @@ class Tensor:
         """Return bytes per element"""
         return self.storage.element_size()
 
+    def is_floating_point(self) -> bool:
+        """Check if tensor is floating point type.
+
+        Returns:
+            bool: True if dtype is float16, float32, float64, or bfloat16
+        """
+        return self.dtype in (float16, float32, float64, bfloat16)
+
     def is_contiguous(self) -> bool:
         """Check if tensor has contiguous memory layout (stride pattern and zero offset)."""
         if self._is_contiguous is None:
@@ -149,10 +157,13 @@ class Tensor:
         """Return contiguous storage tensor"""
         if self.is_contiguous():
             return self
-        
+
         # Use storage-level contiguous method
         new_storage = self.storage.contiguous(self.shape, self._stride, self.offset)
-        return Tensor(new_storage, self.shape, stride=None, offset=0)
+        result = Tensor(new_storage, self.shape, stride=None, offset=0)
+        # Inherit requires_grad to ensure gradient tracking continues
+        result.requires_grad = self.requires_grad
+        return result
     
     def _generate_indices(self):
         """Generate all possible indices"""
@@ -251,8 +262,16 @@ class Tensor:
 
         # 🔥 CRITICAL: Release saved_tensors immediately after backward to save memory
         # This mimics PyTorch's behavior where saved_tensors are freed as soon as they're used
+        # For tuple results, only clear after all outputs have done backward (reference counting)
         if hasattr(creator, 'ctx') and hasattr(creator.ctx, '_saved_tensors'):
-            creator.ctx._saved_tensors = []  # Clear saved tensors to free memory
+            if hasattr(creator.ctx, '_backward_count'):
+                # Tuple result: decrement counter and only clear when all done
+                creator.ctx._backward_count -= 1
+                if creator.ctx._backward_count <= 0:
+                    creator.ctx._saved_tensors = []  # Clear saved tensors to free memory
+            else:
+                # Single result: clear immediately
+                creator.ctx._saved_tensors = []  # Clear saved tensors to free memory
 
         # Ensure backward_grad is a tuple
         if not isinstance(backward_grad, tuple):
@@ -289,6 +308,10 @@ class Tensor:
         if not self.requires_grad:
             return
 
+        # Keep autocast state during backward (gradients computed in same dtype as forward)
+        # PyTorch keeps autocast enabled in backward for better performance
+        saved_autocast = genesis.enable_autocast
+
         # Initialize output gradient
         if out_grad is None:
             if self.shape == ():
@@ -301,6 +324,7 @@ class Tensor:
             self.grad = out_grad
             if hasattr(self, 'apply_hooks'):
                 self.apply_hooks(self.grad)
+            genesis.enable_autocast = saved_autocast
             return
 
         # === New backward algorithm using creator graph ===
@@ -315,6 +339,8 @@ class Tensor:
         creator_to_grads[creator_key] = [out_grad]
 
         # 3. Reverse pass through creator graph
+        num_creators_processed = 0
+
         for creator in reversed(topo_order):
             # Check all possible output indices for this creator
             # For single-output functions, only idx=0 exists
@@ -326,6 +352,8 @@ class Tensor:
 
             if not output_indices_with_grads:
                 continue
+
+            num_creators_processed += 1
 
             # Process each output index separately
             for out_idx in output_indices_with_grads:
@@ -347,10 +375,13 @@ class Tensor:
 
                 # Propagate gradients to next_functions
                 self._propagate_gradients_to_creators(creator, accumulated_grad, out_idx, creator_to_grads)
-    
+
+        # Restore autocast state after backward pass
+        genesis.enable_autocast = saved_autocast
+
     def to(self, *args, **kwargs):
-        """Move tensor to device and/or change dtype - compatible with torch.Tensor.to"""
-        # Handle different argument patterns like PyTorch
+        """Move tensor to device and/or change dtype with flexible arguments."""
+        # Handle different argument patterns flexibly
         device = None
         dtype = None
 
@@ -391,22 +422,22 @@ class Tensor:
         return result
     
     def data_ptr(self):
-        """Get pointer to tensor data - compatible with torch.Tensor.data_ptr()"""
+        """Get pointer to underlying tensor data."""
         return self.storage.data_ptr()
     
     def cpu(self) -> 'Tensor':
-        """Move tensor to CPU - compatible with torch.Tensor.cpu"""
+        """Move tensor to CPU device."""
         return self.to('cpu')
     
     def cuda(self, device=None) -> 'Tensor':
-        """Move tensor to GPU - compatible with torch.Tensor.cuda"""
+        """Move tensor to CUDA device."""
         if device is None:
             return self.to('cuda')
         else:
             return self.to(f'cuda:{device}')
 
     def to_dtype(self, dtype) -> 'Tensor':
-        """Convert tensor to different dtype - compatible with PyTorch"""
+        """Convert tensor to different data type."""
         target_dtype = get_dtype(dtype)
 
         # Convert storage to new dtype
@@ -419,11 +450,11 @@ class Tensor:
 
     def numpy(self):
         """
-        Return tensor as numpy array - compatible with torch.Tensor.numpy()
-        
+        Return tensor as numpy array.
+
         For CUDA tensors, directly gets data from CUDA storage.
         Ensures the result is contiguous.
-        
+
         Returns:
             numpy.ndarray: The tensor data as a numpy array
         """
@@ -449,7 +480,7 @@ class Tensor:
     
     def requires_grad_(self, requires_grad: bool = True):
         """
-        Set requires_grad flag (in-place operation), PyTorch-compatible method.
+        Set requires_grad flag (in-place operation) for gradient tracking.
         
         Args:
             requires_grad: Whether to require gradients
@@ -539,12 +570,12 @@ class Tensor:
         bool_tensor = self != 0
         
         if dim is None:
-            # Reduce all dimensions - return scalar tensor like PyTorch
+            # Reduce all dimensions - return scalar tensor
             sum_result = bool_tensor.sum()
             # Convert to Python values to compare, then create result tensor
             total_elements = self.numel()
             result_val = sum_result.item() == total_elements
-            # Create scalar bool tensor like PyTorch
+            # Create scalar bool tensor for boolean operations
             result = genesis.tensor(result_val, dtype=genesis.bool, device=self.device)
             return result
         else:
@@ -716,8 +747,8 @@ class Tensor:
 
 def tensor(data, dtype: Optional[DType] = None, device = None, requires_grad: bool = False) -> Tensor:
     """
-    Create tensor from data - compatible with torch.tensor
-    
+    Create tensor from data with optional dtype and device specification.
+
     Args:
         data: Data (list, scalar, or array-like)
         dtype: Data type

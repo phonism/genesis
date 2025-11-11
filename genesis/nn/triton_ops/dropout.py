@@ -108,8 +108,8 @@ class DropoutFunction(Function):
         
         # Ensure contiguity for optimal memory access
         x_contiguous = x.contiguous()
-        
-        # Use unified RNG system - respects manual_seed like PyTorch
+
+        # Use unified RNG system for reproducibility
         seed = genesis.random.default_generator().next_seed()
         
         # Grid function for autotune - block size will be auto-selected
@@ -150,7 +150,7 @@ class DropoutFunction(Function):
 def dropout(x, p=0.5, training=True, inplace=False):
     """Apply dropout to input tensor.
 
-    PyTorch-compatible dropout API.
+    Standard dropout regularization with configurable dropout rate.
 
     Args:
         x: Input tensor

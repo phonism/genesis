@@ -1,6 +1,6 @@
 """Genesis Deep Learning Framework.
 
-A PyTorch-compatible deep learning framework with CUDA acceleration,
+A high-performance deep learning framework with CUDA acceleration,
 automatic differentiation, and optimized tensor operations.
 """
 
@@ -43,20 +43,19 @@ from . import nn
 from . import init
 from . import optim
 from . import utils
-from . import amp  # Automatic mixed precision training
 from . import distributed  # Distributed training
 from . import ops  # Import ops to register all operations
 from .function import Function
 from .backends import *
 from .functional import *
-from . import cuda  # CUDA memory management utilities
+from . import cuda  # CUDA memory management utilities (includes cuda.amp)
 
 # Bind tensor methods
 from .api import bind_tensor_methods, bind_nn_functional_methods
 bind_tensor_methods()
 bind_nn_functional_methods()
 
-# Random number generation - PyTorch-compatible RNG API
+# Random number generation - comprehensive RNG API
 from .random import (
     seed, manual_seed, initial_seed,
     get_rng_state, set_rng_state, 

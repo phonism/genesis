@@ -119,13 +119,17 @@ class CudaCachingAllocator:
     after warmup. Uses fixed-size buckets to minimize fragmentation.
     """
 
-    def __init__(self, default_stream: int = 0):
+    def __init__(self, device: int = 0, default_stream: int = 0):
         """
-        Initialize allocator.
+        Initialize allocator for specific device (standard API).
 
         Args:
+            device: CUDA device ID this allocator manages
             default_stream: Primary CUDA stream for training (usually 0)
         """
+        # Device binding (immutable after creation)
+        self._target_device = device
+
         # Memory pools
         self.small_bins: Dict[int, List[int]] = defaultdict(list)  # <1MB
         self.large_bins: Dict[int, List[int]] = defaultdict(list)  # 1-16MB
@@ -154,12 +158,13 @@ class CudaCachingAllocator:
         # CUDA initialization flag
         self._cuda_initialized = False
         self._cuda_context = None
+        self._device_idx = None  # Actual device index after initialization
 
         # Reference counting for memory sharing (compatibility)
         self.ref_counts: Dict[int, int] = {}
 
     def _ensure_cuda_initialized(self):
-        """Lazy CUDA initialization on first allocation"""
+        """Lazy CUDA initialization on first allocation (standard API)"""
         if not self._cuda_initialized:
             # Initialize CUDA driver
             result = cuda.cuInit(0)
@@ -167,25 +172,40 @@ class CudaCachingAllocator:
             if err != cuda.CUresult.CUDA_SUCCESS:
                 raise RuntimeError(f"Failed to initialize CUDA: {err}")
 
-            # Get device
-            result = cuda.cuDeviceGet(0)  # Use device 0
+            # Use the target device assigned to this allocator
+            device_idx = self._target_device
+            self._device_idx = device_idx
+
+            # Get device handle
+            result = cuda.cuDeviceGet(device_idx)
             if result[0] != cuda.CUresult.CUDA_SUCCESS:
-                raise RuntimeError(f"Failed to get CUDA device: {result[0]}")
+                raise RuntimeError(f"Failed to get CUDA device {device_idx}: {result[0]}")
             device = result[1]
 
-            # Use primary context (simpler and recommended)
+            # Check if there's already a context for this device
+            ctx_result = cuda.cuCtxGetCurrent()
+            if ctx_result[0] == cuda.CUresult.CUDA_SUCCESS and ctx_result[1] is not None:
+                # Context exists - verify it's for the right device
+                dev_result = cuda.cuCtxGetDevice()
+                if dev_result[0] == cuda.CUresult.CUDA_SUCCESS and dev_result[1] == device_idx:
+                    # Perfect - reuse existing context
+                    self._cuda_context = ctx_result[1]
+                    self._cuda_initialized = True
+                    return
+
+            # No suitable context - create primary context for our device
             result = cuda.cuDevicePrimaryCtxRetain(device)
             if result[0] != cuda.CUresult.CUDA_SUCCESS:
-                raise RuntimeError(f"Failed to retain primary context: {result[0]}")
+                raise RuntimeError(f"Failed to retain primary context for device {device_idx}: {result[0]}")
             self._cuda_context = result[1]
 
-            # Set current context
+            # Set as current context
             result = cuda.cuCtxSetCurrent(self._cuda_context)
             if isinstance(result, tuple):
                 if result[0] != cuda.CUresult.CUDA_SUCCESS:
-                    raise RuntimeError(f"Failed to set current context: {result[0]}")
+                    raise RuntimeError(f"Failed to set current context for device {device_idx}: {result[0]}")
             elif result != cuda.CUresult.CUDA_SUCCESS:
-                raise RuntimeError(f"Failed to set current context: {result}")
+                raise RuntimeError(f"Failed to set current context for device {device_idx}: {result}")
 
             self._cuda_initialized = True
 
@@ -196,6 +216,16 @@ class CudaCachingAllocator:
         Note: Caller must hold self.lock. OOM recovery is handled in allocate_memory().
         """
         self._ensure_cuda_initialized()
+
+        # Ensure our context is current before allocation (PyTorch does cudaSetDevice before cudaMalloc)
+        # Context may have been switched by operations on other devices
+        ctx_set = cuda.cuCtxSetCurrent(self._cuda_context)
+        if isinstance(ctx_set, tuple):
+            if ctx_set[0] != cuda.CUresult.CUDA_SUCCESS:
+                raise RuntimeError(f"Failed to set context for device {self._device_idx}: {ctx_set[0]}")
+        elif ctx_set != cuda.CUresult.CUDA_SUCCESS:
+            raise RuntimeError(f"Failed to set context for device {self._device_idx}: {ctx_set}")
+
         result = cuda.cuMemAlloc(size)
 
         # cuMemAlloc returns (CUresult, pointer)
@@ -204,7 +234,7 @@ class CudaCachingAllocator:
                 self.cuda_alloc_count += 1
             return int(result[1])
 
-        # Return error code for OOM handling
+        # Return None on allocation failure (OOM recovery handled in allocate_memory)
         return None
 
     def _cuda_free(self, ptr: int):
@@ -589,21 +619,49 @@ class CudaCachingAllocator:
             self.ref_counts.clear()
 
 
-# Global allocator instance
-_global_allocator: Optional[CudaCachingAllocator] = None
+# Per-device allocator instances (standard design pattern)
+_device_allocators: Dict[int, CudaCachingAllocator] = {}
 _allocator_lock = threading.Lock()
 
 
-def get_memory_manager() -> CudaCachingAllocator:
-    """Get or create global memory manager instance"""
-    global _global_allocator
+def get_memory_manager(device: Optional[int] = None) -> CudaCachingAllocator:
+    """
+    Get or create memory manager for specific device (standard API).
 
-    if _global_allocator is None:
+    Each CUDA device has its own allocator instance with its own context.
+    This implements efficient caching allocation for CUDA memory.
+
+    Args:
+        device: CUDA device ID (None = use current device)
+
+    Returns:
+        CudaCachingAllocator instance for the specified device
+    """
+    global _device_allocators
+
+    # Get current device if not specified
+    if device is None:
+        try:
+            ctx_result = cuda.cuCtxGetCurrent()
+            if ctx_result[0] == cuda.CUresult.CUDA_SUCCESS and ctx_result[1] is not None:
+                dev_result = cuda.cuCtxGetDevice()
+                if dev_result[0] == cuda.CUresult.CUDA_SUCCESS:
+                    # CRITICAL: convert CUdevice to int for use as dict key
+                    device = int(dev_result[1])
+                else:
+                    device = 0  # Fallback to device 0
+            else:
+                device = 0  # No context, use device 0
+        except Exception:
+            device = 0
+
+    # Get or create allocator for this device
+    if device not in _device_allocators:
         with _allocator_lock:
-            if _global_allocator is None:
-                _global_allocator = CudaCachingAllocator()
+            if device not in _device_allocators:
+                _device_allocators[device] = CudaCachingAllocator(device=device)
 
-    return _global_allocator
+    return _device_allocators[device]
 
 
 # Public API - matches old interface for compatibility
