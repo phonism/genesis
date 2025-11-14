@@ -18,6 +18,7 @@ from math import prod
 from genesis.dtypes import get_dtype, DType
 from dataclasses import dataclass
 from enum import Enum
+#from genesis.backends import cuda_copy_optimized
 
 # Optional torch import for cpu() method
 try:
@@ -59,10 +60,10 @@ class IndexPlan:
     result_strides: Optional[Tuple[int, ...]] = None
     ptr_offset_bytes: int = 0
     # Advanced indexing metadata
-    index_tensor: Optional['CUDAStorage'] = None
+    index_tensor: Optional["CUDAStorage"] = None
     needs_mask_compaction: bool = False
     # Mixed indexing metadata  
-    column_index: Optional['CUDAStorage'] = None
+    column_index: Optional["CUDAStorage"] = None
     is_mixed_2d: bool = False
     # Mixed list + slice indexing metadata
     slices: Optional[Tuple] = None
@@ -249,16 +250,16 @@ class CUDAStorage(Storage):
     
     def __del__(self):
         """Release GPU memory with reference counting"""
-        if hasattr(self, 'owns_memory') and self.owns_memory and hasattr(self, 'ptr') and self.ptr:
+        if hasattr(self, "owns_memory") and self.owns_memory and hasattr(self, "ptr") and self.ptr:
             try:
                 ptr_value = int(self.ptr)
                 if ptr_value != 0:
-                    stream = getattr(self, 'last_stream', None)
+                    stream = getattr(self, "last_stream", None)
 
                     # Use reference counting for better memory pooling
                     if not decrease_ref_count(self.ptr, stream):
                         # If not in ref pool, fall back to direct free
-                        nbytes = getattr(self, 'nbytes', 0)
+                        nbytes = getattr(self, "nbytes", 0)
                         free_memory(self.ptr, nbytes, stream)
 
                     self.ptr = None
@@ -284,7 +285,7 @@ class CUDAStorage(Storage):
         # Create CUDA storage with same shape and dtype
         cuda_storage = cls(
             shape=numpy_data.shape,
-            dtype=str(cpu_storage.dtype).split('.')[-1]  # Convert torch dtype to string
+            dtype=str(cpu_storage.dtype).split(".")[-1]  # Convert torch dtype to string
         )
 
         # Copy data from numpy to GPU
@@ -294,20 +295,20 @@ class CUDAStorage(Storage):
     
     def record_stream(self, stream: int):
         """Record tensor usage on specified stream to prevent premature deallocation"""
-        if hasattr(self, 'recorded_streams'):
+        if hasattr(self, "recorded_streams"):
             self.recorded_streams.add(stream)
             self.last_stream = stream
     
     def share_memory_(self):
         """Enable memory sharing by increasing reference count"""
-        if hasattr(self, 'ptr') and self.ptr:
+        if hasattr(self, "ptr") and self.ptr:
             increase_ref_count(self.ptr)
             self._is_shared = True
         return self
     
     def is_shared(self) -> bool:
         """Check if memory is shared (has multiple references)"""
-        return hasattr(self, '_is_shared') and self._is_shared
+        return hasattr(self, "_is_shared") and self._is_shared
     
     def _compute_strides(self, shape: Tuple[int, ...]) -> Tuple[int, ...]:
         """Compute C-contiguous strides"""
@@ -378,7 +379,7 @@ class CUDAStorage(Storage):
             self._is_contiguous = (self.strides == expected_strides)
         return self._is_contiguous
     
-    def contiguous(self) -> 'CUDAStorage':
+    def contiguous(self) -> "CUDAStorage":
         """Return contiguous version of tensor"""
         if self.is_contiguous():
             return self
@@ -390,7 +391,7 @@ class CUDAStorage(Storage):
         copy_strided_kernel(self, new_tensor)
         return new_tensor
     
-    def clone(self) -> 'CUDAStorage':
+    def clone(self) -> "CUDAStorage":
         """Create a deep copy of the tensor."""
         # Create new tensor with same shape and dtype
         new_tensor = CUDAStorage(self.shape, self.dtype)
@@ -399,7 +400,7 @@ class CUDAStorage(Storage):
         copy_strided_kernel(self, new_tensor)
         return new_tensor
 
-    def copy_strided_to_contiguous(self, shape: Tuple[int, ...], stride: Tuple[int, ...], offset: int, dst_storage: 'CUDAStorage'):
+    def copy_strided_to_contiguous(self, shape: Tuple[int, ...], stride: Tuple[int, ...], offset: int, dst_storage: "CUDAStorage"):
         """Copy strided tensor data to contiguous destination storage."""
         # Use existing copy_strided_kernel which handles strided -> contiguous copying
         # Create a temporary view of source tensor with the given shape, stride, offset
@@ -409,8 +410,11 @@ class CUDAStorage(Storage):
         copy_strided_kernel(temp_view, dst_storage)
         return dst_storage
     
-    def reshape(self, *args) -> 'CUDAStorage':
+    def reshape(self, *args) -> "CUDAStorage":
         """Reshape operation - supports both tuple and separate arguments.
+
+        Optimized to avoid copies when possible, like PyTorch.
+        Only copies when the memory layout makes it impossible to create a view.
 
         Examples:
             reshape((2, 3))     # tuple argument
@@ -441,22 +445,277 @@ class CUDAStorage(Storage):
         if reduce(operator.mul, new_shape, 1) != self.size:
             raise ValueError(f"Cannot reshape array of size {self.size} into shape {new_shape}")
 
-        # If contiguous memory, can create new view directly
+        # Fast path: contiguous memory
         if self.is_contiguous():
             return CUDAStorage(new_shape, self.dtype_obj, self.ptr, None, base=self)
-        else:
-            # Need to make contiguous first
-            contig = self.contiguous()
-            # CRITICAL FIX: Keep reference to contig to prevent memory deallocation
-            return CUDAStorage(new_shape, self.dtype, contig.ptr, None, base=contig)
+
+        # Try safe reshape patterns that don't require copy
+        # Only attempt simple dimension splits where innermost dim is contiguous
+        new_strides = self._try_safe_reshape_strides(new_shape)
+        if new_strides is not None:
+            return CUDAStorage(new_shape, self.dtype_obj, self.ptr, new_strides, base=self)
+
+        # Need to make contiguous first
+        contig = self.contiguous()
+        return CUDAStorage(new_shape, self.dtype, contig.ptr, None, base=contig)
+
+    def _try_safe_reshape_strides(self, new_shape: Tuple[int, ...]) -> Optional[Tuple[int, ...]]:
+        """Try to compute strides for safe reshape patterns only.
+
+        Safe patterns:
+        1. Last dimension is contiguous (stride=1)
+        2. Only splitting dimensions (not merging across non-contiguous boundaries)
+        3. All dimensions except split ones remain unchanged
+        4. Squeeze/unsqueeze size-1 dimensions
+
+        Returns None if pattern is not safe.
+        """
+        old_shape = self.shape
+        old_strides = self.strides
+
+        # Safety check 1: Last dimension must have stride 1
+        if old_strides[-1] != 1:
+            return None
+
+        # Special case: Remove leading size-1 dimensions
+        # Pattern: (1, D1, D2, ...) -> (D1, D2, ...) or (1, 1, D1, D2) -> (D1, D2)
+        if len(old_shape) > len(new_shape):
+            # Check if we're just removing leading 1s
+            num_removed = len(old_shape) - len(new_shape)
+            all_ones = all(old_shape[i] == 1 for i in range(num_removed))
+            shapes_match = old_shape[num_removed:] == new_shape
+
+            if all_ones and shapes_match:
+                # Just drop the strides for the removed dimensions
+                return old_strides[num_removed:]
+
+        # Special case: Add leading size-1 dimensions
+        # Pattern: (D1, D2, ...) -> (1, D1, D2, ...) or (D1, D2) -> (1, 1, D1, D2)
+        if len(new_shape) > len(old_shape):
+            num_added = len(new_shape) - len(old_shape)
+            all_ones = all(new_shape[i] == 1 for i in range(num_added))
+            shapes_match = new_shape[num_added:] == old_shape
+
+            if all_ones and shapes_match:
+                # Add strides for the new dimensions (can be anything, use old_strides[0])
+                prepend_strides = [old_strides[0]] * num_added
+                return tuple(prepend_strides) + old_strides
+
+        # Safety check 2: Only handle 2D -> 4D and 3D -> 4D splits for attention pattern
+        # Pattern: (B, T, C) -> (B, T, n_head, head_dim) where C = n_head * head_dim
+        # Pattern: (B*T, C) -> (B, T, n_head, head_dim)
+
+        if len(old_shape) == 3 and len(new_shape) == 4:
+            # Case: (B, T, C) -> (B, T, n_head, head_dim)
+            B_old, T_old, C_old = old_shape
+            B_new, T_new, n_head, head_dim = new_shape
+
+            if B_old == B_new and T_old == T_new and C_old == n_head * head_dim:
+                # This is a simple split of the last dimension
+                # New strides: keep first two, split last
+                return (old_strides[0], old_strides[1], head_dim, 1)
+
+        elif len(old_shape) == 2 and len(new_shape) == 4:
+            # Case: (B*T, C) -> (B, T, n_head, head_dim)
+            BT_old, C_old = old_shape
+            B_new, T_new, n_head, head_dim = new_shape
+
+            if BT_old == B_new * T_new and C_old == n_head * head_dim:
+                # Split first dimension: BT -> (B, T)
+                # Split second dimension: C -> (n_head, head_dim)
+                # Check if first dimension is contiguous
+                if old_strides[0] == C_old:
+                    # Both dimensions are contiguous, can split
+                    return (T_new * C_old, C_old, head_dim, 1)
+
+        elif len(old_shape) == 2 and len(new_shape) == 3:
+            # Case: (M, N*K) -> (M, N, K)  or  (M*N, K) -> (M, N, K)
+            if len(old_shape) == 2:
+                dim0_old, dim1_old = old_shape
+                dim0_new, dim1_new, dim2_new = new_shape
+
+                # Pattern 1: Split last dimension (M, N*K) -> (M, N, K)
+                if dim0_old == dim0_new and dim1_old == dim1_new * dim2_new:
+                    # Split last dimension
+                    return (old_strides[0], dim2_new, 1)
+
+                # Pattern 2: Split first dimension (M*N, K) -> (M, N, K)
+                elif dim0_old == dim0_new * dim1_new and dim1_old == dim2_new:
+                    # Check if first dimension is contiguous
+                    if old_strides[0] == dim1_old:
+                        return (dim1_new * dim2_new, dim2_new, 1)
+
+        elif len(old_shape) > 3 and len(new_shape) == 3:
+            # Case: Merge leading dimensions (B1, B2, ..., M, K) -> (B1*B2*..., M, K)
+            # This is the pattern in batch matmul
+            expected_batch = 1
+            for i in range(len(old_shape) - 2):
+                expected_batch *= old_shape[i]
+
+            if (new_shape[0] == expected_batch and
+                new_shape[1] == old_shape[-2] and
+                new_shape[2] == old_shape[-1]):
+                # Check if all leading dimensions are contiguous
+                is_contiguous_leading = True
+                for i in range(len(old_shape) - 2):
+                    expected_stride = old_strides[i + 1] * old_shape[i + 1]
+                    if old_strides[i] != expected_stride:
+                        is_contiguous_leading = False
+                        break
+
+                if is_contiguous_leading:
+                    # Can merge: use the stride of the first leading dimension
+                    return (old_strides[0], old_strides[-2], old_strides[-1])
+
+        elif len(old_shape) == 3 and len(new_shape) > 3:
+            # Case: Split leading dimension (B1*B2*..., M, K) -> (B1, B2, ..., M, K)
+            # Inverse of above pattern
+            expected_batch = 1
+            for i in range(len(new_shape) - 2):
+                expected_batch *= new_shape[i]
+
+            if (old_shape[0] == expected_batch and
+                old_shape[1] == new_shape[-2] and
+                old_shape[2] == new_shape[-1]):
+                # Split batch dimension
+                # Compute strides for split dimensions
+                new_strides_list = []
+                current_stride = old_strides[0]
+
+                # Build strides from left to right
+                for i in range(len(new_shape) - 2):
+                    new_strides_list.append(current_stride)
+                    # Next stride is current / this_dim
+                    if i + 1 < len(new_shape) - 2:
+                        current_stride = current_stride // new_shape[i]
+
+                # Add the last two dimensions
+                new_strides_list.append(old_strides[1])
+                new_strides_list.append(old_strides[2])
+
+                return tuple(new_strides_list)
+
+        # Not a safe pattern
+        return None
+
+    def _compute_reshaped_strides(self, new_shape: Tuple[int, ...]) -> Optional[Tuple[int, ...]]:
+        """Try to compute strides for reshaping without copy.
+
+        Returns None if reshape requires a copy.
+        Based on PyTorch's reshape stride inference.
+        """
+        old_shape = self.shape
+        old_strides = self.strides
+
+        # Handle empty tensors
+        if self.size == 0:
+            return tuple(1 for _ in new_shape)
+
+        # Handle scalar cases
+        if len(old_shape) == 0:
+            return tuple(1 for _ in new_shape)
+        if len(new_shape) == 0:
+            return ()
+
+        # Key insight: Reshape can avoid copy if we can express the new dimensions
+        # as a combination (split/merge) of old dimensions that are contiguous in memory.
+
+        new_strides = []
+        old_idx = len(old_shape) - 1
+        new_idx = len(new_shape) - 1
+
+        # Track accumulated elements as we process dimensions right-to-left
+        old_remaining = old_shape[old_idx] if old_idx >= 0 else 1
+        new_remaining = new_shape[new_idx] if new_idx >= 0 else 1
+        current_stride = old_strides[old_idx] if old_idx >= 0 else 1
+
+        while new_idx >= 0:
+            # Handle trivial size-1 dimensions
+            if new_shape[new_idx] == 1:
+                # Size-1 can have any stride
+                next_stride = new_strides[0] * new_shape[new_idx + 1] if new_strides else 1
+                new_strides.insert(0, next_stride)
+                new_idx -= 1
+                continue
+
+            if old_idx < 0:
+                return None  # No more old dimensions to match
+
+            # Skip old size-1 dimensions
+            while old_idx >= 0 and old_shape[old_idx] == 1:
+                old_idx -= 1
+
+            if old_idx < 0:
+                return None
+
+            # Two cases:
+            # 1. old_remaining == new_remaining: dimensions match exactly
+            # 2. old_remaining > new_remaining: need to split old dimension
+            # 3. old_remaining < new_remaining: need to merge old dimensions
+
+            if old_remaining == new_remaining:
+                # Exact match
+                new_strides.insert(0, current_stride)
+                new_idx -= 1
+                old_idx -= 1
+
+                # Set up for next iteration
+                if new_idx >= 0:
+                    new_remaining = new_shape[new_idx]
+                if old_idx >= 0:
+                    old_remaining = old_shape[old_idx]
+                    current_stride = old_strides[old_idx]
+
+            elif old_remaining % new_remaining == 0:
+                # Can split: old dimension is a multiple of new dimension
+                # Example: old=1216, new=76 -> can split as 16*76
+                # The innermost part gets current_stride, outer part gets current_stride * new_size
+                new_strides.insert(0, current_stride)
+                new_idx -= 1
+                old_remaining = old_remaining // new_remaining
+                # Update stride for the next (outer) part of the split
+                current_stride = current_stride * new_remaining
+                # Keep same old_idx but update remaining size
+
+                # Set up for next new dimension
+                if new_idx >= 0:
+                    new_remaining = new_shape[new_idx]
+
+            elif new_remaining % old_remaining == 0:
+                # Need to merge: new dimension spans multiple old dimensions
+                # Check if old dimensions are contiguous
+                new_remaining = new_remaining // old_remaining
+                old_idx -= 1
+
+                if old_idx >= 0:
+                    # Check contiguity: stride[i] should equal stride[i+1] * shape[i+1]
+                    expected_stride = current_stride * old_shape[old_idx + 1]
+                    if old_strides[old_idx] != expected_stride:
+                        return None  # Non-contiguous, can't merge
+
+                    old_remaining = old_shape[old_idx]
+                    current_stride = old_strides[old_idx]
+                else:
+                    return None  # Ran out of old dimensions
+            else:
+                # Sizes don't divide evenly, can't create view
+                return None
+
+        # Check all old dimensions are consumed (except size-1)
+        while old_idx >= 0:
+            if old_shape[old_idx] != 1:
+                return None
+            old_idx -= 1
+
+        return tuple(new_strides)
     
-    def view(self, new_shape: Tuple[int, ...]) -> 'CUDAStorage':
+    def view(self, new_shape: Tuple[int, ...]) -> "CUDAStorage":
         """View operation (requires contiguous memory)"""
         if not self.is_contiguous():
             raise RuntimeError("view() requires contiguous tensor")
         return self.reshape(new_shape)
     
-    def expand(self, new_shape: Tuple[int, ...]) -> 'CUDAStorage':
+    def expand(self, new_shape: Tuple[int, ...]) -> "CUDAStorage":
         """Expand operation (broadcasting)"""
         if len(new_shape) != len(self.shape):
             raise ValueError("Expanded shape must have same number of dimensions")
@@ -472,7 +731,7 @@ class CUDAStorage(Storage):
         
         return CUDAStorage(new_shape, self.dtype_obj, self.ptr, tuple(new_strides), base=self)
     
-    def permute(self, dims: Tuple[int, ...]) -> 'CUDAStorage':
+    def permute(self, dims: Tuple[int, ...]) -> "CUDAStorage":
         """Permute operation (transpose)"""
         if len(dims) != len(self.shape):
             raise ValueError("permute dimensions must match tensor dimensions")
@@ -488,13 +747,13 @@ class CUDAStorage(Storage):
             result._is_contiguous = False
         return result
     
-    def transpose(self, dim0: int, dim1: int) -> 'CUDAStorage':
+    def transpose(self, dim0: int, dim1: int) -> "CUDAStorage":
         """Swap two dimensions"""
         dims = list(range(len(self.shape)))
         dims[dim0], dims[dim1] = dims[dim1], dims[dim0]
         return self.permute(tuple(dims))
     
-    def unsqueeze(self, dim: int) -> 'CUDAStorage':
+    def unsqueeze(self, dim: int) -> "CUDAStorage":
         """Add a dimension"""
         if dim < 0:
             dim = len(self.shape) + 1 + dim
@@ -511,7 +770,7 @@ class CUDAStorage(Storage):
             
         return CUDAStorage(tuple(new_shape), self.dtype, self.ptr, tuple(new_strides), base=self)
     
-    def squeeze(self, dim: Optional[int] = None) -> 'CUDAStorage':
+    def squeeze(self, dim: Optional[int] = None) -> "CUDAStorage":
         """Remove dimensions of size 1"""
         if dim is None:
             # Remove all dimensions of size 1
@@ -532,7 +791,7 @@ class CUDAStorage(Storage):
             del new_strides[dim]
             return CUDAStorage(tuple(new_shape), self.dtype, self.ptr, tuple(new_strides), base=self)
     
-    def broadcast_to(self, shape: Tuple[int, ...]) -> 'CUDAStorage':
+    def broadcast_to(self, shape: Tuple[int, ...]) -> "CUDAStorage":
         """Broadcast to specified shape"""
         # First expand dimensions
         if len(shape) > len(self.shape):
@@ -594,7 +853,7 @@ class CUDAStorage(Storage):
                 raise RuntimeError(f"Invalid itemsize: {self.itemsize}")
             
             # Ensure numpy array is C-contiguous for CUDA
-            if not base_data.flags['C_CONTIGUOUS']:
+            if not base_data.flags["C_CONTIGUOUS"]:
                 base_data = np.ascontiguousarray(base_data)
             
             result = cuda.cuMemcpyDtoH(base_data, self.ptr, self.itemsize)
@@ -629,7 +888,7 @@ class CUDAStorage(Storage):
         
         # OPTIMIZATION: Always make numpy array contiguous first
         # This avoids slow element-wise copies
-        if not arr.flags['C_CONTIGUOUS']:
+        if not arr.flags["C_CONTIGUOUS"]:
             arr = np.ascontiguousarray(arr)
         
         if self.is_contiguous():
@@ -650,7 +909,7 @@ class CUDAStorage(Storage):
             copy_strided_reverse_kernel(temp_tensor, self)
             
     @property
-    def T(self) -> 'CUDAStorage':
+    def T(self) -> "CUDAStorage":
         """Transpose (2D tensor)"""
         if len(self.shape) != 2:
             raise ValueError("T property only works for 2D tensors")
@@ -673,11 +932,11 @@ class CUDAStorage(Storage):
         strides = None if self.is_contiguous() else tuple(s * self.itemsize for s in self.strides)
         
         interface = {
-            'shape': self.shape,
-            'typestr': self._get_typestr(),
-            'data': (int(self.ptr), False),  # (pointer, read_only)
-            'version': 2,  # Use pickle protocol version 2
-            'strides': strides,  # None for contiguous, actual strides for non-contiguous
+            "shape": self.shape,
+            "typestr": self._get_typestr(),
+            "data": (int(self.ptr), False),  # (pointer, read_only)
+            "version": 2,  # Use pickle protocol version 2
+            "strides": strides,  # None for contiguous, actual strides for non-contiguous
         }
         
         return interface
@@ -685,15 +944,15 @@ class CUDAStorage(Storage):
     def _get_typestr(self):
         """Get numpy-style type string for CUDA array interface"""
         if self.dtype == "float32":
-            return '<f4'
+            return "<f4"
         elif self.dtype == "float16":
-            return '<f2'
+            return "<f2"
         elif self.dtype == "bfloat16":
-            return '<f2'  # Treat as float16 for now
+            return "<f2"  # Treat as float16 for now
         elif self.dtype == "bool":
-            return '|b1'  # bool is 1 byte
+            return "|b1"  # bool is 1 byte
         else:
-            return '<f4'  # Default to float32
+            return "<f4"  # Default to float32
     
     def numpy_dtype(self):
         """Return numpy dtype for creating new tensors"""
@@ -1152,16 +1411,16 @@ class CUDAStorage(Storage):
         target_dtype_str = None
         
         # Handle torch.dtype objects
-        if str(target_dtype).startswith('torch.'):
-            if str(target_dtype) == 'torch.float32':
+        if str(target_dtype).startswith("torch."):
+            if str(target_dtype) == "torch.float32":
                 target_dtype_str = "float32"
-            elif str(target_dtype) == 'torch.float16':
+            elif str(target_dtype) == "torch.float16":
                 target_dtype_str = "float16"
-            elif str(target_dtype) == 'torch.int32':
+            elif str(target_dtype) == "torch.int32":
                 target_dtype_str = "int32"
-            elif str(target_dtype) == 'torch.int64':
+            elif str(target_dtype) == "torch.int64":
                 target_dtype_str = "int64"
-            elif str(target_dtype) == 'torch.float64':
+            elif str(target_dtype) == "torch.float64":
                 target_dtype_str = "float64"
             else:
                 target_dtype_str = "float32"  # default
@@ -1745,40 +2004,47 @@ def copy_strided_kernel(src: CUDAStorage, dst: CUDAStorage):
     """Optimized high-performance strided copy kernel"""
     assert src.size == dst.size
     assert dst.is_contiguous(), "Destination must be contiguous"
-    
+
     if src.is_contiguous():
         # Fast path: both contiguous, direct cudaMemcpy
         result = cuda.cuMemcpyDtoD(dst.ptr, src.ptr, src.nbytes)
         check_cuda_error(result)
         return
-    
+
+    # Try optimized pattern-based kernels first (covers 87% of copy time)
+    # DISABLED: Optimized kernels showing 2.3x regression in real training
+    # TODO: Investigate why individual tests pass but real training is slower
+    # if cuda_copy_optimized.optimized_copy(src, dst):
+    #     return
+
+    # Fallback to general kernel for uncommon patterns
     ndim = len(src.shape)
     numel = src.size
-    
+
     # Choose optimal block size based on problem size
     if numel < 1024:
         BLOCK = 256
         num_warps = 2
     elif numel < 1024 * 1024:
-        BLOCK = 512 
+        BLOCK = 512
         num_warps = 4
     else:
         BLOCK = 1024
         num_warps = 8
-    
+
     grid = (triton.cdiv(numel, BLOCK),)
-    
+
     # Use optimized kernel for common cases (ndim <= 4)
     if ndim <= 4:
         # Pad with zeros for unused dimensions
         sizes = list(src.shape) + [1] * (4 - ndim)
         strides = list(src.strides) + [0] * (4 - ndim)
-        
+
         _copy_strided_to_contig_optimized[grid](
             src, dst,
             numel,
             size0=sizes[0], stride0=strides[0],
-            size1=sizes[1], stride1=strides[1], 
+            size1=sizes[1], stride1=strides[1],
             size2=sizes[2], stride2=strides[2],
             size3=sizes[3], stride3=strides[3],
             ndim=ndim,
@@ -1792,7 +2058,7 @@ def copy_strided_kernel(src: CUDAStorage, dst: CUDAStorage):
             sizes_gpu = empty((ndim,), np.int64)
             strides_gpu = empty((ndim,), np.int64)
             _metadata_cache[cache_key] = (sizes_gpu, strides_gpu)
-            
+
             # Copy metadata to GPU once
             sizes = np.array(src.shape, dtype=np.int64)
             strides = np.array(src.strides, dtype=np.int64)
@@ -1800,9 +2066,9 @@ def copy_strided_kernel(src: CUDAStorage, dst: CUDAStorage):
             check_cuda_error(result)
             result = cuda.cuMemcpyHtoD(strides_gpu.ptr, strides, strides.nbytes)
             check_cuda_error(result)
-        
+
         sizes_gpu, strides_gpu = _metadata_cache[cache_key]
-        
+
         _copy_strided_to_contig_general[grid](
             src, dst,
             sizes_gpu, strides_gpu,

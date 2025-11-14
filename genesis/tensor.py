@@ -21,18 +21,26 @@ class Tensor:
     
     def __init__(self,
                  storage,
-                 shape: Tuple[int, ...],
+                 shape: Optional[Tuple[int, ...]] = None,
                  stride: Optional[Tuple[int, ...]] = None,
-                 offset: int = 0):
+                 offset: int = 0,
+                 requires_grad: bool = False):
         """
         Initialize tensor from storage with efficient memory layout.
 
         Args:
             storage: Storage object holding the data
-            shape: Tensor shape (sizes)
+            shape: Tensor shape (sizes), inferred from storage if not provided
             stride: Memory stride pattern
             offset: Storage offset
+            requires_grad: Whether to track gradients for this tensor
         """
+        # Infer shape from storage if not provided
+        if shape is None:
+            if hasattr(storage, 'shape'):
+                shape = storage.shape
+            else:
+                raise ValueError("shape must be provided if storage doesn't have shape attribute")
         self.storage = storage
         self.shape = shape
         self.offset = offset
@@ -45,9 +53,9 @@ class Tensor:
         # View tracking
         self.base: Optional['Tensor'] = None  # Base tensor if this is a view
         self._version: int = 0  # Version counter for in-place operations
-        
+
         # Autograd related
-        self.requires_grad = False
+        self.requires_grad = requires_grad
         self.grad: Optional['Tensor'] = None
         self.grad_fn: Optional['Function'] = None
         self.is_leaf = True
@@ -261,8 +269,8 @@ class Tensor:
             backward_grad = creator.backward(creator.ctx, out_grad)
 
         # 🔥 CRITICAL: Release saved_tensors immediately after backward to save memory
-        # This mimics PyTorch's behavior where saved_tensors are freed as soon as they're used
-        # For tuple results, only clear after all outputs have done backward (reference counting)
+        # Saved tensors are freed as soon as they're consumed to minimize peak memory usage
+        # For tuple results, only clear after all outputs have completed backward (reference counting)
         if hasattr(creator, 'ctx') and hasattr(creator.ctx, '_saved_tensors'):
             if hasattr(creator.ctx, '_backward_count'):
                 # Tuple result: decrement counter and only clear when all done
@@ -308,8 +316,8 @@ class Tensor:
         if not self.requires_grad:
             return
 
-        # Keep autocast state during backward (gradients computed in same dtype as forward)
-        # PyTorch keeps autocast enabled in backward for better performance
+        # Preserve autocast state during backward for consistent dtype handling
+        # Gradients are computed in the same dtype as forward pass for numerical stability
         saved_autocast = genesis.enable_autocast
 
         # Initialize output gradient
@@ -370,7 +378,7 @@ class Tensor:
                         accumulated_grad = accumulated_grad + g
 
                 # 🔥 CRITICAL: Delete processed gradients immediately to free memory
-                # This mimics PyTorch's behavior where gradients are freed as soon as they're used
+                # Free gradients immediately after consumption to reduce memory footprint
                 del creator_to_grads[creator_key]
 
                 # Propagate gradients to next_functions
@@ -518,7 +526,7 @@ class Tensor:
     def copy_(self, src: 'Tensor') -> 'Tensor':
         """
         Copy data from source tensor into this tensor in-place.
-        Similar to PyTorch's copy_ method.
+        Copies data from source tensor in-place, modifying this tensor.
 
         Args:
             src: Source tensor to copy from
@@ -670,7 +678,11 @@ class Tensor:
 
     @property
     def stride(self):
-        """Return stride tuple or callable for PyTorch compatibility"""
+        """Return stride tuple or callable object.
+
+        Supports both direct access (stride property) and functional access (stride() call).
+        When called with a dimension index, returns stride for that specific dimension.
+        """
         class StrideAccessor:
             def __init__(self, stride_tuple):
                 self._stride_tuple = stride_tuple
@@ -701,13 +713,32 @@ class Tensor:
         backend_strides = getattr(self.storage._backend, 'strides', self._stride)
         return StrideAccessor(backend_strides)
 
+    @property
+    def strides(self):
+        """Return stride tuple directly (convenience property).
+
+        This is an alias for stride() to make the API more intuitive and consistent.
+        Both tensor.stride() and tensor.strides return the same tuple.
+
+        Returns:
+            Tuple[int, ...]: Stride tuple
+
+        Example:
+            >>> x = genesis.tensor([[1, 2], [3, 4]])
+            >>> x.strides  # Direct property access
+            (2, 1)
+            >>> x.stride()  # Returns full stride tuple
+            (2, 1)
+        """
+        return getattr(self.storage._backend, 'strides', self._stride)
+
     def __repr__(self):
         # Use actual stride from backend for accurate representation
         actual_stride = getattr(self.storage._backend, 'strides', self._stride)
         return f"Tensor(shape={self.shape}, dtype={self.storage.dtype}, device={self.device}, stride={actual_stride}, offset={self.offset})"
 
     def __float__(self):
-        """Convert scalar tensor to Python float (PyTorch compatibility).
+        """Convert scalar tensor to Python float.
 
         Returns:
             float: Python float value
@@ -720,7 +751,7 @@ class Tensor:
         return float(self.item())
 
     def __int__(self):
-        """Convert scalar tensor to Python int (PyTorch compatibility).
+        """Convert scalar tensor to Python int.
 
         Returns:
             int: Python int value
@@ -733,7 +764,7 @@ class Tensor:
         return int(self.item())
 
     def __bool__(self):
-        """Convert scalar tensor to Python bool (PyTorch compatibility).
+        """Convert scalar tensor to Python bool.
 
         Returns:
             bool: Python bool value
@@ -760,7 +791,7 @@ def tensor(data, dtype: Optional[DType] = None, device = None, requires_grad: bo
     return t
 
 def make_tensor(data, dtype = None, device=None, shape: Optional[Tuple[int, ...]] = None) -> Tensor:
-    """Create tensor from data - PyTorch internal style make_tensor"""
+    """Create tensor from data with automatic device and dtype handling."""
     # Handle dtype - support both string and DType object
     dtype = get_dtype(dtype)
 
@@ -772,7 +803,7 @@ def make_tensor(data, dtype = None, device=None, shape: Optional[Tuple[int, ...]
             device = make_device(device)
         # If already a Device object, use it directly
     
-    # Data standardization - convert to numpy array (PyTorch pattern)
+    # Normalize input data to numpy array for consistent processing
     if isinstance(data, (list, tuple)):
         # Convert list/tuple to numpy array
         standardized_data = np.array(data, dtype=dtype.numpy_dtype)

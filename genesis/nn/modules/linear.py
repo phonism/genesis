@@ -33,11 +33,23 @@ class Linear(Module):
     def forward(self, x: Tensor) -> Tensor:
         """
         Forward pass of the linear layer.
+
+        Implementation matches PyTorch's nn.Linear behavior under AMP:
+        - Matmul uses FP16 in autocast mode (via Matmul.amp_policy = FP16)
+        - Bias is converted to match matmul output dtype before addition
+        - This prevents FP16 + FP32 → FP32 promotion, preserving FP16 acceleration
         """
-        x = x @ self.weight.transpose(0, 1)
+        out = x @ self.weight.transpose(0, 1)
         if self.bias is not None:
-            x = x + self.bias
-        return x
+            # Match PyTorch behavior: convert bias to matmul output dtype
+            # This prevents mixed-dtype PROMOTE (FP16 + FP32 → FP32)
+            # Bias is small (1D), conversion overhead is negligible
+            if self.bias.dtype != out.dtype:
+                bias = self.bias.to(out.dtype)
+            else:
+                bias = self.bias
+            out = out + bias
+        return out
 
 
 class Flatten(Module):

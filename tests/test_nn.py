@@ -127,15 +127,17 @@ LAYERNORM_SHAPES = [
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_layernorm(shape, device):
     """Test LayerNorm layer forward and backward pass.
-    
+
     Args:
         shape: Input tensor shape for testing
-        device: Device to run test on (CPU or CUDA)
-    
+        device: Device to run test on (CUDA only, uses Triton kernel)
+
     Tests:
         - Forward pass layer normalization matches PyTorch
         - Backward gradients match PyTorch implementation
     """
+    if device == genesis.device('cpu'):
+        pytest.skip("Skipping CPU tests, LayerNorm uses Triton kernel (CUDA only)")
     _A = np.random.randn(*shape).astype(np.float32)
     A = genesis.tensor(_A, device=device, requires_grad=True)
     TA = torch.Tensor(_A)

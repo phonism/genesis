@@ -4,6 +4,7 @@ import genesis
 from genesis.tensor import Tensor
 import genesis.nn.functional as F
 from .module import Module
+from ..triton_ops.silu import silu as triton_silu
 
 
 class ReLU(Module):
@@ -40,7 +41,10 @@ class Softmax(Module):
 
 class SiLU(Module):
     """
-    SiLU activation function.
+    SiLU (Swish) activation function: f(x) = x * sigmoid(x).
+
+    Preserves input dtype for efficient mixed precision training.
+    Uses Triton-optimized kernels on CUDA devices.
     """
     def __init__(self):
         super().__init__()
@@ -48,8 +52,14 @@ class SiLU(Module):
     def forward(self, x: Tensor) -> Tensor:
         """
         Forward pass of the SiLU activation function.
+
+        Args:
+            x: Input tensor
+
+        Returns:
+            Output tensor with same dtype as input
         """
-        return x / (F.exp(-x) + 1)
+        return triton_silu(x)
 
 
 class Residual(Module):

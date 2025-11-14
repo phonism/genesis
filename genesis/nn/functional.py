@@ -69,7 +69,8 @@ def sum_to_shape(data, shape):
 
 class EWiseAdd(Function):
     """Element-wise addition with automatic dtype promotion."""
-    # Uses default PROMOTE policy for safe mixed-dtype handling
+    # Uses default PROMOTE policy to match PyTorch behavior
+    # Mixed dtype (FP16 + FP32) promotes to FP32 for numerical safety
 
     @staticmethod
     def forward(ctx, a, b):

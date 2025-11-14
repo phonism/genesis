@@ -7,27 +7,109 @@ import triton.language as tl
 from functools import reduce as functools_reduce
 import operator
 import math
+import genesis
 from genesis.backends.cuda import CUDAStorage
 from .basic_ops import zeros, add
 from genesis.ops.dispatcher import register_cuda
 
 
 # =============================================================================
-# OPTIMIZED TRITON KERNELS
+# HELPER FUNCTIONS
+# =============================================================================
+
+def calculate_tile_size(N, max_tile=1024, threshold=32):
+    """
+    Calculate optimal tile size for reduction.
+
+    Args:
+        N: Dimension size to tile
+        max_tile: Maximum tile size
+        threshold: Threshold below which we don't clamp
+
+    Returns:
+        Optimal tile size as power of 2
+    """
+    power_of_2 = triton.next_power_of_2(N)
+    return min(max_tile, power_of_2) if N > threshold else power_of_2
+
+
+def calculate_adaptive_block_size(n_elements):
+    """
+    Calculate adaptive block size based on element count.
+
+    Uses sqrt-based heuristic inspired by FlagGems for balanced
+    work distribution in two-stage reductions.
+
+    Args:
+        n_elements: Total number of elements
+
+    Returns:
+        Block size as power of 2, clamped to [32, 1024]
+    """
+    size = int(math.sqrt(n_elements))
+    clamped = max(32, min(1024, size))
+    return triton.next_power_of_2(clamped)
+
+
+def normalize_axis(axis, ndim):
+    """
+    Normalize axis parameter to tuple of positive indices.
+
+    Args:
+        axis: Single int, tuple of ints, or None
+        ndim: Number of dimensions in tensor
+
+    Returns:
+        Tuple of normalized positive axis indices, or None if axis is None
+    """
+    if axis is None:
+        return None
+    if isinstance(axis, int):
+        axis = (axis,)
+    return tuple(ax % ndim for ax in axis)
+
+
+class ReductionKernels:
+    """
+    Container for kernel functions used in a specific reduction operation.
+
+    Attributes:
+        atomic_kernel: Kernel for small tensors using atomic operations
+        stage1_kernel: First stage kernel for large two-stage reductions
+        stage2_kernel: Second stage kernel for large two-stage reductions
+        inner_kernel: Kernel for innermost dimension reductions
+        fill_value: Value to fill empty tensors with
+        name: Name of the reduction operation (for debugging)
+    """
+    def __init__(self, atomic_kernel, stage1_kernel, stage2_kernel, inner_kernel, fill_value, name):
+        self.atomic_kernel = atomic_kernel
+        self.stage1_kernel = stage1_kernel
+        self.stage2_kernel = stage2_kernel
+        self.inner_kernel = inner_kernel
+        self.fill_value = fill_value
+        self.name = name
+
+
+# =============================================================================
+# OPTIMIZED TRITON KERNELS - GENERIC IMPLEMENTATIONS
 # =============================================================================
 
 @triton.jit
-def sum_kernel_stage1(
+def generic_reduction_stage1(
     inp_ptr,
     mid_ptr,
     M,
     BLOCK_SIZE: tl.constexpr,
+    OP: tl.constexpr,  # "sum", "max", or "min"
 ):
     """
-    Stage 1 of two-stage reduction: compute partial sums.
-    Each block processes BLOCK_SIZE elements.
+    Generic stage 1 kernel for two-stage reduction.
+    Computes partial reductions (sum/max/min) for each block.
+
+    Args:
+        OP: Operation type - "sum", "max", or "min"
     """
-    # Use float32 for accumulation with fp16/bf16 inputs
+    # Use float32 accumulation for fp16/bf16 to avoid precision loss
     if inp_ptr.dtype.element_ty == tl.float16:
         acc_dtype = tl.float32
     elif inp_ptr.dtype.element_ty == tl.bfloat16:
@@ -39,25 +121,45 @@ def sum_kernel_stage1(
     offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offset < M
 
-    # Load and accumulate in higher precision
-    vals = tl.load(inp_ptr + offset, mask=mask, other=0.0).to(acc_dtype)
-    sum_val = tl.sum(vals)
+    # Set initial value based on operation
+    if OP == "sum":
+        init_val = 0.0
+    elif OP == "max":
+        init_val = -float("inf")
+    else:  # min
+        init_val = float("inf")
 
-    # Store partial sum
-    tl.store(mid_ptr + pid, sum_val.to(inp_ptr.dtype.element_ty))
+    # Load and accumulate in higher precision
+    vals = tl.load(inp_ptr + offset, mask=mask, other=init_val).to(acc_dtype)
+
+    # Perform reduction based on operation type
+    if OP == "sum":
+        result = tl.sum(vals)
+    elif OP == "max":
+        result = tl.max(vals)
+    else:  # min
+        result = tl.min(vals)
+
+    # Store partial result
+    tl.store(mid_ptr + pid, result.to(inp_ptr.dtype.element_ty))
 
 
 @triton.jit
-def sum_kernel_stage2(
+def generic_reduction_stage2(
     mid_ptr,
     out_ptr,
     mid_size,
-    BLOCK_SIZE: tl.constexpr
+    BLOCK_SIZE: tl.constexpr,
+    OP: tl.constexpr,  # "sum", "max", or "min"
 ):
     """
-    Stage 2 of two-stage reduction: sum all partial results.
+    Generic stage 2 kernel for two-stage reduction.
+    Reduces all partial results to final output.
+
+    Args:
+        OP: Operation type - "sum", "max", or "min"
     """
-    # Use float32 for accumulation
+    # Use float32 accumulation for fp16/bf16 to avoid precision loss
     if mid_ptr.dtype.element_ty == tl.float16:
         acc_dtype = tl.float32
     elif mid_ptr.dtype.element_ty == tl.bfloat16:
@@ -68,10 +170,150 @@ def sum_kernel_stage2(
     offset = tl.arange(0, BLOCK_SIZE)
     mask = offset < mid_size
 
-    vals = tl.load(mid_ptr + offset, mask=mask, other=0.0).to(acc_dtype)
-    sum_val = tl.sum(vals)
+    # Set initial value based on operation
+    if OP == "sum":
+        init_val = 0.0
+    elif OP == "max":
+        init_val = -float("inf")
+    else:  # min
+        init_val = float("inf")
 
-    tl.store(out_ptr, sum_val.to(mid_ptr.dtype.element_ty))
+    vals = tl.load(mid_ptr + offset, mask=mask, other=init_val).to(acc_dtype)
+
+    # Perform reduction based on operation type
+    if OP == "sum":
+        result = tl.sum(vals)
+    elif OP == "max":
+        result = tl.max(vals)
+    else:  # min
+        result = tl.min(vals)
+
+    tl.store(out_ptr, result.to(mid_ptr.dtype.element_ty))
+
+
+@triton.jit
+def generic_reduction_inner(
+    output_ptr,
+    input_ptr,
+    M,
+    N,
+    TILE_N: tl.constexpr,
+    OP: tl.constexpr,  # "sum", "max", or "min"
+):
+    """
+    Generic kernel for reducing the innermost dimension.
+    Each thread block reduces one row.
+
+    Args:
+        OP: Operation type - "sum", "max", or "min"
+    """
+    # Use float32 accumulation for fp16/bf16 to avoid precision loss
+    if input_ptr.dtype.element_ty == tl.float16:
+        acc_dtype = tl.float32
+    elif input_ptr.dtype.element_ty == tl.bfloat16:
+        acc_dtype = tl.float32
+    else:
+        acc_dtype = input_ptr.dtype.element_ty
+
+    pid_m = tl.program_id(0)
+
+    # Set initial value based on operation
+    if OP == "sum":
+        init_val = 0.0
+        acc = tl.zeros([], dtype=acc_dtype)
+    elif OP == "max":
+        init_val = -float("inf")
+        acc = tl.full([], -float("inf"), dtype=acc_dtype)
+    else:  # min
+        init_val = float("inf")
+        acc = tl.full([], float("inf"), dtype=acc_dtype)
+
+    # Process row in chunks of TILE_N
+    for start_n in range(0, N, TILE_N):
+        n_offsets = start_n + tl.arange(0, TILE_N)
+        inp_offsets = pid_m * N + n_offsets
+        mask = n_offsets < N
+
+        # Load chunk
+        chunk = tl.load(input_ptr + inp_offsets, mask=mask, other=init_val).to(acc_dtype)
+
+        # Accumulate based on operation type
+        if OP == "sum":
+            acc += tl.sum(chunk)
+        elif OP == "max":
+            acc = tl.maximum(acc, tl.max(chunk))
+        else:  # min
+            acc = tl.minimum(acc, tl.min(chunk))
+
+    # Store result
+    tl.store(output_ptr + pid_m, acc.to(input_ptr.dtype.element_ty))
+
+
+@triton.jit
+def generic_reduction_atomic(
+    x_ptr,
+    output_ptr,
+    N,
+    BLOCK_SIZE: tl.constexpr,
+    OP: tl.constexpr,  # "sum", "max", or "min"
+):
+    """
+    Generic atomic reduction kernel for small tensors.
+
+    Args:
+        OP: Operation type - "sum", "max", or "min"
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+
+    # Set initial value based on operation
+    if OP == "sum":
+        init_val = 0.0
+    elif OP == "max":
+        init_val = -float("inf")
+    else:  # min
+        init_val = float("inf")
+
+    values = tl.load(x_ptr + offsets, mask=mask, other=init_val)
+
+    # Perform block reduction
+    if OP == "sum":
+        block_result = tl.sum(values)
+        tl.atomic_add(output_ptr, block_result)
+    elif OP == "max":
+        block_result = tl.max(values)
+        tl.atomic_max(output_ptr, block_result)
+    else:  # min
+        block_result = tl.min(values)
+        tl.atomic_min(output_ptr, block_result)
+
+
+# =============================================================================
+# SUM KERNELS (wrappers around generic implementations)
+# =============================================================================
+
+@triton.jit
+def sum_kernel_stage1(
+    inp_ptr,
+    mid_ptr,
+    M,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Stage 1 of two-stage sum reduction."""
+    generic_reduction_stage1(inp_ptr, mid_ptr, M, BLOCK_SIZE, "sum")
+
+
+@triton.jit
+def sum_kernel_stage2(
+    mid_ptr,
+    out_ptr,
+    mid_size,
+    BLOCK_SIZE: tl.constexpr
+):
+    """Stage 2 of two-stage sum reduction."""
+    generic_reduction_stage2(mid_ptr, out_ptr, mid_size, BLOCK_SIZE, "sum")
 
 
 @triton.jit
@@ -82,52 +324,24 @@ def sum_kernel_inner(
     N,
     TILE_N: tl.constexpr,
 ):
-    """
-    Optimized kernel for reducing the innermost dimension.
-    Each thread block reduces one row.
-    """
-    # Use float32 accumulation for fp16/bf16
-    if input_ptr.dtype.element_ty == tl.float16:
-        acc_dtype = tl.float32
-    elif input_ptr.dtype.element_ty == tl.bfloat16:
-        acc_dtype = tl.float32
-    else:
-        acc_dtype = input_ptr.dtype.element_ty
-
-    pid_m = tl.program_id(0)
-
-    # Accumulator for this row
-    acc = tl.zeros([], dtype=acc_dtype)
-
-    # Process row in chunks of TILE_N
-    for start_n in range(0, N, TILE_N):
-        n_offsets = start_n + tl.arange(0, TILE_N)
-        inp_offsets = pid_m * N + n_offsets
-        mask = n_offsets < N
-
-        # Load chunk and accumulate
-        chunk = tl.load(input_ptr + inp_offsets, mask=mask, other=0.0).to(acc_dtype)
-        acc += tl.sum(chunk)
-
-    # Store result
-    tl.store(output_ptr + pid_m, acc.to(input_ptr.dtype.element_ty))
+    """Inner kernel for sum reduction."""
+    generic_reduction_inner(output_ptr, input_ptr, M, N, TILE_N, "sum")
 
 
 @triton.jit
-def sum_kernel_outer(
+def sum_kernel_axis0_vectorized(
     output_ptr,
     input_ptr,
     M,
     N,
-    K,
-    TILE_M: tl.constexpr,
-    TILE_K: tl.constexpr,
+    TILE_N: tl.constexpr,
 ):
     """
-    Optimized kernel for reducing outer dimensions.
-    Each thread block handles a portion of the output.
+    Vectorized kernel for axis=0 reduction with small M.
+    Input shape: (M, N), Output shape: (N,)
+    Each program processes TILE_N output elements.
     """
-    # Use float32 accumulation
+    # Use float32 accumulation for fp16/bf16 to avoid precision loss
     if input_ptr.dtype.element_ty == tl.float16:
         acc_dtype = tl.float32
     elif input_ptr.dtype.element_ty == tl.bfloat16:
@@ -135,33 +349,23 @@ def sum_kernel_outer(
     else:
         acc_dtype = input_ptr.dtype.element_ty
 
-    pid_n = tl.program_id(0)
-    pid_k = tl.program_id(1)
+    pid = tl.program_id(0)
+    n_start = pid * TILE_N
+    n_offsets = n_start + tl.arange(0, TILE_N)
+    n_mask = n_offsets < N
 
-    n = pid_n
-    k_start = pid_k * TILE_K
-    k_offsets = k_start + tl.arange(0, TILE_K)
-    k_mask = k_offsets < K
+    # Accumulator for TILE_N output elements
+    acc = tl.zeros([TILE_N], dtype=acc_dtype)
 
-    # Accumulator for this output position
-    acc = tl.zeros([TILE_K], dtype=acc_dtype)
-
-    # Sum over M dimension
-    for m_start in range(0, M, TILE_M):
-        m_offsets = m_start + tl.arange(0, TILE_M)[:, None]
-        m_mask = m_offsets < M
-
-        # Compute input offsets: [M, N, K] layout
-        inp_offsets = m_offsets * N * K + n * K + k_offsets[None, :]
-        mask = m_mask & k_mask[None, :]
-
-        # Load and accumulate
-        vals = tl.load(input_ptr + inp_offsets, mask=mask, other=0.0).to(acc_dtype)
-        acc += tl.sum(vals, axis=0)
+    # Sum over M dimension (should be small, like 2, 4, 8, etc.)
+    for m in range(M):
+        # Load row m
+        offsets = m * N + n_offsets
+        vals = tl.load(input_ptr + offsets, mask=n_mask, other=0.0).to(acc_dtype)
+        acc += vals
 
     # Store results
-    out_offsets = n * K + k_offsets
-    tl.store(output_ptr + out_offsets, acc.to(input_ptr.dtype.element_ty), mask=k_mask)
+    tl.store(output_ptr + n_offsets, acc.to(input_ptr.dtype.element_ty), mask=n_mask)
 
 
 @triton.jit
@@ -171,40 +375,27 @@ def sum_kernel_atomic(
     N,
     BLOCK_SIZE: tl.constexpr
 ):
-    """
-    Simple atomic reduction kernel for full tensor sum.
-    """
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < N
-
-    # Load and sum this block
-    values = tl.load(x_ptr + offsets, mask=mask, other=0.0)
-    block_sum = tl.sum(values)
-
-    # Atomic add to output
-    tl.atomic_add(output_ptr, block_sum)
+    """Atomic kernel for full tensor sum."""
+    generic_reduction_atomic(x_ptr, output_ptr, N, BLOCK_SIZE, "sum")
 
 
 # =============================================================================
 # GPU OPERATIONS
 # =============================================================================
 
-@register_cuda("sum")
-def reduce_sum(x, axis=None, keepdims=False):
+def _reduce_generic(x, axis, keepdims, kernels):
     """
-    Optimized reduce sum operation.
-    Uses adaptive strategies based on tensor shape and reduction pattern.
-    """
-    # Handle bool tensors
-    if hasattr(x, 'dtype'):
-        import genesis
-        if x.dtype == genesis.bool:
-            zeros_int64 = zeros(x.shape, dtype=genesis.int64)
-            x = add(zeros_int64, x)
+    Generic reduction implementation for sum/max/min operations.
 
-    # x is a Storage object from the dispatcher
+    Args:
+        x: Input storage object
+        axis: Axis or axes to reduce along (None for full reduction)
+        keepdims: Whether to keep reduced dimensions
+        kernels: ReductionKernels object containing kernel functions and config
+
+    Returns:
+        Reduced storage object
+    """
     shape = x.shape
     ndim = len(shape)
 
@@ -219,38 +410,35 @@ def reduce_sum(x, axis=None, keepdims=False):
         output = CUDAStorage(output_shape, dtype=x.dtype)
 
         if n_elements == 0:
-            output.fill(0.0)
+            output.fill(kernels.fill_value)
             return output
 
         # Adaptive strategy based on size
         if n_elements <= 4096:
             # Small tensor: single kernel with atomic
-            output.fill(0.0)
+            output.fill(kernels.fill_value)
             block_size = min(1024, triton.next_power_of_2(n_elements))
             grid = (triton.cdiv(n_elements, block_size),)
-            sum_kernel_atomic[grid](x, output, n_elements, block_size)
+            kernels.atomic_kernel[grid](x, output, n_elements, block_size)
         else:
             # Large tensor: two-stage reduction
-            # Adaptive block size (inspired by FlagGems)
-            block_size = triton.next_power_of_2(min(1024, max(32, int(math.sqrt(n_elements)))))
+            block_size = calculate_adaptive_block_size(n_elements)
             mid_size = triton.cdiv(n_elements, block_size)
 
-            # Stage 1: partial sums
+            # Stage 1: partial reductions
             mid = CUDAStorage((mid_size,), dtype=x.dtype)
             grid1 = (mid_size,)
-            sum_kernel_stage1[grid1](x, mid, n_elements, block_size)
+            kernels.stage1_kernel[grid1](x, mid, n_elements, block_size)
 
             # Stage 2: final reduction
             block_mid = triton.next_power_of_2(min(2048, mid_size))
             grid2 = (1,)
-            sum_kernel_stage2[grid2](mid, output, mid_size, block_mid)
+            kernels.stage2_kernel[grid2](mid, output, mid_size, block_mid)
 
         return output
 
     # Normalize axis
-    if isinstance(axis, int):
-        axis = (axis,)
-    axis = tuple(ax % ndim for ax in axis)
+    axis = normalize_axis(axis, ndim)
 
     # Single axis reduction
     if len(axis) == 1:
@@ -274,35 +462,42 @@ def reduce_sum(x, axis=None, keepdims=False):
             x_flat = x.reshape((M, N))
 
             # Adaptive tile size
-            tile_n = min(2048, triton.next_power_of_2(N)) if N > 32 else triton.next_power_of_2(N)
+            tile_n = calculate_tile_size(N, max_tile=2048)
 
             grid = (M,)
-            sum_kernel_inner[grid](output, x_flat, M, N, tile_n)
+            kernels.inner_kernel[grid](output, x_flat, M, N, tile_n)
 
             return output.reshape(output_shape)
 
-        elif ax == 0:
-            # First dimension reduction
+        elif ax == 0 and kernels.name == "sum":
+            # First dimension reduction (sum only - max/min use permute fallback)
             M = shape[0]
             rest = functools_reduce(operator.mul, shape[1:], 1)
 
             output = CUDAStorage(shape[1:] if not keepdims else output_shape, dtype=x.dtype)
 
-            # Reshape for efficient reduction
+            # Reshape to 2D
             x_2d = x.reshape((M, rest))
             out_flat = output.reshape((rest,))
 
-            # Process each output element
-            tile_m = min(256, triton.next_power_of_2(M))
-            tile_k = min(128, triton.next_power_of_2(min(rest, 128)))
-
-            grid = (rest, triton.cdiv(1, 1))
-            sum_kernel_outer[grid](out_flat, x_2d, M, rest, 1, tile_m, tile_k)
+            # For small M, use vectorized kernel that processes multiple outputs per program
+            if M <= 16:
+                # Vectorized approach: each program handles TILE_N output elements
+                tile_n = min(2048, triton.next_power_of_2(min(rest, 1024)))
+                grid = (triton.cdiv(rest, tile_n),)
+                sum_kernel_axis0_vectorized[grid](out_flat, x_2d, M, rest, tile_n)
+            else:
+                # For larger M, fall back to transpose + inner kernel
+                # IMPORTANT: Must call contiguous() after permute to ensure correct memory layout
+                x_transposed = x_2d.permute((1, 0)).contiguous()
+                tile_n = calculate_tile_size(M, max_tile=1024, threshold=0)
+                grid = (rest,)
+                kernels.inner_kernel[grid](out_flat, x_transposed, rest, M, tile_n)
 
             return output
 
         else:
-            # Middle dimension reduction - need permute
+            # Middle dimension reduction OR ax==0 for max/min - need permute
             axes_to_keep = tuple(i for i in range(ndim) if i != ax)
             new_order = axes_to_keep + (ax,)
             x = x.permute(new_order)
@@ -314,10 +509,10 @@ def reduce_sum(x, axis=None, keepdims=False):
             temp_output = CUDAStorage((M,), dtype=x.dtype)
 
             # Use inner kernel after permute
-            tile_n = min(1024, triton.next_power_of_2(N)) if N > 32 else triton.next_power_of_2(N)
+            tile_n = calculate_tile_size(N, max_tile=1024)
 
             grid = (M,)
-            sum_kernel_inner[grid](temp_output, x_2d, M, N, tile_n)
+            kernels.inner_kernel[grid](temp_output, x_2d, M, N, tile_n)
 
             return temp_output.reshape(output_shape)
 
@@ -326,7 +521,7 @@ def reduce_sum(x, axis=None, keepdims=False):
 
     if not axes_to_keep:
         # Reducing all dimensions
-        return reduce_sum(x, axis=None, keepdims=keepdims)
+        return _reduce_generic(x, axis=None, keepdims=keepdims, kernels=kernels)
 
     # Permute axes to group reduction dimensions
     new_order = axes_to_keep + axis
@@ -343,10 +538,10 @@ def reduce_sum(x, axis=None, keepdims=False):
     temp_output = CUDAStorage((keep_size,), dtype=x.dtype)
 
     # Use optimized inner kernel
-    tile_n = min(1024, triton.next_power_of_2(reduce_size)) if reduce_size > 32 else triton.next_power_of_2(reduce_size)
+    tile_n = calculate_tile_size(reduce_size, max_tile=1024)
 
     grid = (keep_size,)
-    sum_kernel_inner[grid](temp_output, x_2d, keep_size, reduce_size, tile_n)
+    kernels.inner_kernel[grid](temp_output, x_2d, keep_size, reduce_size, tile_n)
 
     # Reshape to final output
     if keepdims:
@@ -357,6 +552,32 @@ def reduce_sum(x, axis=None, keepdims=False):
     else:
         final_shape = tuple(shape[i] for i in axes_to_keep)
         return temp_output.reshape(final_shape)
+
+
+@register_cuda("sum")
+def reduce_sum(x, axis=None, keepdims=False):
+    """
+    Optimized reduce sum operation.
+    Uses adaptive strategies based on tensor shape and reduction pattern.
+    """
+    # Handle bool tensors (sum-specific)
+    if hasattr(x, 'dtype'):
+        if x.dtype == genesis.bool:
+            zeros_int64 = zeros(x.shape, dtype=genesis.int64)
+            x = add(zeros_int64, x)
+
+    # Create kernel configuration
+    kernels = ReductionKernels(
+        atomic_kernel=sum_kernel_atomic,
+        stage1_kernel=sum_kernel_stage1,
+        stage2_kernel=sum_kernel_stage2,
+        inner_kernel=sum_kernel_inner,
+        fill_value=0.0,
+        name="sum"
+    )
+
+    # Delegate to generic implementation
+    return _reduce_generic(x, axis, keepdims, kernels)
 
 
 @register_cuda("sum_to_shape")
@@ -400,7 +621,7 @@ def sum_to_shape(x, target_shape):
 
 
 # =============================================================================
-# MAX REDUCTION KERNELS
+# MAX KERNELS (wrappers around generic implementations)
 # =============================================================================
 
 @triton.jit
@@ -410,17 +631,8 @@ def max_kernel_stage1(
     M,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """
-    Stage 1 of two-stage max reduction.
-    """
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offset < M
-
-    vals = tl.load(inp_ptr + offset, mask=mask, other=-float("inf"))
-    max_val = tl.max(vals)
-
-    tl.store(mid_ptr + pid, max_val)
+    """Stage 1 of two-stage max reduction."""
+    generic_reduction_stage1(inp_ptr, mid_ptr, M, BLOCK_SIZE, "max")
 
 
 @triton.jit
@@ -430,16 +642,8 @@ def max_kernel_stage2(
     mid_size,
     BLOCK_SIZE: tl.constexpr
 ):
-    """
-    Stage 2 of two-stage max reduction.
-    """
-    offset = tl.arange(0, BLOCK_SIZE)
-    mask = offset < mid_size
-
-    vals = tl.load(mid_ptr + offset, mask=mask, other=-float("inf"))
-    max_val = tl.max(vals)
-
-    tl.store(out_ptr, max_val)
+    """Stage 2 of two-stage max reduction."""
+    generic_reduction_stage2(mid_ptr, out_ptr, mid_size, BLOCK_SIZE, "max")
 
 
 @triton.jit
@@ -450,24 +654,8 @@ def max_kernel_inner(
     N,
     TILE_N: tl.constexpr,
 ):
-    """
-    Max reduction for innermost dimension.
-    """
-    pid_m = tl.program_id(0)
-
-    # Initialize with -inf
-    max_val = tl.full([], -float("inf"), dtype=tl.float32)
-
-    # Process row in chunks
-    for start_n in range(0, N, TILE_N):
-        n_offsets = start_n + tl.arange(0, TILE_N)
-        inp_offsets = pid_m * N + n_offsets
-        mask = n_offsets < N
-
-        chunk = tl.load(input_ptr + inp_offsets, mask=mask, other=-float("inf"))
-        max_val = tl.maximum(max_val, tl.max(chunk))
-
-    tl.store(output_ptr + pid_m, max_val)
+    """Inner kernel for max reduction."""
+    generic_reduction_inner(output_ptr, input_ptr, M, N, TILE_N, "max")
 
 
 @triton.jit
@@ -477,18 +665,8 @@ def max_kernel_atomic(
     N,
     BLOCK_SIZE: tl.constexpr
 ):
-    """
-    Atomic max reduction kernel.
-    """
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < N
-
-    values = tl.load(x_ptr + offsets, mask=mask, other=-float("inf"))
-    block_max = tl.max(values)
-
-    tl.atomic_max(output_ptr, block_max)
+    """Atomic kernel for full tensor max."""
+    generic_reduction_atomic(x_ptr, output_ptr, N, BLOCK_SIZE, "max")
 
 
 @register_cuda("max")
@@ -496,130 +674,22 @@ def reduce_max(x, axis=None, keepdims=False):
     """
     Optimized reduce max operation.
     """
-    shape = x.shape
-    ndim = len(shape)
+    # Create kernel configuration
+    kernels = ReductionKernels(
+        atomic_kernel=max_kernel_atomic,
+        stage1_kernel=max_kernel_stage1,
+        stage2_kernel=max_kernel_stage2,
+        inner_kernel=max_kernel_inner,
+        fill_value=-float('inf'),
+        name="max"
+    )
 
-    # Ensure contiguous
-    if not x.is_contiguous():
-        x = x.contiguous()
+    # Delegate to generic implementation
+    return _reduce_generic(x, axis, keepdims, kernels)
 
-    # Full tensor reduction
-    if axis is None:
-        n_elements = x.size
-        output_shape = (1,) if keepdims else ()
-        output = CUDAStorage(output_shape, dtype=x.dtype)
-
-        if n_elements == 0:
-            output.fill(-float('inf'))
-            return output
-
-        # Adaptive strategy
-        if n_elements <= 4096:
-            # Small tensor: single kernel
-            output.fill(-float('inf'))
-            block_size = min(1024, triton.next_power_of_2(n_elements))
-            grid = (triton.cdiv(n_elements, block_size),)
-            max_kernel_atomic[grid](x, output, n_elements, block_size)
-        else:
-            # Large tensor: two-stage
-            block_size = triton.next_power_of_2(min(1024, max(32, int(math.sqrt(n_elements)))))
-            mid_size = triton.cdiv(n_elements, block_size)
-
-            # Stage 1
-            mid = CUDAStorage((mid_size,), dtype=x.dtype)
-            grid1 = (mid_size,)
-            max_kernel_stage1[grid1](x, mid, n_elements, block_size)
-
-            # Stage 2
-            block_mid = triton.next_power_of_2(min(2048, mid_size))
-            grid2 = (1,)
-            max_kernel_stage2[grid2](mid, output, mid_size, block_mid)
-
-        return output
-
-    # Normalize axis
-    if isinstance(axis, int):
-        axis = (axis,)
-    axis = tuple(ax % ndim for ax in axis)
-
-    # Single axis reduction
-    if len(axis) == 1:
-        ax = axis[0]
-
-        # Calculate output shape
-        output_shape = list(shape)
-        if keepdims:
-            output_shape[ax] = 1
-        else:
-            output_shape.pop(ax)
-        output_shape = tuple(output_shape)
-
-        # Innermost dimension
-        if ax == ndim - 1:
-            M = functools_reduce(operator.mul, shape[:-1], 1)
-            N = shape[-1]
-
-            output = CUDAStorage((M,), dtype=x.dtype)
-            x_flat = x.reshape((M, N))
-
-            tile_n = min(2048, triton.next_power_of_2(N)) if N > 32 else triton.next_power_of_2(N)
-
-            grid = (M,)
-            max_kernel_inner[grid](output, x_flat, M, N, tile_n)
-
-            return output.reshape(output_shape)
-
-        # For other axes, fallback to permute + inner reduction
-        else:
-            axes_to_keep = tuple(i for i in range(ndim) if i != ax)
-            new_order = axes_to_keep + (ax,)
-            x = x.permute(new_order)
-
-            M = functools_reduce(operator.mul, [shape[i] for i in axes_to_keep], 1)
-            N = shape[ax]
-
-            x_2d = x.reshape((M, N))
-            temp_output = CUDAStorage((M,), dtype=x.dtype)
-
-            tile_n = min(1024, triton.next_power_of_2(N)) if N > 32 else triton.next_power_of_2(N)
-
-            grid = (M,)
-            max_kernel_inner[grid](temp_output, x_2d, M, N, tile_n)
-
-            return temp_output.reshape(output_shape)
-
-    # Multi-axis reduction - similar strategy as sum
-    axes_to_keep = tuple(i for i in range(ndim) if i not in axis)
-
-    if not axes_to_keep:
-        return reduce_max(x, axis=None, keepdims=keepdims)
-
-    # Permute and reshape
-    new_order = axes_to_keep + axis
-    x = x.permute(new_order)
-
-    keep_size = functools_reduce(operator.mul, [shape[i] for i in axes_to_keep], 1)
-    reduce_size = functools_reduce(operator.mul, [shape[i] for i in axis], 1)
-
-    x_2d = x.reshape((keep_size, reduce_size))
-    temp_output = CUDAStorage((keep_size,), dtype=x.dtype)
-
-    tile_n = min(1024, triton.next_power_of_2(reduce_size)) if reduce_size > 32 else triton.next_power_of_2(reduce_size)
-
-    grid = (keep_size,)
-    max_kernel_inner[grid](temp_output, x_2d, keep_size, reduce_size, tile_n)
-
-    # Reshape to final output
-    if keepdims:
-        final_shape = list(shape)
-        for i in axis:
-            final_shape[i] = 1
-        return temp_output.reshape(tuple(final_shape))
-    else:
-        final_shape = tuple(shape[i] for i in axes_to_keep)
-        return temp_output.reshape(final_shape)
-
-# ========== MIN REDUCTION (mirroring MAX implementation) ==========
+# =============================================================================
+# MIN KERNELS (wrappers around generic implementations)
+# =============================================================================
 
 @triton.jit
 def min_kernel_stage1(
@@ -629,14 +699,7 @@ def min_kernel_stage1(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Stage 1 of two-stage min reduction."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offset < M
-
-    vals = tl.load(inp_ptr + offset, mask=mask, other=float("inf"))
-    min_val = tl.min(vals)
-
-    tl.store(mid_ptr + pid, min_val)
+    generic_reduction_stage1(inp_ptr, mid_ptr, M, BLOCK_SIZE, "min")
 
 
 @triton.jit
@@ -647,13 +710,7 @@ def min_kernel_stage2(
     BLOCK_SIZE: tl.constexpr
 ):
     """Stage 2 of two-stage min reduction."""
-    offset = tl.arange(0, BLOCK_SIZE)
-    mask = offset < mid_size
-
-    vals = tl.load(mid_ptr + offset, mask=mask, other=float("inf"))
-    min_val = tl.min(vals)
-
-    tl.store(out_ptr, min_val)
+    generic_reduction_stage2(mid_ptr, out_ptr, mid_size, BLOCK_SIZE, "min")
 
 
 @triton.jit
@@ -664,22 +721,8 @@ def min_kernel_inner(
     N,
     TILE_N: tl.constexpr,
 ):
-    """Min reduction for innermost dimension."""
-    pid_m = tl.program_id(0)
-
-    # Initialize with +inf
-    min_val = tl.full([], float("inf"), dtype=tl.float32)
-
-    # Process row in chunks
-    for start_n in range(0, N, TILE_N):
-        n_offsets = start_n + tl.arange(0, TILE_N)
-        inp_offsets = pid_m * N + n_offsets
-        mask = n_offsets < N
-
-        chunk = tl.load(input_ptr + inp_offsets, mask=mask, other=float("inf"))
-        min_val = tl.minimum(min_val, tl.min(chunk))
-
-    tl.store(output_ptr + pid_m, min_val)
+    """Inner kernel for min reduction."""
+    generic_reduction_inner(output_ptr, input_ptr, M, N, TILE_N, "min")
 
 
 @triton.jit
@@ -689,139 +732,22 @@ def min_kernel_atomic(
     N,
     BLOCK_SIZE: tl.constexpr
 ):
-    """Atomic min reduction kernel."""
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < N
-
-    values = tl.load(x_ptr + offsets, mask=mask, other=float("inf"))
-    block_min = tl.min(values)
-
-    tl.atomic_min(output_ptr, block_min)
+    """Atomic kernel for full tensor min."""
+    generic_reduction_atomic(x_ptr, output_ptr, N, BLOCK_SIZE, "min")
 
 
 @register_cuda("min")
 def reduce_min(x, axis=None, keepdims=False):
     """Optimized reduce min operation."""
-    shape = x.shape
-    ndim = len(shape)
+    # Create kernel configuration
+    kernels = ReductionKernels(
+        atomic_kernel=min_kernel_atomic,
+        stage1_kernel=min_kernel_stage1,
+        stage2_kernel=min_kernel_stage2,
+        inner_kernel=min_kernel_inner,
+        fill_value=float('inf'),
+        name="min"
+    )
 
-    # Ensure contiguous
-    if not x.is_contiguous():
-        x = x.contiguous()
-
-    # Full tensor reduction
-    if axis is None:
-        n_elements = x.size
-        output_shape = (1,) if keepdims else ()
-        output = CUDAStorage(output_shape, dtype=x.dtype)
-
-        if n_elements == 0:
-            output.fill(float('inf'))
-            return output
-
-        # Adaptive strategy
-        if n_elements <= 4096:
-            # Small tensor: single kernel
-            output.fill(float('inf'))
-            block_size = min(1024, triton.next_power_of_2(n_elements))
-            grid = (triton.cdiv(n_elements, block_size),)
-            min_kernel_atomic[grid](x, output, n_elements, block_size)
-        else:
-            # Large tensor: two-stage
-            block_size = triton.next_power_of_2(min(1024, max(32, int(math.sqrt(n_elements)))))
-            mid_size = triton.cdiv(n_elements, block_size)
-
-            # Stage 1
-            mid = CUDAStorage((mid_size,), dtype=x.dtype)
-            grid1 = (mid_size,)
-            min_kernel_stage1[grid1](x, mid, n_elements, block_size)
-
-            # Stage 2
-            block_mid = triton.next_power_of_2(min(2048, mid_size))
-            grid2 = (1,)
-            min_kernel_stage2[grid2](mid, output, mid_size, block_mid)
-
-        return output
-
-    # Normalize axis
-    if isinstance(axis, int):
-        axis = (axis,)
-    axis = tuple(ax % ndim for ax in axis)
-
-    # Single axis reduction
-    if len(axis) == 1:
-        ax = axis[0]
-
-        # Calculate output shape
-        output_shape = list(shape)
-        if keepdims:
-            output_shape[ax] = 1
-        else:
-            output_shape.pop(ax)
-        output_shape = tuple(output_shape)
-
-        # Innermost dimension
-        if ax == ndim - 1:
-            M = functools_reduce(operator.mul, shape[:-1], 1)
-            N = shape[-1]
-
-            output = CUDAStorage((M,), dtype=x.dtype)
-            x_flat = x.reshape((M, N))
-
-            tile_n = min(2048, triton.next_power_of_2(N)) if N > 32 else triton.next_power_of_2(N)
-
-            grid = (M,)
-            min_kernel_inner[grid](output, x_flat, M, N, tile_n)
-
-            return output.reshape(output_shape)
-
-        # For other axes, fallback to permute + inner reduction
-        else:
-            axes_to_keep = tuple(i for i in range(ndim) if i != ax)
-            new_order = axes_to_keep + (ax,)
-            x = x.permute(new_order)
-
-            M = functools_reduce(operator.mul, [shape[i] for i in axes_to_keep], 1)
-            N = shape[ax]
-
-            x_2d = x.reshape((M, N))
-            temp_output = CUDAStorage((M,), dtype=x.dtype)
-
-            tile_n = min(1024, triton.next_power_of_2(N)) if N > 32 else triton.next_power_of_2(N)
-
-            grid = (M,)
-            min_kernel_inner[grid](temp_output, x_2d, M, N, tile_n)
-
-            return temp_output.reshape(output_shape)
-
-    # Multi-axis reduction
-    axes_to_keep = tuple(i for i in range(ndim) if i not in axis)
-
-    if not axes_to_keep:
-        return reduce_min(x, axis=None, keepdims=keepdims)
-
-    # Permute and reshape
-    new_order = axes_to_keep + axis
-
-    keep_size = functools_reduce(operator.mul, [shape[i] for i in axes_to_keep], 1)
-    reduce_size = functools_reduce(operator.mul, [shape[i] for i in axis], 1)
-
-    x_2d = x.reshape((keep_size, reduce_size))
-    temp_output = CUDAStorage((keep_size,), dtype=x.dtype)
-
-    tile_n = min(1024, triton.next_power_of_2(reduce_size)) if reduce_size > 32 else triton.next_power_of_2(reduce_size)
-
-    grid = (keep_size,)
-    min_kernel_inner[grid](temp_output, x_2d, keep_size, reduce_size, tile_n)
-
-    # Reshape to final output
-    if keepdims:
-        final_shape = list(shape)
-        for i in axis:
-            final_shape[i] = 1
-        return temp_output.reshape(tuple(final_shape))
-    else:
-        final_shape = tuple(shape[i] for i in axes_to_keep)
-        return temp_output.reshape(final_shape)
+    # Delegate to generic implementation
+    return _reduce_generic(x, axis, keepdims, kernels)
