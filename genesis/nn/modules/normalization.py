@@ -6,6 +6,7 @@ from genesis import init
 from genesis.tensor import Tensor
 import genesis.nn.functional as F
 from .module import Module, Parameter
+from ..triton_ops import fused_layer_norm
 
 
 class BatchNorm1d(Module):
@@ -81,15 +82,11 @@ class LayerNorm(Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """
-        Forward pass of the layer normalization layer.
+        Forward pass of the layer normalization layer using fused Triton kernel.
         """
         if x.shape[-1] != self.dim:
             raise RuntimeError("Input dims should be %d" % self.dim)
-        mean = F.summation(x, axis=-1, keepdims=True) / x.shape[-1]
-        var = F.summation((x - mean) ** 2, axis=-1, keepdims=True) / self.dim
-        output = (x - mean) / F.sqrt(var + self.eps)
-        output = self.weight * output + self.bias
-        return output
+        return fused_layer_norm(x, self.weight, self.bias, self.eps)
 
 
 class FusedLayerNorm(Module):
