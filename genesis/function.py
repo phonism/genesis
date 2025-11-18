@@ -6,8 +6,9 @@ implementing automatic differentiation operations.
 
 import genesis
 from genesis.tensor import Tensor
-from genesis.cuda.amp import AMPPolicy, get_amp_dtype
-from genesis.cuda.amp_cache import get_amp_cache
+from genesis.amp import AMPPolicy, get_amp_dtype
+from genesis.amp.amp_cache import get_amp_cache
+from genesis.grad_mode import no_grad
 from typing import List, Optional, NamedTuple, Tuple, Union, Any
 import weakref
 
@@ -147,7 +148,7 @@ class Function:
         - AMPPolicy.DEFAULT: No special handling (default)
 
     Example:
-        from genesis.cuda.amp import AMPPolicy
+        from genesis.amp import AMPPolicy
 
         class MatMul(Function):
             amp_policy = AMPPolicy.FP16  # Benefit from Tensor Core
@@ -219,8 +220,10 @@ class Function:
                 args = _cast(args, genesis.float32)
                 kwargs = _cast(kwargs, genesis.float32)
 
-        # Execute forward pass
-        result = cls.forward(instance.ctx, *args, **kwargs)
+        # Execute forward pass in no_grad context to prevent intermediate node creation
+        # This ensures only the final output is tracked in the autograd graph
+        with no_grad():
+            result = cls.forward(instance.ctx, *args, **kwargs)
 
         instance.is_tuple_result = isinstance(result, tuple)
 

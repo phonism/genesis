@@ -92,6 +92,7 @@ class AdamW(Optimizer):
         self.v = {}
         self.fused = fused
 
+    @genesis.no_grad()
     def step(self):
         """Perform optimization step."""
         if self.fused:

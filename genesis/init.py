@@ -146,7 +146,7 @@ def one_hot(n, i, device=None, dtype=genesis.float32, requires_grad=False):
     # Convert i to Tensor if needed
     if not isinstance(i, genesis.Tensor):
         i = genesis.Tensor(Storage.from_numpy(i, device), shape=tuple(i.shape if hasattr(i, 'shape') else [len(i)]))
-    # Normalize dtype: get_dtype handles DType/str/numpy.dtype/torch.dtype
+    # Normalize dtype: get_dtype handles DType/str/numpy.dtype
     dtype_obj = get_dtype(dtype)
     # Dispatcher expects positional args: (indices_tensor, n_classes, dtype_string)
     # Dispatcher returns Tensor directly

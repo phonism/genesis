@@ -1,16 +1,19 @@
 """
 Process group management for distributed training.
 
-This module handles initialization, management, and cleanup of 
+This module handles initialization, management, and cleanup of
 distributed process groups across multiple devices and nodes.
 """
 
 import os
 import socket
 import struct
+import logging
 from typing import Optional, List, Union
 from .comm import _set_backend
 from .nccl_backend import NCCLBackend
+
+logger = logging.getLogger(__name__)
 
 
 # Global process group state
@@ -64,8 +67,8 @@ def init_process_group(backend: str = "nccl",
     
     _set_backend(_backend_instance)
     _initialized = True
-    
-    print(f"Initialized distributed process group: rank={rank}, world_size={world_size}, local_rank={_local_rank}")
+
+    logger.info(f"Initialized distributed process group: rank={rank}, world_size={world_size}, local_rank={_local_rank}")
 
 
 def destroy_process_group():
@@ -84,8 +87,8 @@ def destroy_process_group():
     _initialized = False
     _backend_instance = None
     _set_backend(None)
-    
-    print("Destroyed distributed process group")
+
+    logger.info("Destroyed distributed process group")
 
 
 def get_world_size() -> int:

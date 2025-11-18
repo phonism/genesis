@@ -8,3 +8,4 @@ from . import functional
 from .modules import *
 from . import utils
 from .moe import *
+from . import parallel  # For torch.nn.parallel API compatibility

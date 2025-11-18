@@ -9,7 +9,7 @@ import triton.language as tl
 from ..function import Function
 from ..tensor import Tensor
 from genesis import init
-from genesis.cuda.amp import AMPPolicy
+from genesis.amp import AMPPolicy
 
 @triton.jit
 def _layer_norm_fwd_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK_SIZE: tl.constexpr,):

@@ -90,17 +90,36 @@ def _check_dtype(value, dtype):
 class autocast:
     """Context manager for automatic mixed precision training.
 
-    When enabled, operations inside the context will use lower precision (fp16/bf16)
-    for faster computation while maintaining numerical stability.
+    Args:
+        device_type: Device type ('cuda' or 'cpu'). Default: 'cuda' if not specified.
+        enabled: Whether to enable autocast. Default: True.
 
-    Example:
-        with amp.autocast():
+    Examples:
+        # New PyTorch 2.x style API (recommended)
+        with amp.autocast('cuda'):
             output = model(input)
             loss = criterion(output, target)
+
+        # Old style (still supported for backward compatibility)
+        with amp.autocast():
+            output = model(input)
     """
+
+    def __init__(self, device_type='cuda', enabled=True):
+        """Initialize autocast context manager.
+
+        Args:
+            device_type: Device type ('cuda' or 'cpu')
+            enabled: Whether to enable autocast
+        """
+        self.device_type = device_type
+        self.enabled = enabled
 
     def __enter__(self):
         """Enter autocast context and clear old cached conversions."""
+        if not self.enabled:
+            return self
+
         # Clear cache from previous iteration
         # This prevents memory accumulation while allowing backward pass to use cached tensors
         cache = get_amp_cache()
@@ -115,7 +134,8 @@ class autocast:
         Note: We don't clear the cache here to allow backward pass to use cached FP16 tensors.
         Cache will be cleared at the start of next forward pass.
         """
-        genesis.enable_autocast = False
+        if self.enabled:
+            genesis.enable_autocast = False
         return False
 
 

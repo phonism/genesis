@@ -170,16 +170,37 @@ def argsort(input: Tensor, dim: int = -1, descending: bool = False):
 def bincount(input: Tensor, weights=None, minlength: int = 0):
     """
     Count occurrences of each value in integer tensor.
-    
+
     Args:
         input: 1D integer tensor
         weights: Optional weights tensor
         minlength: Minimum length of output
-        
+
     Returns:
         Tensor containing counts
     """
     return Dispatcher.dispatch('bincount', input, weights, minlength)
+
+
+def nonzero(input: Tensor, as_tuple: bool = False):
+    """
+    Returns indices of nonzero elements.
+
+    Args:
+        input: Input tensor
+        as_tuple: If True, return tuple of 1D tensors (one per dimension).
+                 If False, return 2D tensor where each row is an index.
+
+    Returns:
+        Indices of nonzero elements
+
+    Example:
+        >>> x = genesis.tensor([0, 1, 0, 2, 0])
+        >>> genesis.nonzero(x)  # Returns [[1], [3]]
+        >>> x = genesis.tensor([[0, 1], [2, 0]])
+        >>> genesis.nonzero(x)  # Returns [[0, 1], [1, 0]]
+    """
+    return Dispatcher.dispatch('nonzero', input, as_tuple)
 
 
 def allclose(input: Tensor, other: Tensor, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False):

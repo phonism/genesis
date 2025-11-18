@@ -19,7 +19,7 @@ try:
 except ImportError:
     from cuda import cuda, nvrtc
 
-from ..dtypes import get_dtype
+from genesis.dtypes import get_dtype
 from . import cuda_utils
 from .cuda_error import check_cuda_error
 

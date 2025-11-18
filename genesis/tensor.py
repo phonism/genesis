@@ -8,8 +8,9 @@ from functools import reduce
 import operator
 from genesis.dtypes import DType, default_dtype, float32, float16, float64, bfloat16, get_dtype
 from genesis.device import device as make_device, cpu, Device
-from genesis import init
 from genesis.storage import Storage
+from genesis import init
+from genesis.grad_mode import no_grad
 
 # Import to avoid function-level imports
 import genesis
@@ -160,19 +161,7 @@ class Tensor:
             # Both must be true for tensor to be truly contiguous
             self._is_contiguous = tensor_contiguous and storage_contiguous
         return self._is_contiguous
-    
-    def contiguous(self) -> 'Tensor':
-        """Return contiguous storage tensor"""
-        if self.is_contiguous():
-            return self
 
-        # Use storage-level contiguous method
-        new_storage = self.storage.contiguous(self.shape, self._stride, self.offset)
-        result = Tensor(new_storage, self.shape, stride=None, offset=0)
-        # Inherit requires_grad to ensure gradient tracking continues
-        result.requires_grad = self.requires_grad
-        return result
-    
     def _generate_indices(self):
         """Generate all possible indices"""
         if not self.shape:

@@ -7,7 +7,7 @@ from ..function import Function
 from ..tensor import Tensor
 from genesis import init
 import genesis
-from genesis.cuda.amp import AMPPolicy
+from genesis.amp import AMPPolicy
 
 import triton
 import triton.language as tl

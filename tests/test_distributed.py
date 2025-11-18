@@ -13,6 +13,7 @@ import numpy as np
 
 import genesis
 import genesis.distributed as dist
+from genesis.nn.parallel import DistributedDataParallel as DDP
 
 # Distributed training only supports CUDA
 _CUDA_AVAILABLE = genesis.cuda.is_available()
@@ -62,11 +63,13 @@ def test_import_structure():
     # Test basic imports
     assert hasattr(genesis, 'distributed')
     assert hasattr(genesis.distributed, 'init_process_group')
-    assert hasattr(genesis.distributed, 'DistributedDataParallel')
-    assert hasattr(genesis.distributed, 'DDP')  # Alias
     assert hasattr(genesis.distributed, 'all_reduce')
     assert hasattr(genesis.distributed, 'ReduceOp')
-    
+
+    # Test DDP is in nn.parallel (new API location)
+    assert hasattr(genesis.nn, 'parallel')
+    assert hasattr(genesis.nn.parallel, 'DistributedDataParallel')
+
     # Test enum values
     assert hasattr(genesis.distributed.ReduceOp, 'SUM')
     assert hasattr(genesis.distributed.ReduceOp, 'MAX')
@@ -226,8 +229,8 @@ def test_ddp_single_process(model_size, device, cleanup_distributed):
         model = model.to(device)
 
         # Test DDP wrapper creation
-        ddp_model = dist.DistributedDataParallel(model, device_ids=[device.index])
-        assert isinstance(ddp_model, dist.DistributedDataParallel)
+        ddp_model = DDP(model, device_ids=[device.index])
+        assert isinstance(ddp_model, DDP)
         
         # Test forward pass
         batch_size = 8
@@ -290,7 +293,7 @@ def test_ddp_gradient_synchronization(device, cleanup_distributed):
         # Move model to device BEFORE wrapping with DDP (standard PyTorch DDP behavior)
         model = model.to(device)
 
-        ddp_model = dist.DistributedDataParallel(model, device_ids=[device.index])
+        ddp_model = DDP(model, device_ids=[device.index])
         
         # Create deterministic input and target
         input_tensor = genesis.ones([2, 4], device=device)
