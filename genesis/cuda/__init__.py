@@ -6,9 +6,12 @@ and memory operations, organized similarly to torch.cuda.
 """
 
 import os
+import logging
 from typing import Dict, Optional, List, Any
 
 import threading
+
+logger = logging.getLogger(__name__)
 
 try:
     from cuda import cuda
@@ -26,9 +29,6 @@ from ..backends.cuda_memory import (
     defragment_memory, analyze_memory_fragmentation,
     get_fragmentation_stats, set_memory_config
 )
-
-# Import AMP (Automatic Mixed Precision) module for mixed precision training
-from . import amp
 
 # CUDA initialization state
 _cuda_initialized = False
@@ -403,8 +403,8 @@ def _parse_memory_config() -> Dict[str, Any]:
                     config[key] = value
                     
     except (ValueError, AttributeError) as e:
-        print(f"Warning: Failed to parse GENESIS_CUDA_ALLOC_CONF: {e}")
-    
+        logger.warning(f"Failed to parse GENESIS_CUDA_ALLOC_CONF: {e}")
+
     return config
 
 
@@ -413,7 +413,7 @@ def apply_memory_config() -> None:
     config = _parse_memory_config()
     if config:
         set_memory_config(**config)
-        print(f"Applied GENESIS_CUDA_ALLOC_CONF: {config}")
+        logger.info(f"Applied GENESIS_CUDA_ALLOC_CONF: {config}")
 
 
 # Global flag to track if config has been applied

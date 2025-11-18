@@ -5,10 +5,13 @@ Provides DDP (DistributedDataParallel) wrapper for models to enable
 multi-GPU and multi-node training using NCCL communication.
 """
 
+import logging
 from typing import List, Optional
 import genesis
 from .comm import all_reduce, ReduceOp, _get_backend, broadcast
 from .process_group import is_initialized, get_world_size, get_rank
+
+logger = logging.getLogger(__name__)
 
 
 class DistributedDataParallel(genesis.nn.Module):
@@ -71,8 +74,8 @@ class DistributedDataParallel(genesis.nn.Module):
         
         if broadcast_buffers:
             self._broadcast_buffers()
-            
-        print(f"DDP: Initialized model on rank {self.rank}/{self.world_size}")
+
+        logger.info(f"DDP: Initialized model on rank {self.rank}/{self.world_size}")
         
     def forward(self, *inputs, **kwargs):
         """Forward pass through the wrapped model."""

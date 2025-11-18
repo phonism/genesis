@@ -2,7 +2,7 @@
 
 from ...function import Function
 from ...tensor import Tensor
-from ...cuda.amp import AMPPolicy
+from ...amp import AMPPolicy
 
 import genesis
 import triton

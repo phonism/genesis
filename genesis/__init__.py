@@ -39,6 +39,10 @@ from .serialization import (
     save_checkpoint, load_checkpoint
 )
 from .tensor import Tensor, tensor
+
+# Gradient context managers - must import before optim to avoid circular dependency
+from .grad_mode import no_grad, enable_grad, set_grad_enabled, is_grad_enabled
+
 from . import nn
 from . import init
 from . import optim
@@ -48,7 +52,8 @@ from . import ops  # Import ops to register all operations
 from .function import Function
 from .backends import *
 from .functional import *
-from . import cuda  # CUDA memory management utilities (includes cuda.amp)
+from . import cuda  # CUDA memory management utilities
+from . import amp   # Automatic Mixed Precision (torch.amp compatible)
 
 # Bind tensor methods
 from .api import bind_tensor_methods, bind_nn_functional_methods
@@ -64,9 +69,6 @@ from .random import (
 
 # Device management - import our new Device system
 from .device import device
-
-# Gradient context managers
-from .grad_mode import no_grad, enable_grad, set_grad_enabled, is_grad_enabled
 
 # Device utilities
 def cuda_available() -> bool:

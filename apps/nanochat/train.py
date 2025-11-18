@@ -28,19 +28,19 @@ BACKEND = os.environ.get("NANOCHAT_BACKEND", "genesis")
 if BACKEND == "torch":
     print("Using PyTorch backend")
     import torch
-    from torch.cuda import amp
+    from torch import amp
+    from torch.nn.parallel import DistributedDataParallel as DDP
     genesis = torch
     nn = torch.nn
     F = torch.nn.functional
     genesis.optim = torch.optim
-    genesis.distributed = torch.distributed
     dist = torch.distributed
 else:
     print("Using Genesis backend")
     import genesis
     import genesis.distributed as dist
-    from genesis import nn
-    from genesis.cuda import amp
+    from genesis import nn, amp
+    from genesis.nn.parallel import DistributedDataParallel as DDP
     import genesis.nn.functional as F
 
 from model import ModelConfig, NanoChatModel
@@ -198,7 +198,7 @@ model.to(genesis.device(device))
 
 # Wrap model with DDP if enabled
 if ddp_enabled:
-    model = dist.DDP(model, device_ids=[local_rank])
+    model = DDP(model, device_ids=[local_rank])
     if rank == 0:
         print(f"Model wrapped with DDP on {world_size} GPUs")
 
@@ -267,7 +267,7 @@ for inputs_np, targets_np in train_loader:
 
     # Forward pass with optional mixed precision
     if args.amp:
-        with amp.autocast():
+        with amp.autocast('cuda'):
             logits = model(inputs)
 
             # Compute loss

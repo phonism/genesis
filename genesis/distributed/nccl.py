@@ -9,10 +9,13 @@ import ctypes
 import ctypes.util
 import os
 import platform
+import logging
 from dataclasses import dataclass
 from typing import List, Optional, Union
 import genesis
 from .comm import ReduceOp
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -168,7 +171,7 @@ class NCCLLibrary:
                 
         try:
             self.library = ctypes.CDLL(library_path)
-            print(f"Loaded NCCL library: {library_path}")
+            logger.info(f"Loaded NCCL library: {library_path}")
         except OSError as e:
             raise RuntimeError(f"Failed to load NCCL library {library_path}: {e}")
             
@@ -181,7 +184,7 @@ class NCCLLibrary:
                 func.argtypes = func_def.argtypes
                 self.functions[func_def.name] = func
             except AttributeError:
-                print(f"Warning: Function {func_def.name} not found in NCCL library")
+                logger.warning(f"Function {func_def.name} not found in NCCL library")
                 
     def __getattr__(self, name: str):
         """Allow direct access to NCCL functions."""

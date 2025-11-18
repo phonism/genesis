@@ -302,9 +302,6 @@ def matmul(a, b, activation=""):
     """
     assert a.shape[-1] == b.shape[-2], "Incompatible dimensions"
 
-    # Removed forced contiguous - kernels handle strides directly
-    # This avoids 11GB of wasted copies in backward pass!
-
     if len(a.shape) == 2 and len(b.shape) == 2:
         M, K = a.shape
         K2, N = b.shape
@@ -369,8 +366,6 @@ def matmul(a, b, activation=""):
             for i in range(len(a_shape) - 2):
                 pre_shape_a.append(a_shape[i])
                 pre_a *= a_shape[i]
-            # Removed forced contiguous - kernels handle strides directly
-            # This avoids 11GB of wasted copies in backward pass!
             aa = a.reshape((pre_a, a_shape[-2], a_shape[-1]))
         else:
             aa = a.unsqueeze(0)
@@ -380,7 +375,6 @@ def matmul(a, b, activation=""):
             for i in range(len(b_shape) - 2):
                 pre_shape_b.append(b_shape[i])
                 pre_b *= b_shape[i]
-            # Removed forced contiguous - kernels handle strides directly
             bb = b.reshape((pre_b, b_shape[-2], b_shape[-1]))
         else:
             bb = b.unsqueeze(0)

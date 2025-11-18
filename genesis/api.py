@@ -60,9 +60,8 @@ def bind_tensor_methods():
     # View operations - direct binding
     Tensor.view = lambda self, *shape: F.view(self, *shape)
     Tensor.reshape = lambda self, *shape: F.reshape(self, *shape)
-    # Note: contiguous() uses native implementation in tensor.py (no gradient tracking)
-    # This is intentional to avoid changing computation graph behavior
-    
+    Tensor.contiguous = lambda self: F.contiguous(self)
+
     # Permutation operations - direct binding
     Tensor.permute = lambda self, *dims: F.permute(self, dims if len(dims) > 1 else dims[0])
     Tensor.transpose = lambda self, dim0, dim1: F.transpose(self, axis=(dim0, dim1))
@@ -98,7 +97,8 @@ def bind_tensor_methods():
     Tensor.argmax = lambda self, dim=None, keepdim=False: F.argmax(self, dim, keepdim)
     Tensor.argmin = lambda self, dim=None, keepdim=False: F.argmin(self, dim, keepdim)
     Tensor.argsort = lambda self, dim=-1, descending=False: F.argsort(self, dim, descending)
-    
+    Tensor.nonzero = lambda self, as_tuple=False: F.nonzero(self, as_tuple)
+
     # Comparison operations
     Tensor.eq = lambda self, other: F.eq(self, other)
     Tensor.ne = lambda self, other: F.ne(self, other)

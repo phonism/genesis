@@ -12,7 +12,7 @@ import math
 # Import new dispatcher system
 from genesis.ops import OperationDispatcher, DeviceType
 # Import AMP policy for operation classification
-from genesis.cuda.amp import AMPPolicy
+from genesis.amp import AMPPolicy
 
 
 # ============================================================================
@@ -57,10 +57,8 @@ try:
     from .triton_ops import dropout, safe_softmax
     from .triton_ops.softmax import softmax as triton_softmax
     from .triton_ops.gelu import gelu as triton_gelu
-except Exception as e:
-    print(f"Triton layers do not imported! Error: {e}")
-    import traceback
-    traceback.print_exc()
+except ImportError:
+    # Triton ops are optional - fallback to standard implementations
     pass
 
 def sum_to_shape(data, shape):
@@ -332,12 +330,6 @@ class EWiseMul(Function):
 
     @staticmethod
     def forward(ctx, a, b):
-        # Debug: print dtype mismatch
-        if not hasattr(EWiseMul, '_debug_printed') and hasattr(a, 'dtype') and hasattr(b, 'dtype'):
-            if a.dtype != b.dtype:
-                print(f"[DEBUG EWiseMul] dtype mismatch: a={a.dtype}, b={b.dtype}, autocast={genesis.enable_autocast}")
-            EWiseMul._debug_printed = True
-
         ctx.save_for_backward(a, b)
         requires_grad = a.requires_grad or b.requires_grad
         # Use new dispatcher system - pass tensors, get tensor back

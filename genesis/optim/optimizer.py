@@ -6,6 +6,7 @@ AdamW is in a separate module to avoid circular imports.
 
 import genesis
 import numpy as np
+from genesis.grad_mode import no_grad
 
 class Optimizer:
     """Base class for all optimizers.
@@ -74,22 +75,21 @@ class SGD(Optimizer):
         self.u = {}  # Momentum buffer
         self.weight_decay = weight_decay
     
+    @genesis.no_grad()
     def step(self):
         """Perform SGD parameter update with momentum."""
         for idx, p in enumerate(self.params):
             # Skip parameters without gradients
             if p.grad is None:
                 continue
-                
+
             grad = p.grad.detach() + self.weight_decay * p.detach()
             if idx not in self.u.keys():
                 self.u[idx] = 0
             # Update momentum buffer and apply update
             self.u[idx] = (self.momentum * self.u[idx] + (1 - self.momentum) * grad).detach()
-            # Update parameter using no_grad context to avoid affecting autograd
-            with genesis.no_grad():
-                # Direct tensor subtraction - modern approach, no .data needed
-                p -= self.lr * self.u[idx]
+            # Direct tensor subtraction - modern approach, no .data needed
+            p -= self.lr * self.u[idx]
 
 
 class Adam(Optimizer):
@@ -120,6 +120,7 @@ class Adam(Optimizer):
         self.m = {}      # First moment estimates
         self.v = {}      # Second moment estimates
 
+    @genesis.no_grad()
     def step(self):
         """Perform Adam parameter update with bias correction."""
         self.t += 1
@@ -127,7 +128,7 @@ class Adam(Optimizer):
             # Skip parameters without gradients
             if theta.grad is None:
                 continue
-            
+
             grad = theta.grad.detach() + self.weight_decay * theta.detach()
 
             # Initialize or update first moment estimate
@@ -145,7 +146,5 @@ class Adam(Optimizer):
             self.v[theta_id] = v_cur.detach()
             m_next_hat = m_cur / (1 - self.beta1 ** self.t)
             v_next_hat = v_cur / (1 - self.beta2 ** self.t)
-            # Update parameter using no_grad context to avoid affecting autograd
-            with genesis.no_grad():
-                # Direct tensor subtraction - modern approach, no .data needed
-                theta -= self.lr * m_next_hat / ((v_next_hat ** 0.5) + self.eps)
+            # Direct tensor subtraction - modern approach, no .data needed
+            theta -= self.lr * m_next_hat / ((v_next_hat ** 0.5) + self.eps)

@@ -9,6 +9,7 @@ import os
 import threading
 import socket
 import time
+import logging
 from typing import Optional, List
 import genesis
 from .comm import ReduceOp
@@ -16,6 +17,8 @@ from .nccl import (
     NCCLCommunicator, generate_unique_id, is_nccl_available,
     genesis_reduce_op_to_nccl, ncclUniqueId
 )
+
+logger = logging.getLogger(__name__)
 
 
 class NCCLBackend:
@@ -60,7 +63,7 @@ class NCCLBackend:
             # Single process - no communication needed
             self.communicator = None
             self.initialized = True
-            print(f"NCCL: Single process mode, rank {rank}")
+            logger.info(f"NCCL: Single process mode, rank {rank}")
             return
             
         # Multi-process initialization
@@ -79,16 +82,16 @@ class NCCLBackend:
         # Initialize NCCL communicator
         self.communicator = NCCLCommunicator()
         self.communicator.init_rank(world_size, unique_id, rank)
-        
+
         self.initialized = True
-        print(f"NCCL: Initialized rank {rank}/{world_size} on device {self.local_rank}")
+        logger.info(f"NCCL: Initialized rank {rank}/{world_size} on device {self.local_rank}")
             
     def destroy(self):
         """Clean up NCCL resources."""
         if self.initialized and self.communicator is not None:
             self.communicator.destroy()
         self.initialized = False
-        print("NCCL: Destroyed")
+        logger.info("NCCL: Destroyed")
         
     def barrier(self):
         """Synchronization barrier (standard API)."""

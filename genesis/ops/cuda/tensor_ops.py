@@ -568,8 +568,6 @@ def bincount(x, weights=None, minlength=0):
     if not x.is_contiguous():
         x = x.contiguous()
 
-    print("FUCK:", x)
-
     N = x.shape[0]
 
     # Ensure input is int64 and contiguous

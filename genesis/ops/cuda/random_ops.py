@@ -101,8 +101,10 @@ def randint_kernel(output_ptr, n_elements, low, high, seed, BLOCK_SIZE: tl.const
     next_val = (a * thread_seeds + c) % m
 
     # Convert to range [low, high)
+    # Use abs() to ensure positive values (Triton may treat as signed)
     range_size = high - low
-    result = (next_val % range_size) + low
+    positive_val = tl.abs(next_val)
+    result = (positive_val % range_size) + low
 
     tl.store(output_ptr + offsets, result, mask=mask)
 

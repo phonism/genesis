@@ -2071,9 +2071,7 @@ def argmax(x, dim=None, keepdim=False):
             output = output.reshape((1,) * len(x.shape))
         return output
     else:
-        # Use PyTorch's argmax for specific dimensions (simpler for now)
-        torch_result = torch.argmax(x.to_torch(), dim=dim, keepdim=keepdim)
-        return CUDAStorage.from_torch(torch_result, dtype="int64")
+        raise NotImplementedError("argmax with specific dimension is not yet implemented for CUDA backend")
 
 
 def argmin(x, dim=None, keepdim=False):
@@ -2095,9 +2093,7 @@ def argmin(x, dim=None, keepdim=False):
             output = output.reshape((1,) * len(x.shape))
         return output
     else:
-        # Use PyTorch's argmin for specific dimensions (simpler for now)
-        torch_result = torch.argmin(x.to_torch(), dim=dim, keepdim=keepdim)
-        return CUDAStorage.from_torch(torch_result, dtype="int64")
+        raise NotImplementedError("argmin with specific dimension is not yet implemented for CUDA backend")
 
 
 @triton.jit
@@ -2249,5 +2245,164 @@ def neg(x):
         neg_kernel[grid](x_cont, output, n_elements, BLOCK_SIZE=1024)
 
     return output
+
+
+@triton.jit
+def count_nonzero_kernel(x_ptr, count_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """Count number of nonzero elements."""
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    nonzero_count = tl.sum((x != 0).to(tl.int32))
+
+    # Atomic add to global counter
+    if nonzero_count > 0:
+        tl.atomic_add(count_ptr, nonzero_count)
+
+
+@triton.jit
+def fill_nonzero_1d_kernel(x_ptr, indices_ptr, counter_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """Fill indices for 1D tensor.
+
+    Note: This kernel processes elements sequentially within each block
+    using a loop over individual elements to handle atomic operations.
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+
+    # Process each element in the block sequentially
+    # This is necessary because we need atomic operations per element
+    for i in range(BLOCK_SIZE):
+        idx = block_start + i
+        if idx < n_elements:
+            val = tl.load(x_ptr + idx)
+            if val != 0:
+                # Atomically get output position and store index
+                out_pos = tl.atomic_add(counter_ptr, 1)
+                tl.store(indices_ptr + out_pos, idx.to(tl.int64))
+
+
+@triton.jit
+def flat_to_multi_index_kernel(
+    flat_indices_ptr, output_ptr, shape_ptr,
+    num_nonzero, ndim,
+    BLOCK_SIZE: tl.constexpr
+):
+    """Convert flat indices to multi-dimensional coordinates.
+
+    Args:
+        flat_indices_ptr: Input flat indices (num_nonzero,)
+        output_ptr: Output multi-dimensional indices (num_nonzero, ndim)
+        shape_ptr: Shape of the original tensor (ndim,)
+        num_nonzero: Number of nonzero elements
+        ndim: Number of dimensions
+    """
+    pid = tl.program_id(0)
+    idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = idx < num_nonzero
+
+    # Load flat indices
+    flat_idx = tl.load(flat_indices_ptr + idx, mask=mask, other=0)
+
+    # Convert to multi-dimensional index
+    # Process each dimension from last to first
+    for dim in range(ndim - 1, -1, -1):
+        dim_size = tl.load(shape_ptr + dim)
+        coord = flat_idx % dim_size
+        flat_idx = flat_idx // dim_size
+
+        # Store coordinate
+        output_offset = idx * ndim + dim
+        tl.store(output_ptr + output_offset, coord, mask=mask)
+
+
+@register_cuda("nonzero")
+def nonzero(x, as_tuple=False):
+    """
+    Returns indices of nonzero elements using Triton kernels.
+
+    Args:
+        x: Input CUDAStorage
+        as_tuple: If True, return tuple of 1D tensors. If False, return 2D tensor.
+
+    Returns:
+        Indices of nonzero elements
+    """
+    # Ensure contiguous
+    if not x.is_contiguous():
+        x = x.contiguous()
+
+    n_elements = x.size
+    ndim = len(x.shape)
+
+    # Step 1: Count nonzero elements using atomic counter
+    count = CUDAStorage((1,), dtype='int32')
+    count.fill(0)  # Initialize to 0
+
+    BLOCK_SIZE = 1024
+    grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE),)
+    count_nonzero_kernel[grid](x, count, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+
+    # Get count
+    num_nonzero = int(count.to_numpy()[0])
+
+    if num_nonzero == 0:
+        # No nonzero elements
+        if as_tuple:
+            return tuple(CUDAStorage((0,), dtype='int64') for _ in range(ndim))
+        else:
+            return CUDAStorage((0, ndim), dtype='int64')
+
+    # Step 2: Fill flat indices
+    flat_indices = CUDAStorage((num_nonzero,), dtype='int64')
+    count.fill(0)  # Reset counter
+
+    fill_nonzero_1d_kernel[grid](x, flat_indices, count, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+
+    # Step 3: Convert flat indices to multi-dimensional if needed
+    if ndim == 1:
+        # 1D case: flat indices are the result
+        if as_tuple:
+            return (flat_indices,)
+        else:
+            # Reshape to (num_nonzero, 1)
+            return flat_indices.view(num_nonzero, 1)
+    else:
+        # Multi-dimensional: convert flat indices to coordinates using Triton kernel
+        # Create shape storage on GPU
+        shape_storage = CUDAStorage((ndim,), dtype='int64')
+        for i, dim_size in enumerate(x.shape):
+            # Fill shape information
+            temp = CUDAStorage((1,), dtype='int64')
+            temp.fill(dim_size)
+            # Copy to shape_storage[i] - need a kernel for this
+            # TODO: Implement efficient way to set individual elements
+
+        # Create output storage for multi-dimensional indices
+        indices_2d = CUDAStorage((num_nonzero, ndim), dtype='int64')
+
+        # Launch kernel to convert flat to multi-dimensional
+        BLOCK_SIZE_CONVERT = 256
+        grid_convert = lambda meta: (triton.cdiv(num_nonzero, BLOCK_SIZE_CONVERT),)
+        flat_to_multi_index_kernel[grid_convert](
+            flat_indices, indices_2d, shape_storage,
+            num_nonzero, ndim,
+            BLOCK_SIZE=BLOCK_SIZE_CONVERT
+        )
+
+        if as_tuple:
+            # Extract each dimension column from indices_2d
+            result = []
+            for dim in range(ndim):
+                # Create storage for this dimension
+                dim_indices = CUDAStorage((num_nonzero,), dtype='int64')
+                # Extract column - need strided copy kernel
+                # TODO: Implement column extraction
+                result.append(dim_indices)
+            return tuple(result)
+        else:
+            return indices_2d
 
 

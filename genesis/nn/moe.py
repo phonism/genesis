@@ -316,14 +316,11 @@ class MoELayer(Module):
         for i, expert in enumerate(self.experts):
             expert_mask = (flat_indices == i)
             if expert_mask.any():
-                # Convert boolean mask to integer indices
-                expert_token_indices = []
-                for idx in range(expert_mask.shape[0]):
-                    if expert_mask[idx].item():
-                        expert_token_indices.append(idx)
-                expert_token_indices = genesis.tensor(expert_token_indices, dtype=genesis.int64, device=expert_mask.device)
-                expert_input = hidden_states_repeated[expert_token_indices]
-                output[expert_token_indices] = expert(expert_input)
+                # Use boolean indexing to maintain autograd (no .item()!)
+                expert_input = hidden_states_repeated[expert_mask]
+                expert_output = expert(expert_input)
+                # Assign back using boolean indexing
+                output[expert_mask] = expert_output
                 
         # Weight and combine expert outputs
         output = output.view(*expert_weights.shape, -1)  # (batch*seq, top_k, hidden)
