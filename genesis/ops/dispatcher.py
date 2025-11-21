@@ -57,23 +57,59 @@ class OperationDispatcher:
             )
 
         # Extract storage backends for tensor arguments, keep scalars as-is
-        mixed_args = []
-        for arg in tensors:
-            if isinstance(arg, Tensor):
-                # It's a tensor
-                mixed_args.append(arg.storage._backend)
-            elif isinstance(arg, (list, tuple)):
-                # Check if it's a list/tuple of tensors or other data
-                if arg and isinstance(arg[0], Tensor):
-                    # It's a list/tuple of tensors
-                    tensor_backends = [t.storage._backend for t in arg]
-                    mixed_args.append(tensor_backends)
+        # Optimized path for common cases (1 or 2 args) to avoid loop overhead
+        num_args = len(tensors)
+        if num_args == 1:
+            arg0 = tensors[0]
+            if isinstance(arg0, Tensor):
+                mixed_args = (arg0.storage._backend,)
+            elif isinstance(arg0, (list, tuple)):
+                if arg0 and isinstance(arg0[0], Tensor):
+                    mixed_args = ([t.storage._backend for t in arg0],)
                 else:
-                    # It's a list/tuple of scalars or other data
-                    mixed_args.append(arg)
+                    mixed_args = (arg0,)
             else:
-                # It's a scalar
-                mixed_args.append(arg)
+                mixed_args = (arg0,)
+        elif num_args == 2:
+            arg0 = tensors[0]
+            arg1 = tensors[1]
+            # Unroll first arg
+            if isinstance(arg0, Tensor):
+                val0 = arg0.storage._backend
+            elif isinstance(arg0, (list, tuple)) and arg0 and isinstance(arg0[0], Tensor):
+                val0 = [t.storage._backend for t in arg0]
+            else:
+                val0 = arg0
+            
+            # Unroll second arg
+            if isinstance(arg1, Tensor):
+                val1 = arg1.storage._backend
+            elif isinstance(arg1, (list, tuple)) and arg1 and isinstance(arg1[0], Tensor):
+                val1 = [t.storage._backend for t in arg1]
+            else:
+                val1 = arg1
+            
+            mixed_args = (val0, val1)
+        else:
+            # Fallback for >2 args
+            mixed_args_list = []
+            for arg in tensors:
+                if isinstance(arg, Tensor):
+                    # It's a tensor
+                    mixed_args_list.append(arg.storage._backend)
+                elif isinstance(arg, (list, tuple)):
+                    # Check if it's a list/tuple of tensors or other data
+                    if arg and isinstance(arg[0], Tensor):
+                        # It's a list/tuple of tensors
+                        tensor_backends = [t.storage._backend for t in arg]
+                        mixed_args_list.append(tensor_backends)
+                    else:
+                        # It's a list/tuple of scalars or other data
+                        mixed_args_list.append(arg)
+                else:
+                    # It's a scalar
+                    mixed_args_list.append(arg)
+            mixed_args = tuple(mixed_args_list)
         
         # Call kernel with mixed storage objects and scalars
         impl_func = cls._registry[key]

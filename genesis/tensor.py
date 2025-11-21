@@ -454,7 +454,17 @@ class Tensor:
 
         Returns:
             numpy.ndarray: The tensor data as a numpy array
+
+        Raises:
+            RuntimeError: If tensor requires grad (must call detach() first)
         """
+        # PyTorch compatibility: prevent breaking computational graph
+        if self.requires_grad:
+            raise RuntimeError(
+                "Can't call numpy() on Tensor that requires grad. "
+                "Use tensor.detach().numpy() instead."
+            )
+
         # Ensure tensor is contiguous for proper memory layout
         tensor_contig = self.contiguous()
         
@@ -764,6 +774,59 @@ class Tensor:
         if self.numel() != 1:
             raise TypeError(f"only one element tensors can be converted to Python scalars, got {self.numel()} elements")
         return bool(self.item())
+
+    def __reduce__(self):
+        """
+        Support for pickle serialization.
+
+        Returns Tensor data as numpy array along with metadata needed for reconstruction.
+        This ensures Genesis checkpoints are compatible with standard Python pickle.
+
+        Returns:
+            tuple: (callable, args) for reconstructing the Tensor
+        """
+        # Move to CPU and convert to numpy for serialization
+        # This detaches from computation graph and ensures pickle compatibility
+        cpu_tensor = self.cpu()
+        numpy_data = cpu_tensor.detach().numpy()
+
+        # Get dtype name - handle both DType objects and string dtypes
+        if isinstance(self.dtype, str):
+            dtype_name = self.dtype
+        else:
+            dtype_name = self.dtype.name
+
+        # Return reconstruction tuple: (function, (args,))
+        # When unpickling, this calls _rebuild_tensor(numpy_data, dtype_name, requires_grad)
+        return (
+            _rebuild_tensor,
+            (numpy_data, dtype_name, self.requires_grad)
+        )
+
+
+def _rebuild_tensor(numpy_data, dtype_name, requires_grad):
+    """
+    Rebuild a Tensor from pickle data.
+
+    This function is called during unpickling to reconstruct a Tensor from
+    its numpy representation and metadata.
+
+    Args:
+        numpy_data: Numpy array containing tensor data
+        dtype_name: String name of the dtype (e.g., 'float32')
+        requires_grad: Whether tensor requires gradients
+
+    Returns:
+        Tensor: Reconstructed tensor
+    """
+    # Convert dtype name back to DType object
+    dtype = get_dtype(dtype_name)
+
+    # Create tensor from numpy data on CPU (user can move to GPU if needed)
+    t = make_tensor(numpy_data, dtype=dtype, device=cpu())
+    t.requires_grad = requires_grad
+    return t
+
 
 def tensor(data, dtype: Optional[DType] = None, device = None, requires_grad: bool = False) -> Tensor:
     """

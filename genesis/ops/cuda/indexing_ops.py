@@ -410,6 +410,7 @@ def gather(input_tensor, dim, index):
     return output
 
 
+@register_cuda("scatter")
 def scatter(input_tensor, dim, index, src):
     """
     Scatter values from src along dimension using indices.

@@ -155,7 +155,7 @@ def test_layernorm(shape, device):
 
     C.sum().backward()
     TC.sum().backward()
-    np.testing.assert_allclose(TA.grad.numpy(), A.grad.numpy(), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(TA.grad.detach().numpy(), A.grad.detach().numpy(), atol=1e-5, rtol=1e-5)
 
 @pytest.mark.parametrize("shape", SOFTMAX_SHAPES)
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
@@ -360,39 +360,43 @@ QKV_SHAPES = [
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_scaled_dot_product_attention(shape, device):
     """Test scaled dot-product attention function.
-    
+
     Args:
         shape: Shape for Q, K, V tensors (batch, heads, seq_len, head_dim)
         device: Device to run test on (CUDA only)
-    
+
     Tests:
-        - Forward pass scaled attention computation matches PyTorch
+        - Forward pass scaled attention computation matches PyTorch Flash Attention
+        - Uses fp16 (Fused Attention's target precision for Tensor Core acceleration)
         - Causal masking is automatically applied
+        - Relaxed tolerance due to Flash Attention numerical characteristics
         - Skips test on CPU devices
     """
     if device == genesis.device('cpu'):
         pytest.skip("Skipping CPU tests, only testing CUDA")
-    _Q = np.random.randn(*shape).astype(np.float32)
-    Q = genesis.tensor(_Q, device=device)
-    TQ = torch.Tensor(_Q)
+    # Use fp16 for Fused Attention (designed for mixed precision training)
+    _Q = np.random.randn(*shape).astype(np.float16)
+    Q = genesis.tensor(_Q, device=device, dtype=genesis.float16)
+    TQ = torch.tensor(_Q, dtype=torch.float16, device='cuda')
     TQ.requires_grad = True
-    _K = np.random.randn(*shape).astype(np.float32)
-    K = genesis.tensor(_K, device=device)
-    TK = torch.Tensor(_K)
+    _K = np.random.randn(*shape).astype(np.float16)
+    K = genesis.tensor(_K, device=device, dtype=genesis.float16)
+    TK = torch.tensor(_K, dtype=torch.float16, device='cuda')
     TK.requires_grad = True
-    _V = np.random.randn(*shape).astype(np.float32)
-    V = genesis.tensor(_V, device=device)
-    TV = torch.Tensor(_V)
+    _V = np.random.randn(*shape).astype(np.float16)
+    V = genesis.tensor(_V, device=device, dtype=genesis.float16)
+    TV = torch.tensor(_V, dtype=torch.float16, device='cuda')
     TV.requires_grad = True
 
     genesis_out = F.scaled_dot_product_attention(Q, K, V)
-    
+
     torch_out = torch.nn.functional.scaled_dot_product_attention(
             TQ, TK, TV, attn_mask=None, dropout_p=0.0, is_causal=True)
+    # Relaxed tolerance for Flash Attention comparison (fp16 + algorithm differences)
     np.testing.assert_allclose(
-            genesis_out.detach().numpy(), 
-            torch_out.detach().numpy(), 
-            atol=1e-2, rtol=1e-2)
+            genesis_out.detach().numpy(),
+            torch_out.cpu().detach().numpy(),
+            atol=5e-2, rtol=5e-2)
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
 def test_embedding(device):

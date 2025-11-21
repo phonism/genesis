@@ -10,13 +10,10 @@ from genesis.backends.cpu import CPUStorage
 from genesis.backends.cuda import CUDAStorage
 
 class Storage:
-    """
-    Unified storage container - clean PyTorch style
-    """
+    """Unified storage container"""
     
     def __init__(self, backend_storage, device: Device):
-        """
-        Initialize storage with backend storage
+        """Initialize storage with backend storage
 
         Args:
             backend_storage: CPUStorage or CUDAStorage

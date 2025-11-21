@@ -21,10 +21,12 @@ else
     echo "Training on $NUM_GPUS GPUs with DDP..."
     torchrun --nproc_per_node=$NUM_GPUS train.py \
         --ddp \
-        --batch-size 1 \
-        --block-size 4096 \
+        --batch-size 4 \
+        --block-size 2048 \
         --learning-rate 3e-4 \
         --accumulation-steps 8 \
         --eval-interval 500 \
+        --amp \
+        --dtype bf16 \
         --save-interval 100
 fi

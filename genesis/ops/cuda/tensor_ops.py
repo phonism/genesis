@@ -575,21 +575,26 @@ def bincount(x, weights=None, minlength=0):
         raise ValueError(f"bincount input must be int64, got {x.dtype_obj.name}")
 
 
-    # Find maximum value to determine output size
-    if x.numel() > 0:
-        max_tensor = reduce_max(x, axis=None, keepdims=False)
-        max_val = int(max_tensor.to_numpy().item())
+    # Determine output size
+    # OPTIMIZATION: When minlength > 0, trust it and skip max computation to avoid CPU-GPU sync
+    # This is critical for MoE where we know expert_indices < num_experts
+    if minlength > 0:
+        num_classes = minlength
     else:
-        max_val = 0
-    num_classes = max(max_val + 1, minlength)
+        # Only compute max when minlength not provided
+        if x.numel() > 0:
+            max_tensor = reduce_max(x, axis=None, keepdims=False)
+            max_val = int(max_tensor.to_numpy().item())
+            num_classes = max_val + 1
+        else:
+            num_classes = 0
 
     # Sanity check - if num_classes is unreasonably large, something is wrong
     MAX_REASONABLE_CLASSES = 100_000_000  # 100M classes should be more than enough
     if num_classes > MAX_REASONABLE_CLASSES:
         raise ValueError(
             f"bincount: computed num_classes={num_classes} is unreasonably large. "
-            f"Input max value: {max_val}, minlength: {minlength}. "
-            f"This likely indicates corrupted input data."
+            f"minlength: {minlength}. This likely indicates corrupted input data."
         )
 
     # Create output tensor - int64 for unweighted, float32 for weighted

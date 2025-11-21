@@ -976,6 +976,88 @@ def scatter(input, dim, index, src):
     """Scatter values from src along dimension using indices."""
     return Scatter.apply(input, dim, index, src)
 
+
+class TopKFunction(Function):
+    """TopK operation with gradient support."""
+
+    @staticmethod
+    def forward(ctx, input, k, dim, largest, sorted_flag):
+        """
+        Forward pass for topk.
+
+        Args:
+            input: Input tensor
+            k: Number of top elements to return
+            dim: Dimension to operate on
+            largest: Whether to return largest (True) or smallest (False)
+            sorted_flag: Whether to sort the results
+
+        Returns:
+            Tuple of (values, indices)
+        """
+        # Call the dispatcher to get values and indices
+        values, indices = OperationDispatcher.dispatch_tuple('topk', input, k, dim, largest, sorted_flag)
+
+        # Save for backward
+        ctx.dim = dim
+        ctx.input_shape = input.shape
+        ctx.save_for_backward(indices)
+
+        # Set requires_grad on values based on input
+        values.requires_grad = input.requires_grad
+        indices.requires_grad = False  # Indices are discrete, no gradients
+
+        return values, indices
+
+    @staticmethod
+    def backward(ctx, out_grad, output_idx):
+        """
+        Backward pass for topk.
+
+        For tuple results, backward receives (out_grad, output_idx) where output_idx
+        indicates which output (0=values, 1=indices) the gradient is for.
+        Gradients flow only through values (idx=0), scattered back to original input positions.
+        """
+        # Only values (output_idx=0) have gradients, indices (output_idx=1) don't
+        if output_idx != 0 or out_grad is None:
+            return None, None, None, None, None
+
+        indices, = ctx.saved_tensors
+        dim = ctx.dim
+        input_shape = ctx.input_shape
+
+        # Normalize negative dim
+        if dim < 0:
+            dim = len(input_shape) + dim
+
+        # Create zero tensor with input shape
+        grad_input = genesis.zeros(input_shape, dtype=out_grad.dtype, device=out_grad.device)
+
+        # Scatter gradients back to selected positions
+        grad_input = scatter(grad_input, dim, indices, out_grad)
+
+        # Return gradients: (input, k, dim, largest, sorted_flag)
+        # Only input needs gradient
+        return grad_input, None, None, None, None
+
+
+def topk(input, k, dim=-1, largest=True, sorted=True):
+    """
+    Returns the k largest/smallest elements along a dimension.
+
+    Args:
+        input: Input tensor
+        k: Number of top values to return
+        dim: Dimension along which to find top-k values
+        largest: If True, return largest values; if False, return smallest
+        sorted: If True, return values in sorted order
+
+    Returns:
+        Tuple of (values, indices) tensors
+    """
+    return TopKFunction.apply(input, k, dim, largest, sorted)
+
+
 class Transpose(Function):
     """Transpose tensor dimensions."""
     amp_policy = AMPPolicy.PRESERVE  # Axis permutation, no computation
@@ -1395,8 +1477,10 @@ class Summation(Function):
         keepdims = ctx.keepdims
         original_dtype = ctx.original_dtype
 
+        # When axis is None, sum reduces all dimensions
         if axis is None:
-            axis = input_shape
+            axis = tuple(range(len(input_shape)))
+
         grad_shape = list(out_grad.shape)
         new_axis = []
         for x in axis:
@@ -1404,6 +1488,7 @@ class Summation(Function):
                 new_axis.append(x)
             else:
                 new_axis.append(x + len(input_shape))
+
         if keepdims is False:
             for x in sorted(new_axis):
                 grad_shape.insert(x, 1)
@@ -1463,16 +1548,18 @@ class Mean(Function):
     def backward(ctx, out_grad: Tensor):
         """
         Backward pass for mean operation.
-        
+
         The gradient of mean is out_grad / num_elements broadcasted to input shape.
         """
         hs, = ctx.saved_tensors
         axis = ctx.axis
         keepdims = ctx.keepdims
         num_elements = ctx.num_elements
-        
+
+        # When axis is None, mean reduces all dimensions
         if axis is None:
-            axis = hs.shape
+            axis = tuple(range(len(hs.shape)))
+
         grad_shape = list(out_grad.shape)
         new_axis = []
         for x in axis:
@@ -1480,13 +1567,15 @@ class Mean(Function):
                 new_axis.append(x)
             else:
                 new_axis.append(x + len(hs.shape))
-        if keepdims is False: 
+
+        if keepdims is False:
             for x in sorted(new_axis):
                 grad_shape.insert(x, 1)
 
         # Scale gradient by 1/num_elements (since mean = sum/num_elements)
         scaled_grad = OperationDispatcher.dispatch("truediv", out_grad, num_elements)
         reshaped_grad = OperationDispatcher.dispatch("reshape", scaled_grad, grad_shape)
+
         grad = OperationDispatcher.dispatch("broadcast_to", reshaped_grad, hs.shape)
         return (grad, )
 
@@ -2102,33 +2191,108 @@ class ScatterAddFunction(Function):
 def scatter_add(input, dim, index, src):
     """
     Scatter-add values from src along dimension using indices.
-    
+
     Args:
         input: Input tensor to scatter-add into
         dim: Dimension to scatter along
         index: Tensor with indices
         src: Source tensor with values to add
-        
+
     Returns:
         Tensor with scattered-added values
     """
     return ScatterAddFunction.apply(input, dim, index, src)
 
 
+class RepeatInterleaveFunction(Function):
+    """Repeat elements of tensor with gradient support."""
+    amp_policy = AMPPolicy.PRESERVE  # Preserve input dtype
+
+    @staticmethod
+    def forward(ctx, input, repeats, dim):
+        """
+        Repeat elements along dimension.
+
+        Args:
+            input: Input tensor
+            repeats: Number of times to repeat each element
+            dim: Dimension along which to repeat (None for flattened)
+
+        Returns:
+            Tensor with repeated elements
+        """
+        # Save for backward
+        ctx.repeats = repeats
+        ctx.dim = dim
+        ctx.input_shape = input.shape
+
+        # Dispatch to implementation
+        result = OperationDispatcher.dispatch("repeat_interleave", input, repeats, dim)
+        result.requires_grad = input.requires_grad
+        return result
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        """
+        Backward pass for repeat_interleave.
+
+        The forward operation repeats each element, so backward must sum gradients
+        from all repeated copies back to the original positions.
+        """
+        if grad_output is None:
+            return None, None, None
+
+        repeats = ctx.repeats
+        dim = ctx.dim
+        input_shape = ctx.input_shape
+
+        # Handle dim=None case (flatten first, then repeat)
+        if dim is None:
+            # Output was flattened, so grad_output is 1D
+            # Need to reshape back to groups of 'repeats', sum, then reshape to original
+            total_elements = 1
+            for s in input_shape:
+                total_elements *= s
+            # Reshape to (total_elements, repeats)
+            grad_reshaped = grad_output.view(total_elements, repeats)
+            # Sum along repeats dimension
+            grad_input = grad_reshaped.sum(dim=1)
+            # Reshape back to original shape
+            grad_input = grad_input.view(*input_shape)
+        else:
+            # Normalize negative dim
+            if dim < 0:
+                dim = len(input_shape) + dim
+
+            # Grad_output has shape where input_shape[dim] was multiplied by repeats
+            # We need to reshape to group repeated elements and sum them
+
+            # Build new shape: insert repeats dimension after dim
+            new_shape = list(grad_output.shape)
+            new_shape[dim] = input_shape[dim]
+            new_shape.insert(dim + 1, repeats)
+
+            # Reshape and sum
+            grad_reshaped = grad_output.view(*new_shape)
+            grad_input = grad_reshaped.sum(dim=dim + 1)
+
+        # Only return gradient for input (repeats and dim are not tensors)
+        return grad_input, None, None
+
+
 def repeat_interleave(input, repeats, dim=None):
     """
     Repeat elements of tensor along specified dimension.
-    
+
     Args:
         input: Input tensor
         repeats: Number of repetitions for each element
         dim: Dimension to repeat along (if None, flatten first)
-        
+
     Returns:
         Tensor with repeated elements
     """
-    result = OperationDispatcher.dispatch("repeat_interleave", input, repeats, dim)
-    return result
+    return RepeatInterleaveFunction.apply(input, repeats, dim)
 
 
 def one_hot(indices, num_classes):

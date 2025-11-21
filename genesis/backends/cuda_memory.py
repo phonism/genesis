@@ -84,9 +84,11 @@ MEMORY_CRITICAL_THRESHOLD = float(os.getenv("GENESIS_MEMORY_CRITICAL_THRESHOLD",
 PENDING_CHECK_INTERVAL = int(os.getenv("GENESIS_PENDING_CHECK_INTERVAL", "10"))
 
 
+import bisect
+
 def round_size(nbytes: int) -> Tuple[int, bool]:
     """
-    Round requested size to nearest bucket size.
+    Round requested size to nearest bucket size using binary search.
 
     Args:
         nbytes: Requested allocation size in bytes
@@ -95,17 +97,13 @@ def round_size(nbytes: int) -> Tuple[int, bool]:
         Tuple of (rounded_size, is_small_pool)
     """
     if nbytes <= SMALL_SIZES[-1]:
-        # Small pool - find smallest size >= nbytes
-        for size in SMALL_SIZES:
-            if size >= nbytes:
-                return size, True
-        return SMALL_SIZES[-1], True
+        # Small pool - use bisect for O(log N) lookup
+        idx = bisect.bisect_left(SMALL_SIZES, nbytes)
+        return SMALL_SIZES[idx], True
     elif nbytes <= DIRECT_ALLOC_THRESHOLD:
-        # Large pool
-        for size in LARGE_SIZES:
-            if size >= nbytes:
-                return size, False
-        return LARGE_SIZES[-1], False
+        # Large pool - use bisect for O(log N) lookup
+        idx = bisect.bisect_left(LARGE_SIZES, nbytes)
+        return LARGE_SIZES[idx], False
     else:
         # Direct allocation - no rounding
         return nbytes, False
@@ -211,7 +209,7 @@ class CudaCachingAllocator:
 
     def _cuda_alloc(self, size: int) -> int:
         """
-        Allocate memory directly from CUDA.
+        Allocate memory directly from CUDA using async allocation when available.
 
         Note: Caller must hold self.lock. OOM recovery is handled in allocate_memory().
         """

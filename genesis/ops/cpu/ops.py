@@ -404,7 +404,7 @@ def one_hot(indices, n_classes, dtype="float32"):
 
     Args:
         indices: Indices tensor (CPUStorage)
-        n_classes: Number of classes
+        n_classes: Number of classes (int)
         dtype: Data type string
 
     Returns:

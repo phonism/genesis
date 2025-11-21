@@ -1422,8 +1422,8 @@ def test_clamp():
             else:
                 atol, rtol = 1e-6, 1e-6
             np.testing.assert_allclose(
-                genesis_result.numpy(), 
-                torch_result.detach().numpy(), 
+                genesis_result.detach().numpy(),
+                torch_result.detach().numpy(),
                 atol=atol, rtol=rtol,
                 err_msg=f"clamp values mismatch for {shape}, {dtype}"
             )
@@ -1433,8 +1433,8 @@ def test_clamp():
             torch_result_min = torch.clamp(x_torch, min=-1.0)
             
             np.testing.assert_allclose(
-                genesis_result_min.numpy(), 
-                torch_result_min.detach().numpy(), 
+                genesis_result_min.detach().numpy(),
+                torch_result_min.detach().numpy(),
                 atol=atol, rtol=rtol,
                 err_msg=f"clamp min-only values mismatch for {shape}, {dtype}"
             )
@@ -1444,8 +1444,8 @@ def test_clamp():
             torch_result_max = torch.clamp(x_torch, max=1.0)
             
             np.testing.assert_allclose(
-                genesis_result_max.numpy(), 
-                torch_result_max.detach().numpy(), 
+                genesis_result_max.detach().numpy(),
+                torch_result_max.detach().numpy(),
                 atol=atol, rtol=rtol,
                 err_msg=f"clamp max-only values mismatch for {shape}, {dtype}"
             )
@@ -1458,7 +1458,7 @@ def test_clamp():
     expected_clamp = np.array([[-1.5, -1.0, 0.0, 1.0, 1.5]])
     
     np.testing.assert_allclose(
-        result_clamp.numpy(),
+        result_clamp.detach().numpy(),
         expected_clamp,
         atol=1e-6, rtol=1e-6,
         err_msg="clamp method values mismatch"
@@ -1467,7 +1467,7 @@ def test_clamp():
     # Test .clip() method (alias)
     result_clip = x.clip(-1.5, 1.5)
     np.testing.assert_allclose(
-        result_clip.numpy(),
+        result_clip.detach().numpy(),
         expected_clamp,
         atol=1e-6, rtol=1e-6,
         err_msg="clip method values mismatch"
@@ -1495,8 +1495,8 @@ def test_clamp():
     
     # Values at boundary should remain unchanged
     np.testing.assert_allclose(
-        x_edge.numpy(),
-        y_edge.numpy(),
+        x_edge.detach().numpy(),
+        y_edge.detach().numpy(),
         atol=1e-6, rtol=1e-6,
         err_msg="clamp boundary values mismatch"
     )
@@ -1542,8 +1542,8 @@ def test_where():
                 atol, rtol = 1e-6, 1e-6
                 
             np.testing.assert_allclose(
-                genesis_result.numpy(), 
-                torch_result.detach().numpy(), 
+                genesis_result.detach().numpy(),
+                torch_result.detach().numpy(),
                 atol=atol, rtol=rtol,
                 err_msg=f"where values mismatch for {shape}, {dtype}"
             )
@@ -1726,8 +1726,8 @@ def test_permute():
             atol, rtol = 1e-6, 1e-6
             
         np.testing.assert_allclose(
-            genesis_result_2d.numpy(), 
-            torch_result_2d.detach().numpy(), 
+            genesis_result_2d.detach().numpy(),
+            torch_result_2d.detach().numpy(),
             atol=atol, rtol=rtol,
             err_msg=f"2D permute values mismatch for {dtype}"
         )
@@ -1753,8 +1753,8 @@ def test_permute():
             assert genesis_result_3d.dtype == dtype, f"3D permute dtype mismatch for {dtype}, perm={perm}"
             
             np.testing.assert_allclose(
-                genesis_result_3d.numpy(), 
-                torch_result_3d.detach().numpy(), 
+                genesis_result_3d.detach().numpy(),
+                torch_result_3d.detach().numpy(),
                 atol=atol, rtol=rtol,
                 err_msg=f"3D permute values mismatch for {dtype}, perm={perm}"
             )
@@ -1774,8 +1774,8 @@ def test_permute():
     
     # Results should be the same
     np.testing.assert_allclose(
-        result_list.numpy(),
-        result_args.numpy(),
+        result_list.detach().numpy(),
+        result_args.detach().numpy(),
         atol=1e-6, rtol=1e-6,
         err_msg="permute list vs args results mismatch"
     )
@@ -1790,9 +1790,9 @@ def test_permute():
     
     # Gradient should have the same shape as original tensor
     assert x_grad.grad.shape == x_grad.shape, f"Gradient shape mismatch: {x_grad.grad.shape} vs {x_grad.shape}"
-    
+
     # Gradient values should be all ones (since loss is just sum)
-    expected_grad = np.ones_like(x_grad.numpy())
+    expected_grad = np.ones_like(x_grad.detach().numpy())
     np.testing.assert_allclose(
         x_grad.grad.numpy(),
         expected_grad,
@@ -1856,8 +1856,8 @@ def test_gather_scatter():
             atol, rtol = 1e-6, 1e-6
             
         np.testing.assert_allclose(
-            genesis_gathered.numpy(), 
-            torch_gathered.detach().numpy(), 
+            genesis_gathered.detach().numpy(),
+            torch_gathered.detach().numpy(),
             atol=atol, rtol=rtol,
             err_msg=f"Gather values mismatch for {dtype}"
         )
@@ -1893,8 +1893,8 @@ def test_gather_scatter():
         assert genesis_scattered.dtype == dtype, f"Scatter dtype mismatch for {dtype}"
         
         np.testing.assert_allclose(
-            genesis_scattered.numpy(), 
-            torch_scattered.detach().numpy(), 
+            genesis_scattered.detach().numpy(),
+            torch_scattered.detach().numpy(),
             atol=atol, rtol=rtol,
             err_msg=f"Scatter values mismatch for {dtype}"
         )
@@ -1961,24 +1961,89 @@ def test_topk(device):
     # Test basic functionality
     x = genesis.tensor([[3.0, 1.0, 4.0, 1.0, 5.0], [2.0, 7.0, 1.0, 8.0, 3.0]], device=device)
     values, indices = genesis.topk(x, k=3, dim=1, largest=True)
-    
+
     # Check shapes
     assert values.shape == (2, 3), f"Expected values shape (2, 3), got {values.shape}"
     assert indices.shape == (2, 3), f"Expected indices shape (2, 3), got {indices.shape}"
-    
+
     # Check first row: should be [5.0, 4.0, 3.0] with indices [4, 2, 0]
     assert values[0, 0].item() == 5.0, "First top value should be 5.0"
     assert indices[0, 0].item() == 4, "Index of first top value should be 4"
-    
+
     # Test smallest values
     values_small, indices_small = genesis.topk(x, k=2, dim=1, largest=False)
     assert values_small.shape == (2, 2)
     assert indices_small.shape == (2, 2)
-    
+
     # Test edge case: k larger than tensor size
     y = genesis.tensor([3.0, 1.0], device=device)
     values_edge, indices_edge = genesis.topk(y, k=5, dim=0, largest=True)
     assert values_edge.shape[0] <= 2, "Should not return more elements than exist"
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_topk_gradient(device):
+    """Test topk gradient computation against PyTorch."""
+    # Create test tensor with requires_grad
+    x_np = np.array([[3.0, 1.0, 4.0, 1.0, 5.0], [2.0, 7.0, 1.0, 8.0, 3.0]], dtype=np.float32)
+
+    # Genesis version
+    x_genesis = genesis.tensor(x_np, device=device, requires_grad=True)
+    values_g, indices_g = genesis.topk(x_genesis, k=3, dim=1, largest=True)
+
+    # PyTorch version for comparison
+    x_torch = torch.tensor(x_np, requires_grad=True)
+    values_t, indices_t = torch.topk(x_torch, k=3, dim=1, largest=True)
+
+    # Check forward pass matches
+    assert np.allclose(values_g.detach().numpy(), values_t.detach().numpy(), atol=1e-5), \
+        "Forward pass values don't match PyTorch"
+    assert np.allclose(indices_g.detach().numpy(), indices_t.detach().numpy(), atol=1e-5), \
+        "Forward pass indices don't match PyTorch"
+
+    # Create gradient for backward pass
+    grad_output = np.ones_like(values_g.detach().numpy())
+
+    # Genesis backward
+    values_g_sum = values_g.sum()
+    values_g_sum.backward()
+    grad_genesis = x_genesis.grad.numpy()
+
+    # PyTorch backward
+    values_t_sum = values_t.sum()
+    values_t_sum.backward()
+    grad_torch = x_torch.grad.numpy()
+
+    # Check gradients match
+    assert np.allclose(grad_genesis, grad_torch, atol=1e-5), \
+        f"Gradients don't match PyTorch.\nGenesis:\n{grad_genesis}\nPyTorch:\n{grad_torch}"
+
+    print(f"✓ topk gradient test passed on {device}")
+
+
+@pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])
+def test_topk_gradient_different_dims(device):
+    """Test topk gradient along different dimensions."""
+    # Test along dim=0
+    x_np = np.array([[3.0, 1.0, 4.0], [2.0, 7.0, 1.0], [5.0, 3.0, 8.0]], dtype=np.float32)
+
+    # Genesis version
+    x_genesis = genesis.tensor(x_np, device=device, requires_grad=True)
+    values_g, indices_g = genesis.topk(x_genesis, k=2, dim=0, largest=True)
+    loss_g = values_g.sum()
+    loss_g.backward()
+
+    # PyTorch version
+    x_torch = torch.tensor(x_np, requires_grad=True)
+    values_t, indices_t = torch.topk(x_torch, k=2, dim=0, largest=True)
+    loss_t = values_t.sum()
+    loss_t.backward()
+
+    # Compare gradients
+    assert np.allclose(x_genesis.grad.numpy(), x_torch.grad.numpy(), atol=1e-5), \
+        "Gradients along dim=0 don't match PyTorch"
+
+    print(f"✓ topk gradient test (dim=0) passed on {device}")
 
 
 @pytest.mark.parametrize("device", _DEVICES, ids=["cpu", "cuda"])  

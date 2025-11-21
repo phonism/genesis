@@ -81,7 +81,7 @@ def _cast(value: Any, dtype: 'genesis.DType') -> Any:
         Casted value with same structure but converted tensors
     """
     if isinstance(value, Tensor) and value.is_floating_point():
-        # Use Function-based casting for FP16 and FP32
+        # Use Function-based casting for FP16, BF16 and FP32
         if dtype == genesis.float16:
             # Optimization: cache leaf tensor conversions (parameters)
             # Intermediate tensors still use Function-based casting
@@ -100,6 +100,20 @@ def _cast(value: Any, dtype: 'genesis.DType') -> Any:
             else:
                 # Intermediate tensors: always use Function-based casting
                 return cast_to_fp16(value)
+        elif dtype == genesis.bfloat16:
+            # BFloat16: similar to FP16, use Function-based casting with caching
+            if value.is_leaf and value.requires_grad:
+                cache = get_amp_cache()
+                tensor_id = id(value)
+
+                if tensor_id in cache._cache:
+                    return cache._cache[tensor_id]
+
+                converted = cast_to_bf16(value)
+                cache._cache[tensor_id] = converted
+                return converted
+            else:
+                return cast_to_bf16(value)
         elif dtype == genesis.float32:
             # CRITICAL: Use Function-based casting to preserve creator chain!
             return cast_to_fp32(value)
@@ -215,7 +229,8 @@ class Function:
         # Handle mixed dtypes when autocast is disabled (promote to FP32)
         elif not genesis.enable_autocast:
             has_fp32 = check_dtype(args, genesis.float32) or check_dtype(kwargs, genesis.float32)
-            has_fp16 = check_dtype(args, genesis.float16) or check_dtype(kwargs, genesis.float16)
+            has_fp16 = (check_dtype(args, genesis.float16) or check_dtype(kwargs, genesis.float16) or
+                       check_dtype(args, genesis.bfloat16) or check_dtype(kwargs, genesis.bfloat16))
             if has_fp32 and has_fp16:
                 args = _cast(args, genesis.float32)
                 kwargs = _cast(kwargs, genesis.float32)
@@ -340,6 +355,42 @@ class CastToFP32(Function):
         return (grad,)
 
 
+class CastToBF16(Function):
+    """Cast tensor to BFloat16 with gradient support.
+
+    This Function ensures type conversion maintains the computational graph
+    for proper gradient flow in mixed precision training.
+    """
+
+    # CRITICAL: PRESERVE policy prevents recursive AMP casting
+    amp_policy = AMPPolicy.PRESERVE
+
+    @staticmethod
+    def forward(ctx, a):
+        """Forward: convert to BFloat16."""
+        # Store original dtype for backward
+        ctx.original_dtype = a.dtype
+
+        if a.dtype == genesis.bfloat16:
+            return a
+
+        # Convert to BFloat16 using storage conversion
+        result = a.to_dtype(genesis.bfloat16)
+        result.requires_grad = a.requires_grad
+        return result
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Backward: convert gradient back to original dtype."""
+        if ctx.original_dtype == genesis.bfloat16:
+            return (out_grad,)
+
+        # Convert gradient back to original dtype (typically FP32)
+        grad = out_grad.to_dtype(ctx.original_dtype)
+        grad.requires_grad = False
+        return (grad,)
+
+
 def cast_to_fp16(a):
     """Cast tensor to FP16 with gradient support.
 
@@ -358,3 +409,13 @@ def cast_to_fp32(a):
     if a.dtype == genesis.float32:
         return a
     return CastToFP32.apply(a)
+
+
+def cast_to_bf16(a):
+    """Cast tensor to BFloat16 with gradient support.
+
+    CRITICAL: If already BFloat16, return immediately to preserve existing creator!
+    """
+    if a.dtype == genesis.bfloat16:
+        return a
+    return CastToBF16.apply(a)
