@@ -59,7 +59,8 @@ def _attn_fwd_inner(
         acc = acc * alpha[:, None]
         # update acc
         v = tl.load(V_block_ptr)
-        p = p.to(tl.float32)
+        # Convert p to match v's dtype (fp16/bf16/fp32)
+        p = p.to(v.dtype)
         acc = tl.dot(p, v, acc, allow_tf32=False)
         # update m_i and l_i
         m_i = m_ij
@@ -211,14 +212,14 @@ def _attn_bwd_dkdv(
         do = tl.load(do_ptrs)
         # Compute dV.
         ppT = pT
-        ppT = ppT.to(tl.float32)
+        ppT = ppT.to(do.dtype)
         dv += tl.dot(ppT, do, allow_tf32=False)
         # D (= delta) is pre-divided by ds_scale.
         Di = tl.load(D + offs_m)
         # Compute dP and dS.
         dpT = tl.dot(v, tl.trans(do), allow_tf32=False).to(tl.float32)
         dsT = pT * (dpT - Di[None, :])
-        dsT = dsT.to(tl.float32)
+        dsT = dsT.to(qT.dtype)
         dk += tl.dot(dsT, tl.trans(qT), allow_tf32=False)
         # Increment pointers.
         curr_m += step_m
@@ -264,7 +265,7 @@ def _attn_bwd_dq(
         # Compute dP and dS.
         dp = tl.dot(do, vT, allow_tf32=False).to(tl.float32)
         ds = p * (dp - Di[:, None])
-        ds = ds.to(tl.float32)
+        ds = ds.to(kT.dtype)
         # Compute dQ.
         # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
         dq += tl.dot(ds, tl.trans(kT), allow_tf32=False)
@@ -450,7 +451,7 @@ class FusedAttention(Function):
                 BLOCK_M=32,
                 HEAD_DIM=HEAD_DIM_K,
                 STAGE=stage,
-                BLOCK_N=min(HEAD_DIM_K, 32),
+                BLOCK_N=32,
                 **extra_kern_args)
 
         ctx.save_for_backward(qq, kk, vv, M, o)

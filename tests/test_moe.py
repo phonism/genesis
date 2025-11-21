@@ -3,7 +3,7 @@
 import pytest
 import genesis
 import genesis.nn as nn
-from genesis.nn.moe import MoEGate, MoEExpert, MoELayer, MoETransformerBlock
+from genesis.models.transformers.moe import MoEGate, MoEExpert, MoELayer, MoETransformerBlock
 
 
 class SimpleConfig:

@@ -51,6 +51,8 @@ class DistributedDataParallel(Module):
             )
             
         self.model = model
+        # PyTorch compatibility: .module attribute points to wrapped model
+        self.module = model
         self.world_size = get_world_size()
         self.rank = get_rank()
         self.broadcast_buffers = broadcast_buffers

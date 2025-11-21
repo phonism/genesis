@@ -1,4 +1,5 @@
-"""Training script for nanochat base model from scratch.
+"""
+Training script for nanochat base model from scratch.
 
 Supports both single-GPU and multi-GPU distributed training.
 
@@ -30,6 +31,7 @@ if BACKEND == "torch":
     import torch
     from torch import amp
     from torch.nn.parallel import DistributedDataParallel as DDP
+    from torch.profiler import profile, ProfilerActivity, tensorboard_trace_handler
     genesis = torch
     nn = torch.nn
     F = torch.nn.functional
@@ -42,10 +44,16 @@ else:
     from genesis import nn, amp
     from genesis.nn.parallel import DistributedDataParallel as DDP
     import genesis.nn.functional as F
+    # Import torch profiler for Genesis profiling
+    import torch
+    from torch.profiler import profile, ProfilerActivity, tensorboard_trace_handler
 
-from model import ModelConfig, NanoChatModel
 from tokenizer import NanoChatBPETokenizer
 from dataloader import tokenizing_distributed_data_loader
+
+# Import model from genesis.models.transformers (supports both backends)
+from genesis.models.transformers.dense import QwenModel
+from genesis.models.transformers.config import TransformerConfig
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,6 +75,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amp", action="store_true", help="Enable automatic mixed precision training")
     parser.add_argument("--dtype", type=str, default="fp16", choices=["fp16", "bf16"],
                         help="Mixed precision dtype (fp16 or bf16)")
+    parser.add_argument("--profile", action="store_true", help="Enable PyTorch profiler")
+    parser.add_argument("--profile-steps", type=int, default=5, help="Number of steps to profile")
     return parser.parse_args()
 
 
@@ -108,7 +118,7 @@ def setup_ddp() -> tuple[bool, int, int, int]:
 
 @genesis.no_grad()
 def evaluate_model(
-    model: NanoChatModel,
+    model: nn.Module,
     data_loader: "Iterator",
     device: str,
     num_batches: int = 20
@@ -182,18 +192,23 @@ tokenizer = NanoChatBPETokenizer.load(tokenizer_path)
 if rank == 0:
     print(f"Loaded tokenizer with vocab_size: {tokenizer.vocab_size}")
 
-# Initialize 0.5B model config
-config = ModelConfig(
+# Initialize 0.5B model config using TransformerConfig
+# Modified to use head_dim=64 for Triton FusedAttention support
+config = TransformerConfig(
     vocab_size=tokenizer.vocab_size,
-    block_size=block_size,
-    n_layer=24,
-    n_head=16,
-    n_embd=1216,
-    dropout=0.1
+    max_position_embeddings=block_size,
+    num_hidden_layers=28,
+    num_attention_heads=24,
+    hidden_size=1536,  # 64 * 16 for head_dim=64
+    intermediate_size=8960,  # Standard 4x hidden size
+    num_key_value_heads=24,  # Dense attention (no GQA)
+    head_dim=64,  # Triton FusedAttention requires head_dim in [16, 32, 64, 128]
+    norm_eps=1e-6,
+    rope_theta=10000.0
 )
 
-# Create model and move to device (PyTorch standard pattern)
-model = NanoChatModel(config)
+# Create model and move to device
+model = QwenModel(config)
 model.to(genesis.device(device))
 
 # Wrap model with DDP if enabled
@@ -210,8 +225,13 @@ if ddp_enabled:
 
 optimizer = genesis.optim.AdamW(model.parameters(), lr=learning_rate)
 
+# Convert dtype string to genesis dtype
+amp_dtype = genesis.float16 if args.dtype == "fp16" else genesis.bfloat16
+
 # Initialize GradScaler for AMP
-scaler = amp.GradScaler() if args.amp else None
+# Note: bfloat16 doesn't need gradient scaling (large dynamic range)
+use_scaler = args.amp and args.dtype == "fp16"
+scaler = amp.GradScaler() if use_scaler else None
 
 if rank == 0:
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -247,11 +267,33 @@ val_loader = tokenizing_distributed_data_loader(
     device=device
 )
 
+# Define training step function
+def train_step(model, inputs, targets):
+    """Training step."""
+    logits = model(inputs)
+    B, T, C = logits.shape
+    logits = genesis.reshape(logits, (B * T, C))
+    targets = genesis.reshape(targets, (B * T,))
+    loss = nn.CrossEntropyLoss()(logits, targets)
+    return loss
+
 # Training loop
 start_time = time.time()
 total_cnt = 0
 batch_loss = 0.0
 save_interval = accumulation_steps * save_interval_steps
+
+# Initialize profiler if requested
+profiler_ctx = None
+if args.profile and rank == 0:
+    print(f"Profiling enabled: will profile {args.profile_steps} steps")
+    profiler_ctx = profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        record_shapes=False,  # Disable to reduce file size
+        profile_memory=False,  # Disable to reduce file size
+        with_stack=False  # Disable to reduce file size
+    )
+    profiler_ctx.__enter__()
 
 if rank == 0:
     print("Starting training...")
@@ -267,28 +309,21 @@ for inputs_np, targets_np in train_loader:
 
     # Forward pass with optional mixed precision
     if args.amp:
-        with amp.autocast('cuda'):
-            logits = model(inputs)
-
-            # Compute loss
-            B, T, C = logits.shape
-            logits = genesis.reshape(logits, (B * T, C))
-            targets = genesis.reshape(targets, (B * T,))
-            loss = nn.CrossEntropyLoss()(logits, targets)
+        with amp.autocast('cuda', dtype=amp_dtype):
+            loss = train_step(model, inputs, targets)
             loss = loss / accumulation_steps
 
-        # Backward pass with gradient scaling
-        scaled_loss = scaler.scale(loss)
-        scaled_loss.backward()
+        # Backward pass
+        if scaler is not None:
+            # Float16: use gradient scaling
+            scaled_loss = scaler.scale(loss)
+            scaled_loss.backward()
+        else:
+            # BFloat16: no scaling needed
+            loss.backward()
     else:
         # Standard fp32 training
-        logits = model(inputs)
-
-        # Compute loss
-        B, T, C = logits.shape
-        logits = genesis.reshape(logits, (B * T, C))
-        targets = genesis.reshape(targets, (B * T,))
-        loss = nn.CrossEntropyLoss()(logits, targets)
+        loss = train_step(model, inputs, targets)
         loss = loss / accumulation_steps
 
         # Backward pass
@@ -299,13 +334,13 @@ for inputs_np, targets_np in train_loader:
 
     # Update parameters after accumulation steps
     if (total_cnt + 1) % accumulation_steps == 0:
-        if args.amp:
-            # Step with GradScaler (PyTorch-compatible pattern)
+        if scaler is not None:
+            # Float16: use GradScaler
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
         else:
-            # Standard optimizer step
+            # BFloat16 or FP32: standard optimizer step
             optimizer.step()
             optimizer.zero_grad()
 
@@ -331,8 +366,8 @@ for inputs_np, targets_np in train_loader:
         # Save checkpoint periodically (only rank 0)
         if (total_cnt + 1) % save_interval == 0 and rank == 0:
             # Get underlying model for checkpoint saving
-            # Genesis DDP wraps the model, access it via .model attribute
-            checkpoint_model = model.model if ddp_enabled else model
+            # DDP wraps the model, access it via .module attribute
+            checkpoint_model = model.module if ddp_enabled else model
             state_dict = checkpoint_model.state_dict()
             save_path = checkpoint_dir / f"model_step_{step_num}.pth"
             genesis.save(state_dict, str(save_path))
@@ -344,7 +379,26 @@ for inputs_np, targets_np in train_loader:
                 print(f"Reached max_steps={args.max_steps}, stopping training.")
             break
 
+        # Profiler step (after optimizer update)
+        if profiler_ctx is not None:
+            profiler_ctx.step()
+            # Stop profiling after specified steps
+            if step_num >= args.profile_steps:
+                break
+
     total_cnt += 1
+
+# Export profiler results
+if profiler_ctx is not None:
+    profiler_ctx.__exit__(None, None, None)
+    # Export Chrome trace
+    trace_file = f"genesis_{args.dtype}_trace.json"
+    profiler_ctx.export_chrome_trace(trace_file)
+    print(f"\n{'='*60}")
+    print(f"Profiling complete! Results exported to:")
+    print(f"  - Chrome trace: {trace_file}")
+    print(f"    View at: chrome://tracing")
+    print(f"{'='*60}\n")
 
 if rank == 0:
     print("Training completed!")

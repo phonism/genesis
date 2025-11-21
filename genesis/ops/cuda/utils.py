@@ -22,14 +22,14 @@ def broadcast_shapes(shape1, shape2):
     # Reverse shapes to align from the right (trailing dimensions)
     shape1_rev = list(reversed(shape1))
     shape2_rev = list(reversed(shape2))
-    
+
     # Pad shorter shape with 1s to make them the same length
     max_ndim = max(len(shape1_rev), len(shape2_rev))
     while len(shape1_rev) < max_ndim:
         shape1_rev.append(1)
     while len(shape2_rev) < max_ndim:
         shape2_rev.append(1)
-    
+
     # Compute broadcasted shape from right to left
     result_shape_rev = []
     for s1, s2 in zip(shape1_rev, shape2_rev):
@@ -41,7 +41,7 @@ def broadcast_shapes(shape1, shape2):
             result_shape_rev.append(s1)
         else:
             raise ValueError(f"Cannot broadcast shapes {tuple(reversed(shape1_rev))} and {tuple(reversed(shape2_rev))}")
-    
+
     # Reverse back to get final shape
     return tuple(reversed(result_shape_rev))
 

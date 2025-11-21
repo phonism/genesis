@@ -20,6 +20,7 @@ use_triton: bool = True         # Enable Triton GPU kernels
 from .init import (
     rand,
     randn,
+    randn_like,
     randint,
     ones,
     zeros,

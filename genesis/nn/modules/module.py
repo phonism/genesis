@@ -262,14 +262,25 @@ class Module:
     def state_dict(self, destination=None, prefix="") -> Dict[str, Tensor]:
         """
         Return the state dictionary of the module.
+
+        Returns a dictionary containing the module's state. Parameters are converted
+        to plain Tensors (not Parameter objects) for compatibility with PyTorch.
         """
         if destination is None:
             destination = {}
         state_dict = destination
         for name, param in self.__dict__.items():
             if isinstance(param, genesis.Tensor):
-                # Use tensor directly, not internal data attributes
-                state_dict[prefix + name] = param
+                # Convert Parameter to Tensor for PyTorch compatibility
+                # This ensures state_dict only contains plain Tensors, not Parameter objects
+                if isinstance(param, Parameter):
+                    # Create a new Tensor with the same data but without Parameter wrapper
+                    plain_tensor = genesis.Tensor(param.storage, param.shape, param.stride, param.offset)
+                    plain_tensor.requires_grad = False  # State dict tensors don't need gradients
+                    state_dict[prefix + name] = plain_tensor
+                else:
+                    # Already a plain Tensor
+                    state_dict[prefix + name] = param
             elif isinstance(param, Module):
                 param.state_dict(state_dict, prefix + name + ".")
             elif isinstance(param, (list, tuple)):

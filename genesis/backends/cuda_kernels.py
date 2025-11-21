@@ -66,8 +66,13 @@ class CUDAIndexingOps:
         if isinstance(key, type(storage)):  # Explicit type check for CUDAStorage
             if key.dtype == "bool":
                 # Boolean indexing
+                # Allow 1D mask to index first dimension of multi-dimensional tensor
                 if key.shape != storage.shape:
-                    raise ValueError("Boolean mask must have same shape as tensor")
+                    if len(key.shape) == 1 and len(storage.shape) > 1 and key.shape[0] == storage.shape[0]:
+                        # 1D mask indexing first dimension - this is valid
+                        pass
+                    else:
+                        raise ValueError(f"Boolean mask shape {key.shape} incompatible with tensor shape {storage.shape}")
                 return IndexPlan(kind=IndexKind.GATHER, needs_mask_compaction=True, index_tensor=key)
             else:
                 # Integer tensor indexing
@@ -282,8 +287,12 @@ class CUDAIndexingOps:
         elif plan.kind == IndexKind.GATHER:
             if plan.needs_mask_compaction:
                 # Boolean indexing
+                # Allow 1D mask to index first dimension of multi-dimensional tensor
                 if tuple(plan.index_tensor.shape) != tuple(storage.shape):
-                    raise ValueError("boolean mask must have the same shape as tensor")
+                    mask_shape = plan.index_tensor.shape
+                    tensor_shape = storage.shape
+                    if not (len(mask_shape) == 1 and len(tensor_shape) > 1 and mask_shape[0] == tensor_shape[0]):
+                        raise ValueError(f"Boolean mask shape {mask_shape} incompatible with tensor shape {tensor_shape}")
                 return CUDAIndexingOps._getitem_boolean_gather(storage, plan.index_tensor)
             elif plan.is_mixed_2d:
                 # Mixed 2D indexing
@@ -975,15 +984,98 @@ class CUDAIndexingOps:
         tl.store(out_ptr + idx, vals, mask=active)
 
     @staticmethod
+    def _gather_rows_by_bool_mask(storage, mask):
+        """Gather rows from storage where mask is True.
+
+        Args:
+            storage: Multi-dimensional CUDAStorage
+            mask: 1D boolean mask with length == storage.shape[0]
+
+        Returns:
+            CUDAStorage with selected rows
+        """
+        # First, compact the boolean mask to get indices of True values
+        # Use a simple kernel to build index array
+        n_rows = mask.shape[0]
+        m = mask.contiguous().reshape((-1,))
+
+        # Allocate output arrays
+        indices_full = cuda_utils.empty((n_rows,), np.int64)
+        counter = cuda_utils.empty((1,), np.int32)
+        cuda.cuMemsetD8(counter.ptr, 0, 4)
+
+        # Compact boolean mask to indices
+        BLOCK = 1024
+        grid = (triton.cdiv(n_rows, BLOCK),)
+        CUDAIndexingOps._compact_bool_to_indices_kernel[grid](
+            m, indices_full, counter, n_rows, BLOCK=BLOCK, num_warps=4
+        )
+
+        # Read back count
+        k_host = np.empty(1, dtype=np.int32)
+        cuda.cuMemcpyDtoH(k_host, counter.ptr, 4)
+        k = int(k_host[0])
+
+        if k == 0:
+            # No True values, return empty tensor
+            row_size = int(np.prod(storage.shape[1:]))
+            return storage.__class__((0, row_size) if len(storage.shape) > 1 else (0,),
+                                    dtype=storage.dtype, ptr=None)
+
+        # Create view of indices with actual count
+        indices = storage.__class__((k,), dtype="int64", ptr=indices_full.ptr,
+                                   strides=(1,), base=indices_full)
+
+        # Now use regular row gathering
+        return CUDAIndexingOps._getitem_tensor_gather(storage, indices)
+
+    @staticmethod
+    @triton.jit
+    def _compact_bool_to_indices_kernel(mask_ptr, out_ptr, counter_ptr, N, BLOCK: tl.constexpr):
+        """Compact boolean mask to integer indices.
+
+        Each thread processes one element. If the mask is True,
+        atomically increment counter to get output position.
+        """
+        pid = tl.program_id(0)
+        offsets = pid * BLOCK + tl.arange(0, BLOCK)
+        mask_valid = offsets < N
+
+        # Load boolean values
+        bool_vals = tl.load(mask_ptr + offsets, mask=mask_valid, other=False)
+
+        # For each True value, atomically get an index and write position
+        # Use where to only do atomic ops for True values
+        true_mask = mask_valid & bool_vals
+
+        # Atomic add returns the OLD value before increment
+        # We need one atomic operation per True element
+        output_indices = tl.zeros([BLOCK], dtype=tl.int32)
+        output_indices = tl.where(true_mask, tl.atomic_add(counter_ptr, 1, sem='relaxed'), -1)
+
+        # Store positions for True values
+        valid_output = output_indices >= 0
+        tl.store(out_ptr + output_indices, offsets.to(tl.int64), mask=valid_output)
+
+    @staticmethod
     def _gather_mask_fused(storage, mask):
         """Fused boolean mask gather that avoids building linear index tensor.
 
-        Returns a 1D CUDAStorage vector of selected elements.
+        Supports two modes:
+        1. Mask same shape as storage: element-wise selection
+        2. 1D mask on multi-dim storage: row-wise selection
         """
-        if tuple(mask.shape) != tuple(storage.shape):
-            raise ValueError("boolean mask must have the same shape as tensor")
         if mask.dtype != "bool":
             raise ValueError("mask must be boolean")
+
+        # Check if this is 1D mask on multi-dimensional tensor (row selection)
+        if len(mask.shape) == 1 and len(storage.shape) > 1 and mask.shape[0] == storage.shape[0]:
+            # Row-wise boolean indexing: convert mask to indices and gather rows
+            return CUDAIndexingOps._gather_rows_by_bool_mask(storage, mask)
+
+        # Element-wise boolean indexing: mask must match storage shape exactly
+        if tuple(mask.shape) != tuple(storage.shape):
+            raise ValueError("boolean mask must have the same shape as tensor")
 
         # Ensure contiguous flattened views
         src = storage.contiguous()

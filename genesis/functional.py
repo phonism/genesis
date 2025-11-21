@@ -96,22 +96,7 @@ def arange(*args: Union[int, float], dtype: Optional[DType] = None, device: Opti
     return result_data
 
 
-def topk(input: Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True):
-    """
-    Returns the k largest/smallest elements along a dimension.
-    
-    Args:
-        input: Input tensor
-        k: Number of top values to return
-        dim: Dimension along which to find top-k values
-        largest: If True, return largest values; if False, return smallest
-        sorted: If True, return values in sorted order
-        
-    Returns:
-        Tuple of (values, indices) tensors
-    """
-    return Dispatcher.dispatch_tuple('topk', input, k, dim, largest, sorted)
-
+# topk is imported from nn.functional via "from .nn.functional import *"
 
 def isinf(input: Tensor):
     """

@@ -433,32 +433,41 @@ def arange_kernel(output_ptr, start, step, n_elements, BLOCK_SIZE: tl.constexpr)
 
 
 @triton.jit
-def one_hot_kernel(indices_ptr, output_ptr, n_classes, n_indices, 
+def one_hot_kernel(indices_ptr, output_ptr, n_classes, n_indices,
                    BLOCK_SIZE: tl.constexpr):
     """
-    One-hot encoding kernel.
+    Optimized one-hot encoding kernel using full GPU parallelization.
+
+    Parallelizes over all output elements (n_indices * n_classes) instead of
+    just n_indices, achieving much higher GPU utilization.
+
     Args:
-        indices_ptr: Input indices
+        indices_ptr: Input indices tensor
         output_ptr: Output one-hot tensor (n_indices, n_classes)
         n_classes: Number of classes
         n_indices: Number of indices
     """
+    # Each thread handles one output element
     pid = tl.program_id(axis=0)
-    idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = idx < n_indices
-    
-    # Load the index for this element
-    indices = tl.load(indices_ptr + idx, mask=mask, other=0)
-    
-    # For each index, fill the corresponding row in output
-    for i in range(BLOCK_SIZE):
-        if pid * BLOCK_SIZE + i < n_indices:
-            index_val = tl.load(indices_ptr + pid * BLOCK_SIZE + i)
-            # Fill entire row for this index
-            row_start = (pid * BLOCK_SIZE + i) * n_classes
-            for j in range(n_classes):
-                value = 1.0 if j == index_val else 0.0
-                tl.store(output_ptr + row_start + j, value)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+
+    # Total output elements = n_indices * n_classes
+    total_elements = n_indices * n_classes
+    mask = offsets < total_elements
+
+    # Compute 2D coordinates from flat index
+    row = offsets // n_classes  # Which input index
+    col = offsets % n_classes   # Which class position
+
+    # Load the corresponding index value (with bounds checking)
+    index_val = tl.load(indices_ptr + row, mask=mask, other=-1)
+
+    # Vectorized comparison: output[i,j] = 1.0 if j == index[i] else 0.0
+    output = tl.where(col == index_val, 1.0, 0.0)
+
+    # Store results
+    tl.store(output_ptr + offsets, output, mask=mask)
 
 
 @triton.jit
@@ -1796,7 +1805,7 @@ def one_hot(indices, n_classes, dtype="float32"):
 
     Args:
         indices: Indices tensor (CUDAStorage)
-        n_classes: Number of classes
+        n_classes: Number of classes (int)
         dtype: Data type string
 
     Returns:
@@ -1813,10 +1822,13 @@ def one_hot(indices, n_classes, dtype="float32"):
     # Create output tensor
     output_shape = original_shape + (n_classes,)
     output = CUDAStorage(output_shape, dtype=dtype)
-    output.fill(0.0)
+    # Note: No need to fill(0.0) - kernel now writes all elements
 
-    # Launch kernel
-    grid = lambda meta: (triton.cdiv(n_indices, meta["BLOCK_SIZE"]), )
+    # Launch kernel - parallelize over ALL output elements for full GPU utilization
+    # Old: grid based on n_indices only (severely underutilized GPU)
+    # New: grid based on total output size (n_indices * n_classes)
+    total_elements = n_indices * n_classes
+    grid = lambda meta: (triton.cdiv(total_elements, meta["BLOCK_SIZE"]), )
     one_hot_kernel[grid](flat_indices, output, n_classes, n_indices, BLOCK_SIZE=256)
 
     return output

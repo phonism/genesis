@@ -45,6 +45,29 @@ def randn(*shape: int, mean: float = 0.0, std: float = 1.0, device: Optional[Uni
     tensor.requires_grad = requires_grad
     return tensor
 
+def randn_like(tensor, mean: float = 0.0, std: float = 1.0, dtype: Optional[DType] = None, device: Optional[Union[str, Device]] = None, requires_grad: Optional[bool] = None) -> Tensor:
+    """Generate random normal tensor with same shape as input tensor.
+
+    Args:
+        tensor: Input tensor to match shape
+        mean: Mean of the normal distribution
+        std: Standard deviation of the normal distribution
+        dtype: Data type (defaults to input tensor's dtype)
+        device: Target device (defaults to input tensor's device)
+        requires_grad: Whether to track gradients (defaults to False)
+
+    Returns:
+        Tensor: Random normal tensor with same shape as input
+    """
+    if dtype is None:
+        dtype = tensor.dtype
+    if device is None:
+        device = tensor.device
+    if requires_grad is None:
+        requires_grad = False  # Default to False like PyTorch
+
+    return randn(*tensor.shape, mean=mean, std=std, device=device, dtype=dtype, requires_grad=requires_grad)
+
 def constant(*shape, c=1.0, device=None, dtype=genesis.float32, requires_grad=False):
     """ Generate constant Tensor """
     if device is None:
@@ -141,15 +164,26 @@ def randb(*shape, p=0.5, device=None, dtype="bool", requires_grad=False):
     return bool_tensor
 
 def one_hot(n, i, device=None, dtype=genesis.float32, requires_grad=False):
-    """Generate one-hot encoding Tensor."""
+    """
+    Generate one-hot encoding Tensor.
+
+    Args:
+        n: Number of classes (int)
+        i: Indices tensor or array-like
+        device: Target device
+        dtype: Data type for output
+        requires_grad: Whether to track gradients
+
+    Returns:
+        One-hot encoded tensor of shape (*i.shape, n)
+    """
     device = genesis.device('cpu') if device is None else device
     # Convert i to Tensor if needed
     if not isinstance(i, genesis.Tensor):
-        i = genesis.Tensor(Storage.from_numpy(i, device), shape=tuple(i.shape if hasattr(i, 'shape') else [len(i)]))
+        i = genesis.tensor(i, device=device)
     # Normalize dtype: get_dtype handles DType/str/numpy.dtype
     dtype_obj = get_dtype(dtype)
-    # Dispatcher expects positional args: (indices_tensor, n_classes, dtype_string)
-    # Dispatcher returns Tensor directly
+    # Dispatcher expects: (indices_tensor, n_classes, dtype_string)
     result_tensor = OperationDispatcher.dispatch("one_hot", i, n, dtype_obj.name)
     result_tensor.requires_grad = requires_grad
     return result_tensor

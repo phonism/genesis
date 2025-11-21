@@ -54,7 +54,8 @@ def get_amp_dtype(policy: AMPPolicy, *args, **kwargs):
         Target dtype for casting, or None if no casting needed
     """
     if policy == AMPPolicy.FP16:
-        return genesis.float16
+        # Use the configured AMP dtype (float16 or bfloat16)
+        return getattr(genesis, 'amp_dtype', genesis.float16)
 
     elif policy == AMPPolicy.FP32:
         return genesis.float32
@@ -93,27 +94,35 @@ class autocast:
     Args:
         device_type: Device type ('cuda' or 'cpu'). Default: 'cuda' if not specified.
         enabled: Whether to enable autocast. Default: True.
+        dtype: Data type for autocast (float16 or bfloat16). Default: float16 for CUDA.
 
     Examples:
-        # New PyTorch 2.x style API (recommended)
+        # Float16 training (default)
         with amp.autocast('cuda'):
             output = model(input)
             loss = criterion(output, target)
 
-        # Old style (still supported for backward compatibility)
-        with amp.autocast():
+        # BFloat16 training
+        with amp.autocast('cuda', dtype=genesis.bfloat16):
             output = model(input)
+            loss = criterion(output, target)
     """
 
-    def __init__(self, device_type='cuda', enabled=True):
+    def __init__(self, device_type='cuda', enabled=True, dtype=None):
         """Initialize autocast context manager.
 
         Args:
             device_type: Device type ('cuda' or 'cpu')
             enabled: Whether to enable autocast
+            dtype: Target dtype (float16 or bfloat16). Default: float16 for CUDA.
         """
         self.device_type = device_type
         self.enabled = enabled
+        # Default dtype: float16 for CUDA (following PyTorch)
+        if dtype is None:
+            self.dtype = genesis.float16
+        else:
+            self.dtype = dtype
 
     def __enter__(self):
         """Enter autocast context and clear old cached conversions."""
@@ -126,6 +135,7 @@ class autocast:
         cache.clear()
 
         genesis.enable_autocast = True
+        genesis.amp_dtype = self.dtype  # Set global AMP dtype
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -136,6 +146,7 @@ class autocast:
         """
         if self.enabled:
             genesis.enable_autocast = False
+            genesis.amp_dtype = None  # Clear global AMP dtype
         return False
 
 
