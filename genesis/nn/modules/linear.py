@@ -31,8 +31,7 @@ class Linear(Module):
             self.bias = Parameter(init.zeros(self.out_features, device=device, dtype=dtype))
 
     def forward(self, x: Tensor) -> Tensor:
-        """
-        Forward pass of the linear layer.
+        """Forward pass of the linear layer.
 
         Implementation matches PyTorch's nn.Linear behavior under AMP:
         - Matmul uses FP16 in autocast mode (via Matmul.amp_policy = FP16)

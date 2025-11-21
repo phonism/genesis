@@ -1,5 +1,4 @@
-"""
-CUDA error checking utilities.
+"""CUDA error checking utilities.
 
 This module is separate to avoid circular imports between cuda.py and cuda_kernels.py
 """

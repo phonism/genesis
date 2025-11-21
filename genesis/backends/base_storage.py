@@ -11,8 +11,7 @@ import numpy as np
 
 
 class BaseStorage(ABC):
-    """
-    Abstract base class for tensor storage backends.
+    """Abstract base class for tensor storage backends.
     
     Defines the minimum interface that all storage implementations must provide
     to ensure consistency across CPU and GPU backends.
@@ -32,8 +31,7 @@ class BaseStorage(ABC):
     @property
     @abstractmethod
     def dtype(self) -> str:
-        """
-        Return the data type of the tensor as a string.
+        """Return the data type of the tensor as a string.
         
         Returns:
             str: The data type (e.g., "float32", "float16", "int64")
@@ -42,8 +40,7 @@ class BaseStorage(ABC):
     
     @abstractmethod
     def to_numpy(self) -> np.ndarray:
-        """
-        Convert the storage to a NumPy array.
+        """Convert the storage to a NumPy array.
         
         Returns:
             np.ndarray: NumPy representation of the tensor data

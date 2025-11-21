@@ -29,6 +29,7 @@ from ..backends.cuda_memory import (
     defragment_memory, analyze_memory_fragmentation,
     get_fragmentation_stats, set_memory_config
 )
+from ..backends.cuda_memory import memory_stats as get_memory_stats
 
 # CUDA initialization state
 _cuda_initialized = False
@@ -117,7 +118,7 @@ def get_device_name(device: Optional[int] = None) -> str:
         device = current_device()
     
     name = cuda.cuDeviceGetName(128, device)
-    return name[1].decode('utf-8') if name[0] == cuda.CUresult.CUDA_SUCCESS else f"CUDA Device {device}"
+    return name[1].decode("utf-8") if name[0] == cuda.CUresult.CUDA_SUCCESS else f"CUDA Device {device}"
 
 
 def is_available() -> bool:
@@ -126,8 +127,7 @@ def is_available() -> bool:
 
 
 def synchronize(device: Optional[int] = None) -> None:
-    """
-    Synchronize CUDA operations.
+    """Synchronize CUDA operations.
     
     This ensures all CUDA operations are complete before returning.
     """
@@ -145,8 +145,7 @@ def synchronize(device: Optional[int] = None) -> None:
 
 # Memory management functions
 def empty_cache() -> Dict[str, Any]:
-    """
-    Clear the CUDA memory cache.
+    """Clear the CUDA memory cache.
     
     Similar to torch.cuda.empty_cache(), this function frees all cached memory
     that is not currently being used by any tensors.
@@ -158,32 +157,30 @@ def empty_cache() -> Dict[str, Any]:
         - defragmentation_performed: Whether defragmentation was performed
         - stats: Detailed statistics about the cleanup
     """
-    from genesis.backends.cuda_memory import memory_stats as get_memory_stats
-
     # Get stats before cleanup
     stats_before = get_memory_stats()
-    total_cached_before = stats_before['total_cached_bytes']
-    pool_blocks_before = stats_before['small_pool_blocks'] + stats_before['large_pool_blocks']
+    total_cached_before = stats_before["total_cached_bytes"]
+    pool_blocks_before = stats_before["small_pool_blocks"] + stats_before["large_pool_blocks"]
 
     # Perform aggressive cleanup
     trigger_gc()
 
     # Get stats after cleanup
     stats_after = get_memory_stats()
-    total_cached_after = stats_after['total_cached_bytes']
-    pool_blocks_after = stats_after['small_pool_blocks'] + stats_after['large_pool_blocks']
+    total_cached_after = stats_after["total_cached_bytes"]
+    pool_blocks_after = stats_after["small_pool_blocks"] + stats_after["large_pool_blocks"]
 
     # Calculate freed memory
     freed_memory_mb = (total_cached_before - total_cached_after) / (1024 * 1024)
     cleared_pools = pool_blocks_before - pool_blocks_after
 
     result = {
-        'freed_memory_mb': freed_memory_mb,
-        'cleared_pools': cleared_pools,
-        'defragmentation_performed': False,  # Lightweight allocator uses fixed buckets
-        'stats': {
-            'before': stats_before,
-            'after': stats_after
+        "freed_memory_mb": freed_memory_mb,
+        "cleared_pools": cleared_pools,
+        "defragmentation_performed": False,  # Lightweight allocator uses fixed buckets
+        "stats": {
+            "before": stats_before,
+            "after": stats_after
         }
     }
 
@@ -191,8 +188,7 @@ def empty_cache() -> Dict[str, Any]:
 
 
 def memory_stats() -> Dict[str, Any]:
-    """
-    Get detailed CUDA memory statistics.
+    """Get detailed CUDA memory statistics.
 
     Similar to torch.cuda.memory_stats(), returns comprehensive information
     about CUDA memory usage, cache performance, and allocation patterns.
@@ -207,44 +203,43 @@ def memory_stats() -> Dict[str, Any]:
 
     # Format stats for compatibility with tests
     enhanced_stats = {
-        'allocation': {
-            'total_allocations': stats['alloc_count'],
-            'active_blocks': stats['small_pool_blocks'] + stats['large_pool_blocks'],
-            'current_active_memory_mb': stats['total_cached_bytes'] / (1024 * 1024)
+        "allocation": {
+            "total_allocations": stats["alloc_count"],
+            "active_blocks": stats["small_pool_blocks"] + stats["large_pool_blocks"],
+            "current_active_memory_mb": stats["total_cached_bytes"] / (1024 * 1024)
         },
-        'cache': {
-            'pool_hits': stats['cache_hits'],
-            'pool_misses': stats['alloc_count'] - stats['cache_hits'],
-            'hit_rate': stats['cache_hit_rate'],
-            'pool_blocks': stats['small_pool_blocks'] + stats['large_pool_blocks'],
-            'pool_size_mb': stats['total_cached_bytes'] / (1024 * 1024),
-            'ref_count_saves': 0  # Not tracked in lightweight allocator
+        "cache": {
+            "pool_hits": stats["cache_hits"],
+            "pool_misses": stats["alloc_count"] - stats["cache_hits"],
+            "hit_rate": stats["cache_hit_rate"],
+            "pool_blocks": stats["small_pool_blocks"] + stats["large_pool_blocks"],
+            "pool_size_mb": stats["total_cached_bytes"] / (1024 * 1024),
+            "ref_count_saves": 0  # Not tracked in lightweight allocator
         },
-        'pressure': {
-            'memory_pressure': stats['memory_pressure'],
-            'critical_pressure': stats['memory_pressure'] > stats['memory_critical_threshold'],
-            'pressure_cleanups': 0,  # Not tracked separately
-            'critical_cleanups': 0,  # Not tracked separately
-            'pressure_threshold': stats['memory_pressure_threshold'],
-            'critical_threshold': stats['memory_critical_threshold']
+        "pressure": {
+            "memory_pressure": stats["memory_pressure"],
+            "critical_pressure": stats["memory_pressure"] > stats["memory_critical_threshold"],
+            "pressure_cleanups": 0,  # Not tracked separately
+            "critical_cleanups": 0,  # Not tracked separately
+            "pressure_threshold": stats["memory_pressure_threshold"],
+            "critical_threshold": stats["memory_critical_threshold"]
         },
-        'fragmentation': {
-            'overall_fragmentation': 0.0,  # Fixed-size buckets prevent fragmentation
-            'pool_fragmentation': 0.0,
-            'defrag_operations': 0,
-            'fragmentation_threshold': 0.3,
-            'trend': 'stable',
-            'recommendation': 'No action needed - using fixed-size bucket allocator'
+        "fragmentation": {
+            "overall_fragmentation": 0.0,  # Fixed-size buckets prevent fragmentation
+            "pool_fragmentation": 0.0,
+            "defrag_operations": 0,
+            "fragmentation_threshold": 0.3,
+            "trend": "stable",
+            "recommendation": "No action needed - using fixed-size bucket allocator"
         },
-        'memory_info': memory_info
+        "memory_info": memory_info
     }
 
     return enhanced_stats
 
 
 def memory_summary() -> str:
-    """
-    Get a human-readable summary of CUDA memory usage.
+    """Get a human-readable summary of CUDA memory usage.
     
     Similar to torch.cuda.memory_summary(), returns a formatted string
     with key memory statistics and recommendations.
@@ -255,11 +250,11 @@ def memory_summary() -> str:
     stats = memory_stats()
     
     # Extract key metrics
-    alloc = stats['allocation']
-    cache = stats['cache']
-    pressure = stats['pressure']
-    frag = stats['fragmentation']
-    mem_info = stats['memory_info']
+    alloc = stats["allocation"]
+    cache = stats["cache"]
+    pressure = stats["pressure"]
+    frag = stats["fragmentation"]
+    mem_info = stats["memory_info"]
     
     summary_lines = [
         "=" * 60,
@@ -267,43 +262,43 @@ def memory_summary() -> str:
         "=" * 60,
         "",
         "ALLOCATION:",
-        f"  Total allocations: {alloc['total_allocations']:,}",
-        f"  Active blocks: {alloc['active_blocks']:,}",
-        f"  Current memory: {alloc['current_active_memory_mb']:.2f} MB",
+        f'  Total allocations: {alloc["total_allocations"]:,}',
+        f'  Active blocks: {alloc["active_blocks"]:,}',
+        f'  Current memory: {alloc["current_active_memory_mb"]:.2f} MB',
         "",
         "CACHE PERFORMANCE:",
-        f"  Pool hits: {cache['pool_hits']:,}",
-        f"  Pool misses: {cache['pool_misses']:,}",
-        f"  Hit rate: {cache['hit_rate']:.2%}",
-        f"  Pool blocks: {cache['pool_blocks']:,}",
-        f"  Pool size: {cache['pool_size_mb']:.2f} MB",
-        f"  Reference count saves: {cache['ref_count_saves']:,}",
+        f'  Pool hits: {cache["pool_hits"]:,}',
+        f'  Pool misses: {cache["pool_misses"]:,}',
+        f'  Hit rate: {cache["hit_rate"]:.2%}',
+        f'  Pool blocks: {cache["pool_blocks"]:,}',
+        f'  Pool size: {cache["pool_size_mb"]:.2f} MB',
+        f'  Reference count saves: {cache["ref_count_saves"]:,}',
         "",
         "MEMORY PRESSURE:",
-        f"  Current pressure: {pressure['memory_pressure']:.2%}",
-        f"  Critical pressure: {'Yes' if pressure['critical_pressure'] else 'No'}",
-        f"  Pressure cleanups: {pressure['pressure_cleanups']:,}",
-        f"  Critical cleanups: {pressure['critical_cleanups']:,}",
-        f"  Pressure threshold: {pressure['pressure_threshold']:.2%}",
+        f'  Current pressure: {pressure["memory_pressure"]:.2%}',
+        f'  Critical pressure: {"Yes" if pressure["critical_pressure"] else "No"}',
+        f'  Pressure cleanups: {pressure["pressure_cleanups"]:,}',
+        f'  Critical cleanups: {pressure["critical_cleanups"]:,}',
+        f'  Pressure threshold: {pressure["pressure_threshold"]:.2%}',
         "",
         "FRAGMENTATION:",
-        f"  Overall fragmentation: {frag['overall_fragmentation']:.3f}",
-        f"  Pool fragmentation: {frag['pool_fragmentation']:.3f}",
-        f"  Defrag operations: {frag['defrag_operations']:,}",
-        f"  Fragmentation trend: {frag['trend']}",
-        f"  Recommendation: {frag['recommendation']}",
+        f'  Overall fragmentation: {frag["overall_fragmentation"]:.3f}',
+        f'  Pool fragmentation: {frag["pool_fragmentation"]:.3f}',
+        f'  Defrag operations: {frag["defrag_operations"]:,}',
+        f'  Fragmentation trend: {frag["trend"]}',
+        f'  Recommendation: {frag["recommendation"]}',
     ]
     
     # Add GPU memory info if available
-    if 'gpu_memory' in mem_info and 'error' not in mem_info['gpu_memory']:
-        gpu_mem = mem_info['gpu_memory']
+    if "gpu_memory" in mem_info and "error" not in mem_info["gpu_memory"]:
+        gpu_mem = mem_info["gpu_memory"]
         summary_lines.extend([
             "",
             "GPU MEMORY:",
-            f"  Total: {gpu_mem['total_mb']:.1f} MB",
-            f"  Used: {gpu_mem['used_mb']:.1f} MB",
-            f"  Free: {gpu_mem['free_mb']:.1f} MB",
-            f"  Usage: {gpu_mem['usage_ratio']}",
+            f'  Total: {gpu_mem["total_mb"]:.1f} MB',
+            f'  Used: {gpu_mem["used_mb"]:.1f} MB',
+            f'  Free: {gpu_mem["free_mb"]:.1f} MB',
+            f'  Usage: {gpu_mem["usage_ratio"]}',
         ])
     
     # Add recommendations
@@ -312,13 +307,13 @@ def memory_summary() -> str:
         "RECOMMENDATIONS:",
     ])
     
-    if pressure['memory_pressure']:
+    if pressure["memory_pressure"]:
         summary_lines.append("  ⚠️  Memory pressure detected - consider calling empty_cache()")
     
-    if frag['overall_fragmentation'] > 0.3:
+    if frag["overall_fragmentation"] > 0.3:
         summary_lines.append("  🔧 High fragmentation - defragmentation recommended")
 
-    if cache['hit_rate'] < 0.5:
+    if cache["hit_rate"] < 0.5:
         summary_lines.append("  📈 Low cache hit rate - memory access patterns may need optimization")
     
     if not any(line.startswith("  ") for line in summary_lines[-10:]):
@@ -333,8 +328,7 @@ def memory_summary() -> str:
 
 
 def set_memory_fraction(fraction: float) -> None:
-    """
-    Set the memory fraction for CUDA memory allocation.
+    """Set the memory fraction for CUDA memory allocation.
     
     Args:
         fraction: Fraction of GPU memory to use (0.0 to 1.0)
@@ -344,8 +338,8 @@ def set_memory_fraction(fraction: float) -> None:
     
     # Convert to pool size configuration
     mem_info = get_memory_info()
-    if 'gpu_memory' in mem_info and 'error' not in mem_info['gpu_memory']:
-        total_mb = mem_info['gpu_memory']['total_mb']
+    if "gpu_memory" in mem_info and "error" not in mem_info["gpu_memory"]:
+        total_mb = mem_info["gpu_memory"]["total_mb"]
         max_pool_mb = int(total_mb * fraction)
         set_memory_config(max_pool_size_mb=max_pool_mb)
     else:
@@ -357,7 +351,7 @@ def set_memory_fraction(fraction: float) -> None:
 def reset_max_memory_allocated() -> None:
     """Reset the maximum memory allocation tracker."""
     manager = get_memory_manager()
-    if hasattr(manager, 'max_allocated_bytes'):
+    if hasattr(manager, "max_allocated_bytes"):
         manager.max_allocated_bytes = 0
 
 
@@ -370,8 +364,7 @@ def reset_max_memory_cached() -> None:
 
 # Configuration parsing for GENESIS_CUDA_ALLOC_CONF
 def _parse_memory_config() -> Dict[str, Any]:
-    """
-    Parse GENESIS_CUDA_ALLOC_CONF environment variable.
+    """Parse GENESIS_CUDA_ALLOC_CONF environment variable.
     
     Format: "key1=value1,key2=value2,..."
     
@@ -383,21 +376,21 @@ def _parse_memory_config() -> Dict[str, Any]:
     """
     config = {}
     
-    env_config = os.environ.get('GENESIS_CUDA_ALLOC_CONF', '')
+    env_config = os.environ.get("GENESIS_CUDA_ALLOC_CONF", "")
     if not env_config:
         return config
     
     try:
-        for pair in env_config.split(','):
-            if '=' in pair:
-                key, value = pair.split('=', 1)
+        for pair in env_config.split(","):
+            if "=" in pair:
+                key, value = pair.split("=", 1)
                 key = key.strip()
                 value = value.strip()
                 
                 # Parse different value types
-                if key in ['gc_threshold', 'fragmentation_threshold']:
+                if key in ["gc_threshold", "fragmentation_threshold"]:
                     config[key] = float(value)
-                elif key in ['max_pool_size_mb', 'max_split_size_mb']:
+                elif key in ["max_pool_size_mb", "max_split_size_mb"]:
                     config[key] = int(value)
                 else:
                     config[key] = value

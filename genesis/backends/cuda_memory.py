@@ -1,5 +1,4 @@
-"""
-Lightweight CUDA memory allocator optimized for stable training workloads.
+"""Lightweight CUDA memory allocator optimized for stable training workloads.
 
 Design Goals:
 - Ultra-fast hot path: single dict/list lookup + minimal branching
@@ -15,7 +14,10 @@ except ImportError:
     from cuda.bindings import driver as cuda
 
 import threading
+import bisect
 import os
+import gc
+import time
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 from genesis.backends.cuda_error import check_cuda_error
@@ -84,11 +86,8 @@ MEMORY_CRITICAL_THRESHOLD = float(os.getenv("GENESIS_MEMORY_CRITICAL_THRESHOLD",
 PENDING_CHECK_INTERVAL = int(os.getenv("GENESIS_PENDING_CHECK_INTERVAL", "10"))
 
 
-import bisect
-
 def round_size(nbytes: int) -> Tuple[int, bool]:
-    """
-    Round requested size to nearest bucket size using binary search.
+    """Round requested size to nearest bucket size using binary search.
 
     Args:
         nbytes: Requested allocation size in bytes
@@ -110,16 +109,14 @@ def round_size(nbytes: int) -> Tuple[int, bool]:
 
 
 class CudaCachingAllocator:
-    """
-    Lightweight caching allocator for CUDA memory.
+    """Lightweight caching allocator for CUDA memory.
 
     Optimized for stable training workloads where tensor sizes are consistent
     after warmup. Uses fixed-size buckets to minimize fragmentation.
     """
 
     def __init__(self, device: int = 0, default_stream: int = 0):
-        """
-        Initialize allocator for specific device (standard API).
+        """Initialize allocator for specific device (standard API).
 
         Args:
             device: CUDA device ID this allocator manages
@@ -208,8 +205,7 @@ class CudaCachingAllocator:
             self._cuda_initialized = True
 
     def _cuda_alloc(self, size: int) -> int:
-        """
-        Allocate memory directly from CUDA using async allocation when available.
+        """Allocate memory directly from CUDA using async allocation when available.
 
         Note: Caller must hold self.lock. OOM recovery is handled in allocate_memory().
         """
@@ -272,15 +268,13 @@ class CudaCachingAllocator:
             pass
 
     def _get_memory_pressure(self) -> float:
-        """
-        Get current GPU memory pressure (0.0 to 1.0).
+        """Get current GPU memory pressure (0.0 to 1.0).
 
         Uses cached value to avoid expensive cuMemGetInfo calls.
 
         Returns:
             Memory usage ratio (0.0 = empty, 1.0 = full)
         """
-        import time
         current_time = time.time()
 
         # Use cached value if recent enough
@@ -307,8 +301,7 @@ class CudaCachingAllocator:
         return 0.5
 
     def _clear_cache_unsafe(self):
-        """
-        Clear all cached memory in pools WITHOUT acquiring lock.
+        """Clear all cached memory in pools WITHOUT acquiring lock.
 
         UNSAFE: Caller must hold self.lock before calling this.
         This is used internally when we're already inside a lock context.
@@ -328,8 +321,7 @@ class CudaCachingAllocator:
         # Note: Don't drain pending here - those are still in use
 
     def _clear_cache(self):
-        """
-        Clear all cached memory in pools (emergency cleanup on OOM).
+        """Clear all cached memory in pools (emergency cleanup on OOM).
 
         This is called when we hit OOM to free up memory for allocation retry.
         Similar to torch.cuda.empty_cache().
@@ -338,8 +330,7 @@ class CudaCachingAllocator:
             self._clear_cache_unsafe()
 
     def drain_pending(self):
-        """
-        Process pending deallocations.
+        """Process pending deallocations.
 
         Checks which events have completed and returns their blocks to the pool.
         This is called periodically during allocations to avoid unbounded growth.
@@ -375,8 +366,7 @@ class CudaCachingAllocator:
         self.pending = still_pending
 
     def allocate_memory(self, nbytes: int, stream: Optional[int] = None) -> int:
-        """
-        Allocate GPU memory with OOM recovery.
+        """Allocate GPU memory with OOM recovery.
 
         Hot path optimized:
         1. Check pool (fast dict/list lookup)
@@ -433,7 +423,6 @@ class CudaCachingAllocator:
                 # OOM - will handle below
 
         # OOM recovery (outside lock to avoid deadlock)
-        import gc
         gc.collect()
         self._clear_cache()  # This acquires its own lock
 
@@ -447,8 +436,7 @@ class CudaCachingAllocator:
         raise RuntimeError(f"CUDA out of memory: failed to allocate {bucket} bytes even after cache cleanup")
 
     def free_memory(self, ptr: int, size: int, stream: Optional[int] = None):
-        """
-        Free GPU memory (return to pool or defer).
+        """Free GPU memory (return to pool or defer).
 
         Dynamic pool management based on memory pressure:
         - Low pressure (<90%): Always cache
@@ -510,8 +498,7 @@ class CudaCachingAllocator:
             self.ref_counts[ptr] = self.ref_counts.get(ptr, 1) + 1
 
     def decrease_ref_count(self, ptr: int, stream: Optional[int] = None) -> bool:
-        """
-        Decrease reference count for shared memory.
+        """Decrease reference count for shared memory.
 
         Args:
             ptr: GPU pointer
@@ -531,8 +518,7 @@ class CudaCachingAllocator:
             return False
 
     def warmup_pool(self, size_list: List[int]):
-        """
-        Pre-allocate memory for common sizes to avoid allocation during training.
+        """Pre-allocate memory for common sizes to avoid allocation during training.
 
         Args:
             size_list: List of sizes (in bytes) to pre-allocate
@@ -548,8 +534,7 @@ class CudaCachingAllocator:
                     bins[bucket].append(ptr)
 
     def memory_stats(self) -> Dict:
-        """
-        Get memory statistics (optional, not on hot path).
+        """Get memory statistics (optional, not on hot path).
 
         Returns:
             Dict with allocation statistics
@@ -571,28 +556,27 @@ class CudaCachingAllocator:
             memory_pressure = self._get_memory_pressure()
 
             stats = {
-                'alloc_count': self.alloc_count,
-                'free_count': self.free_count,
-                'cache_hits': self.cache_hits,
-                'cache_hit_rate': self.cache_hits / max(1, self.alloc_count),
-                'cuda_alloc_count': self.cuda_alloc_count,
-                'small_pool_blocks': small_blocks,
-                'large_pool_blocks': large_blocks,
-                'small_pool_bytes': small_cached_bytes,
-                'large_pool_bytes': large_cached_bytes,
-                'total_cached_bytes': small_cached_bytes + large_cached_bytes,
-                'pending_deallocations': len(self.pending),
-                'pending_checks': self.pending_checks,
-                'memory_pressure': memory_pressure,
-                'memory_pressure_threshold': self.memory_pressure_threshold,
-                'memory_critical_threshold': self.memory_critical_threshold,
+                "alloc_count": self.alloc_count,
+                "free_count": self.free_count,
+                "cache_hits": self.cache_hits,
+                "cache_hit_rate": self.cache_hits / max(1, self.alloc_count),
+                "cuda_alloc_count": self.cuda_alloc_count,
+                "small_pool_blocks": small_blocks,
+                "large_pool_blocks": large_blocks,
+                "small_pool_bytes": small_cached_bytes,
+                "large_pool_bytes": large_cached_bytes,
+                "total_cached_bytes": small_cached_bytes + large_cached_bytes,
+                "pending_deallocations": len(self.pending),
+                "pending_checks": self.pending_checks,
+                "memory_pressure": memory_pressure,
+                "memory_pressure_threshold": self.memory_pressure_threshold,
+                "memory_critical_threshold": self.memory_critical_threshold,
             }
 
             return stats
 
     def trigger_gc(self):
-        """
-        Manually trigger garbage collection (clear all cached memory).
+        """Manually trigger garbage collection (clear all cached memory).
 
         This is an emergency operation for memory pressure situations.
         Not recommended during training.
@@ -623,8 +607,7 @@ _allocator_lock = threading.Lock()
 
 
 def get_memory_manager(device: Optional[int] = None) -> CudaCachingAllocator:
-    """
-    Get or create memory manager for specific device (standard API).
+    """Get or create memory manager for specific device (standard API).
 
     Each CUDA device has its own allocator instance with its own context.
     This implements efficient caching allocation for CUDA memory.
@@ -664,8 +647,7 @@ def get_memory_manager(device: Optional[int] = None) -> CudaCachingAllocator:
 
 # Public API - matches old interface for compatibility
 def allocate_memory(nbytes: int, stream: Optional[int] = None) -> int:
-    """
-    Allocate GPU memory.
+    """Allocate GPU memory.
 
     Args:
         nbytes: Number of bytes to allocate
@@ -679,8 +661,7 @@ def allocate_memory(nbytes: int, stream: Optional[int] = None) -> int:
 
 
 def free_memory(ptr: int, nbytes: int, stream: Optional[int] = None):
-    """
-    Free GPU memory.
+    """Free GPU memory.
 
     Args:
         ptr: GPU pointer
@@ -698,8 +679,7 @@ def increase_ref_count(ptr: int):
 
 
 def decrease_ref_count(ptr: int, stream: Optional[int] = None) -> bool:
-    """
-    Decrease reference count for shared memory.
+    """Decrease reference count for shared memory.
 
     Returns:
         True if this was a ref-counted block
@@ -721,8 +701,7 @@ def trigger_gc():
 
 
 def get_memory_info() -> Dict:
-    """
-    Get GPU memory information.
+    """Get GPU memory information.
 
     Returns:
         Dict with GPU memory statistics (total, used, free, usage_ratio)
@@ -739,28 +718,27 @@ def get_memory_info() -> Dict:
         usage_ratio = used_bytes / max(1, total_bytes)
 
         return {
-            'gpu_memory': {
-                'total_mb': total_bytes / (1024 * 1024),
-                'used_mb': used_bytes / (1024 * 1024),
-                'free_mb': free_bytes / (1024 * 1024),
-                'usage_ratio': f'{usage_ratio:.3f}'
+            "gpu_memory": {
+                "total_mb": total_bytes / (1024 * 1024),
+                "used_mb": used_bytes / (1024 * 1024),
+                "free_mb": free_bytes / (1024 * 1024),
+                "usage_ratio": f'{usage_ratio:.3f}'
             },
-            'system_memory': {
-                'total_mb': 'N/A',
-                'used_mb': 'N/A',
-                'available_mb': 'N/A'
+            "system_memory": {
+                "total_mb": "N/A",
+                "used_mb": "N/A",
+                "available_mb": "N/A"
             }
         }
     except Exception as e:
         return {
-            'gpu_memory': {'error': str(e)},
-            'system_memory': {'error': 'Not available'}
+            "gpu_memory": {"error": str(e)},
+            "system_memory": {"error": "Not available"}
         }
 
 
 def defragment_memory() -> Optional[Dict]:
-    """
-    Defragment memory pools (compatibility function).
+    """Defragment memory pools (compatibility function).
 
     In the lightweight allocator, defragmentation is implicit:
     - Fixed-size buckets prevent fragmentation
@@ -775,16 +753,15 @@ def defragment_memory() -> Optional[Dict]:
     manager.drain_pending()
 
     return {
-        'defragmented': False,
-        'reason': 'Lightweight allocator uses fixed-size buckets (no fragmentation)',
-        'small_pool_blocks': sum(len(blocks) for blocks in manager.small_bins.values()),
-        'large_pool_blocks': sum(len(blocks) for blocks in manager.large_bins.values()),
+        "defragmented": False,
+        "reason": "Lightweight allocator uses fixed-size buckets (no fragmentation)",
+        "small_pool_blocks": sum(len(blocks) for blocks in manager.small_bins.values()),
+        "large_pool_blocks": sum(len(blocks) for blocks in manager.large_bins.values()),
     }
 
 
 def empty_cache():
-    """
-    Release all cached memory back to GPU.
+    """Release all cached memory back to GPU.
 
     This function clears all memory blocks that are cached in the allocator pools
     but not currently in use. Similar to torch.cuda.empty_cache().
@@ -802,8 +779,7 @@ def empty_cache():
 
 
 def get_memory_stats() -> Dict:
-    """
-    Get detailed memory allocator statistics.
+    """Get detailed memory allocator statistics.
 
     Returns:
         Dict with memory statistics
@@ -814,27 +790,26 @@ def get_memory_stats() -> Dict:
     large_cached = sum(len(blocks) for blocks in manager.large_bins.values())
 
     stats = {
-        'alloc_count': manager.alloc_count,
-        'free_count': manager.free_count,
-        'cuda_alloc_count': manager.cuda_alloc_count,
-        'cache_hits': manager.cache_hits,
-        'small_pool_cached_blocks': small_cached,
-        'large_pool_cached_blocks': large_cached,
-        'pending_blocks': len(manager.pending),
+        "alloc_count": manager.alloc_count,
+        "free_count": manager.free_count,
+        "cuda_alloc_count": manager.cuda_alloc_count,
+        "cache_hits": manager.cache_hits,
+        "small_pool_cached_blocks": small_cached,
+        "large_pool_cached_blocks": large_cached,
+        "pending_blocks": len(manager.pending),
     }
 
     # Calculate efficiency metrics
     if manager.alloc_count > 0:
-        stats['cache_hit_rate'] = manager.cache_hits / manager.alloc_count
+        stats["cache_hit_rate"] = manager.cache_hits / manager.alloc_count
     else:
-        stats['cache_hit_rate'] = 0.0
+        stats["cache_hit_rate"] = 0.0
 
     return stats
 
 
 def analyze_memory_fragmentation() -> Dict:
-    """
-    Analyze memory fragmentation (compatibility function).
+    """Analyze memory fragmentation (compatibility function).
 
     Returns:
         Dict with fragmentation analysis
@@ -845,17 +820,16 @@ def analyze_memory_fragmentation() -> Dict:
     large_blocks = sum(len(blocks) for blocks in manager.large_bins.values())
 
     return {
-        'fragmentation_ratio': 0.0,  # Fixed-size buckets prevent fragmentation
-        'small_pool_blocks': small_blocks,
-        'large_pool_blocks': large_blocks,
-        'pending_blocks': len(manager.pending),
-        'recommendation': 'No action needed - using fixed-size bucket allocator'
+        "fragmentation_ratio": 0.0,  # Fixed-size buckets prevent fragmentation
+        "small_pool_blocks": small_blocks,
+        "large_pool_blocks": large_blocks,
+        "pending_blocks": len(manager.pending),
+        "recommendation": "No action needed - using fixed-size bucket allocator"
     }
 
 
 def get_fragmentation_stats() -> Dict:
-    """
-    Get fragmentation statistics (compatibility function).
+    """Get fragmentation statistics (compatibility function).
 
     Returns:
         Dict with fragmentation stats
@@ -864,8 +838,7 @@ def get_fragmentation_stats() -> Dict:
 
 
 def set_memory_config(config: Dict):
-    """
-    Set memory allocator configuration (compatibility function).
+    """Set memory allocator configuration (compatibility function).
 
     Args:
         config: Configuration dict (currently ignored for lightweight allocator)

@@ -1,5 +1,4 @@
-"""
-CUDA utility functions to avoid circular imports.
+"""CUDA utility functions to avoid circular imports.
 
 This module provides factory functions for creating CUDA storage objects
 without importing CUDAStorage directly.

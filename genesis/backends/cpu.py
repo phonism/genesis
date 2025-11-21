@@ -12,7 +12,6 @@ from .base import Storage
 from genesis.dtypes import float32, float16, float64, int32, int64, int16, int8, uint8, bool as genesis_bool, bfloat16
 
 
-
 class CPUStorage(torch.Tensor):
     """CPU tensor storage with optimized operations.
     
@@ -39,7 +38,7 @@ class CPUStorage(torch.Tensor):
             tensor = torch.tensor(data)
             return tensor.as_subclass(cls)
     
-    def fill(self, value: Union[int, float]) -> 'CPUStorage':
+    def fill(self, value: Union[int, float]) -> "CPUStorage":
         """Fill storage with a constant value.
 
         Args:
@@ -63,7 +62,7 @@ class CPUStorage(torch.Tensor):
         """Convert to numpy array."""
         return self.to_numpy()
     
-    def clone(self) -> 'CPUStorage':
+    def clone(self) -> "CPUStorage":
         """Create a deep copy of the storage.
 
         Returns:
@@ -71,7 +70,7 @@ class CPUStorage(torch.Tensor):
         """
         return super().clone().as_subclass(CPUStorage)
     
-    def contiguous(self) -> 'CPUStorage':
+    def contiguous(self) -> "CPUStorage":
         """Return contiguous version of storage.
 
         Returns:
@@ -130,11 +129,11 @@ class CPUStorage(torch.Tensor):
         
         # Handle dtype conversion using torch
         torch_tensor = torch.from_numpy(array)
-        if dtype.name == 'bfloat16':
+        if dtype.name == "bfloat16":
             torch_tensor = torch_tensor.to(torch.bfloat16)
-        elif dtype.name == 'float16':
+        elif dtype.name == "float16":
             torch_tensor = torch_tensor.to(torch.float16)
-        elif dtype.name == 'float32':
+        elif dtype.name == "float32":
             torch_tensor = torch_tensor.to(torch.float32)
         # Add other dtypes as needed
         

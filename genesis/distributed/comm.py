@@ -40,8 +40,7 @@ def _set_backend(backend):
 
 
 def all_reduce(tensor: genesis.Tensor, op: ReduceOp = ReduceOp.SUM, async_op: bool = False):
-    """
-    Reduce the tensor data across all processes.
+    """Reduce the tensor data across all processes.
     
     Args:
         tensor: Input tensor to be reduced
@@ -56,8 +55,7 @@ def all_reduce(tensor: genesis.Tensor, op: ReduceOp = ReduceOp.SUM, async_op: bo
 
 
 def all_gather(tensor_list: List[genesis.Tensor], tensor: genesis.Tensor, async_op: bool = False):
-    """
-    Gather tensors from all processes.
+    """Gather tensors from all processes.
     
     Args:
         tensor_list: Output list of tensors to store gathered results
@@ -72,8 +70,7 @@ def all_gather(tensor_list: List[genesis.Tensor], tensor: genesis.Tensor, async_
 
 
 def broadcast(tensor: genesis.Tensor, src: int, async_op: bool = False):
-    """
-    Broadcast tensor from source process to all other processes.
+    """Broadcast tensor from source process to all other processes.
     
     Args:
         tensor: Tensor to broadcast (input on src, output on others)
@@ -89,8 +86,7 @@ def broadcast(tensor: genesis.Tensor, src: int, async_op: bool = False):
 
 def reduce_scatter(output: genesis.Tensor, input_list: List[genesis.Tensor],
                   op: ReduceOp = ReduceOp.SUM, async_op: bool = False):
-    """
-    Reduce and scatter tensor chunks across processes.
+    """Reduce and scatter tensor chunks across processes.
 
     Args:
         output: Output tensor to store reduced result chunk
@@ -106,8 +102,7 @@ def reduce_scatter(output: genesis.Tensor, input_list: List[genesis.Tensor],
 
 
 def barrier():
-    """
-    Synchronize all processes in the process group.
+    """Synchronize all processes in the process group.
 
     This is a collective operation - all ranks must call it.
     Standard DDP pattern for ensuring all ranks reach the same point.

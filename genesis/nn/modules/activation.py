@@ -8,13 +8,10 @@ from ..triton_ops.silu import silu as triton_silu
 
 
 class ReLU(Module):
-    """
-    ReLU activation function.
-    """
+    """ReLU activation function."""
+
     def forward(self, x: Tensor) -> Tensor:
-        """
-        Forward pass of the ReLU activation function.
-        """
+        """Forward pass of the ReLU activation function."""
         x = genesis.relu(x)
         return x
 
@@ -28,9 +25,7 @@ class Softmax(Module):
         self.dim = dim
 
     def forward(self, x: Tensor) -> Tensor:
-        """
-        Forward pass of the softmax activation function.
-        """
+        """Forward pass of the softmax activation function."""
         if x.device == genesis.device('cpu') or genesis.use_triton is False:
             x_exp = F.exp(x - F.max(x, self.dim, keepdims=True))
             x = x_exp / F.summation(x_exp, axis=self.dim, keepdims=True)
@@ -40,8 +35,7 @@ class Softmax(Module):
 
 
 class SiLU(Module):
-    """
-    SiLU (Swish) activation function: f(x) = x * sigmoid(x).
+    """SiLU (Swish) activation function: f(x) = x * sigmoid(x).
 
     Preserves input dtype for efficient mixed precision training.
     Uses Triton-optimized kernels on CUDA devices.
@@ -50,8 +44,7 @@ class SiLU(Module):
         super().__init__()
 
     def forward(self, x: Tensor) -> Tensor:
-        """
-        Forward pass of the SiLU activation function.
+        """Forward pass of the SiLU activation function.
 
         Args:
             x: Input tensor

@@ -27,15 +27,15 @@ from .comm import (
 # It can still be imported directly from genesis.distributed.parallel if needed
 
 __all__ = [
-    'init_process_group',
-    'destroy_process_group',
-    'get_world_size',
-    'get_rank',
-    'is_initialized',
-    'barrier',
-    'all_reduce',
-    'all_gather',
-    'broadcast',
-    'reduce_scatter',
-    'ReduceOp',
+    "init_process_group",
+    "destroy_process_group",
+    "get_world_size",
+    "get_rank",
+    "is_initialized",
+    "barrier",
+    "all_reduce",
+    "all_gather",
+    "broadcast",
+    "reduce_scatter",
+    "ReduceOp",
 ]

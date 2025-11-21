@@ -40,8 +40,7 @@ ModelArgs = TransformerConfig
 
 
 class QwenModel(nn.Module):
-    """
-    Core Qwen transformer model.
+    """Core Qwen transformer model.
     
     Implements the main transformer architecture with embedding layer,
     transformer blocks, normalization, and language modeling head.
@@ -68,8 +67,7 @@ class QwenModel(nn.Module):
         self.max_seq_length = -1
 
     def setup_caches(self, max_batch_size: int, max_seq_length: int):
-        """
-        Initialize KV caches for efficient inference.
+        """Initialize KV caches for efficient inference.
         
         Args:
             max_batch_size: Maximum batch size to support
@@ -87,8 +85,7 @@ class QwenModel(nn.Module):
         self.max_batch_size = max_batch_size
 
     def forward(self, idx: Tensor, position_ids: Optional[Tensor] = None) -> Tensor:
-        """
-        Forward pass through the Qwen model.
+        """Forward pass through the Qwen model.
 
         Args:
             idx: Input token indices of shape (batch_size, sequence_length)
@@ -116,8 +113,7 @@ class QwenModel(nn.Module):
 
     @classmethod
     def from_name(cls, name: str):
-        """
-        Create QwenModel from a predefined configuration name.
+        """Create QwenModel from a predefined configuration name.
         
         Args:
             name: Model configuration name
@@ -129,8 +125,7 @@ class QwenModel(nn.Module):
 
 
 class QwenForCausalLM(nn.Module):
-    """
-    Qwen model for causal language modeling tasks.
+    """Qwen model for causal language modeling tasks.
     
     Wrapper around QwenModel that provides a simple interface
     for language modeling with support for weight sharing between
@@ -141,8 +136,7 @@ class QwenForCausalLM(nn.Module):
         self.model = QwenModel(config)
 
     def forward(self, idx: Tensor, **kwargs) -> Tensor:
-        """
-        Forward pass for causal language modeling.
+        """Forward pass for causal language modeling.
         
         Args:
             idx: Input token indices
@@ -155,8 +149,7 @@ class QwenForCausalLM(nn.Module):
         return logits
 
     def load_state_dict(self, state_dict: dict, strict: bool = True) -> None:
-        """
-        Load model weights with support for weight tying.
+        """Load model weights with support for weight tying.
         
         Args:
             state_dict: Dictionary containing model weights
@@ -172,8 +165,7 @@ class QwenForCausalLM(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """
-    Single transformer block with attention and feed-forward layers.
+    """Single transformer block with attention and feed-forward layers.
     
     Implements a standard transformer block with:
     - Multi-head self-attention with RoPE
@@ -195,8 +187,7 @@ class TransformerBlock(nn.Module):
         position_ids: Tensor,
         mask: Optional[Tensor] = None,
     ) -> Tensor:
-        """
-        Forward pass through the transformer block.
+        """Forward pass through the transformer block.
         
         Args:
             x: Input tensor of shape (batch_size, seq_len, hidden_size)
@@ -213,8 +204,7 @@ class TransformerBlock(nn.Module):
 
 
 class Attention(nn.Module):
-    """
-    Multi-head attention module with grouped-query attention (GQA).
+    """Multi-head attention module with grouped-query attention (GQA).
     
     Implements scaled dot-product attention with:
     - Rotary position embeddings
@@ -256,8 +246,7 @@ class Attention(nn.Module):
         mask: Optional[Tensor] = None,
         input_pos: Optional[Tensor] = None,
     ) -> Tensor:
-        """
-        Compute multi-head attention with rotary embeddings.
+        """Compute multi-head attention with rotary embeddings.
         
         Args:
             x: Input tensor of shape (batch_size, seq_len, hidden_size)
@@ -303,8 +292,7 @@ class Attention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """
-    Feed-forward network module.
+    """Feed-forward network module.
     
     Implements the position-wise feed-forward network with:
     - Gated linear unit (GLU) variant with SiLU activation
@@ -318,8 +306,7 @@ class FeedForward(nn.Module):
         self.silu = nn.SiLU()
 
     def forward(self, x: Tensor) -> Tensor:
-        """
-        Apply feed-forward transformation.
+        """Apply feed-forward transformation.
         
         Args:
             x: Input tensor of shape (batch_size, seq_len, hidden_size)

@@ -119,8 +119,7 @@ class RotaryEmbedding(nn.Module):
 
 
 def rotate_half(x: Tensor) -> Tensor:
-    """
-    Rotate half of the hidden dimensions for RoPE.
+    """Rotate half of the hidden dimensions for RoPE.
 
     This function is used in the application of rotary position embeddings.
     It rotates the vector by swapping and negating half of its dimensions.
@@ -148,8 +147,7 @@ def apply_rotary_pos_emb(
     position_ids: Optional[Tensor] = None,
     unsqueeze_dim: int = 1,
 ) -> Tuple[Tensor, Tensor]:
-    """
-    Apply rotary position embeddings to query and key tensors.
+    """Apply rotary position embeddings to query and key tensors.
 
     This function applies RoPE to both query and key tensors, which allows
     the model to encode relative position information through rotation.
@@ -182,8 +180,7 @@ def apply_rotary_pos_emb(
 
 
 def find_multiple(n: int, k: int) -> int:
-    """
-    Find the smallest multiple of k that is >= n.
+    """Find the smallest multiple of k that is >= n.
 
     This is useful for aligning sequence lengths to specific boundaries
     for efficiency (e.g., making sequence length a multiple of 8).
