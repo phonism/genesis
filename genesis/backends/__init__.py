@@ -1,5 +1,4 @@
-"""
-Backend storage implementations for Genesis framework.
+"""Backend storage implementations for Genesis framework.
 
 This module provides the storage layer abstraction for different computing devices,
 including CPU (PyTorch-based) and CUDA (custom kernels) backends.

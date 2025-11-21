@@ -11,8 +11,7 @@ from typing import Optional, Dict, Any
 
 @dataclass
 class TransformerConfig:
-    """
-    Base configuration class for dense Transformer models.
+    """Base configuration class for dense Transformer models.
 
     This configuration supports standard transformer architectures with various
     features like grouped-query attention (GQA), rotary position embeddings (RoPE),
@@ -173,8 +172,7 @@ class TransformerConfig:
 
 @dataclass
 class MoEConfig(TransformerConfig):
-    """
-    Configuration class for Mixture of Experts (MoE) Transformer models.
+    """Configuration class for Mixture of Experts (MoE) Transformer models.
 
     Extends TransformerConfig with MoE-specific parameters. Supports various
     MoE architectures including DeepSeek-MoE and Mixtral-style routing.
@@ -375,8 +373,7 @@ MOE_PRETRAINED_CONFIG_ARCHIVE_MAP = {
 
 
 def get_transformer_config(model_name: str) -> TransformerConfig:
-    """
-    Get a predefined dense transformer configuration by name.
+    """Get a predefined dense transformer configuration by name.
 
     Args:
         model_name: Name of the predefined configuration.
@@ -397,8 +394,7 @@ def get_transformer_config(model_name: str) -> TransformerConfig:
 
 
 def get_moe_config(model_name: str) -> MoEConfig:
-    """
-    Get a predefined MoE configuration by name.
+    """Get a predefined MoE configuration by name.
 
     Args:
         model_name: Name of the predefined configuration.

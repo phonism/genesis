@@ -29,7 +29,7 @@ import genesis.nn.functional as F
 from genesis.nn.modules import Module, Parameter
 from genesis.nn.modules.transformer import MultiheadAttention
 from genesis.nn.modules.normalization import RMSNorm
-from .config import MoEConfig
+from .config import MoEConfig, get_moe_config
 from .components import RotaryEmbedding, apply_rotary_pos_emb, rotate_half
 
 
@@ -70,8 +70,7 @@ class MoEGate(Module):
         self.weight = Parameter(genesis.randn(num_experts, hidden_size, std=0.02))
 
     def forward(self, hidden_states: Tensor) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
-        """
-        Route inputs to top-k experts.
+        """Route inputs to top-k experts.
 
         Args:
             hidden_states: Input tensor of shape (batch_size, seq_len, hidden_size)
@@ -119,8 +118,7 @@ class MoEGate(Module):
         batch_size: int,
         seq_len: int
     ) -> Tensor:
-        """
-        Compute auxiliary loss for expert load balancing.
+        """Compute auxiliary loss for expert load balancing.
 
         The auxiliary loss encourages balanced expert utilization by penalizing
         scenarios where some experts are used much more frequently than others.
@@ -151,8 +149,7 @@ class MoEGate(Module):
 
 
 class MoEExpert(Module):
-    """
-    Individual expert network based on SwiGLU feed-forward architecture.
+    """Individual expert network based on SwiGLU feed-forward architecture.
 
     Each expert is a standard feed-forward network with:
     - Gate projection (for SwiGLU activation)
@@ -195,8 +192,7 @@ class MoEExpert(Module):
 
 
 class AddAuxiliaryLoss(Function):
-    """
-    Custom autograd function to add auxiliary loss during backpropagation.
+    """Custom autograd function to add auxiliary loss during backpropagation.
 
     This allows the auxiliary loss to contribute to gradients without affecting
     the forward pass output.
@@ -221,8 +217,7 @@ class AddAuxiliaryLoss(Function):
 
 
 class MoELayer(Module):
-    """
-    Main Mixture of Experts layer.
+    """Main Mixture of Experts layer.
 
     Combines gating network with expert networks and optional shared experts.
     Implements efficient sparse computation where only top-k experts are activated
@@ -275,8 +270,7 @@ class MoELayer(Module):
             self.shared_experts = None
 
     def forward(self, hidden_states: Tensor) -> Tensor:
-        """
-        Forward pass through MoE layer.
+        """Forward pass through MoE layer.
 
         Args:
             hidden_states: Input tensor of shape (batch_size, seq_len, hidden_size)
@@ -408,8 +402,7 @@ class MoELayer(Module):
 
 
 class MoETransformerBlock(Module):
-    """
-    Transformer block with MoE feed-forward layer.
+    """Transformer block with MoE feed-forward layer.
 
     Replaces the standard feed-forward layer with a MoE layer while keeping
     the attention mechanism and layer normalization unchanged.
@@ -423,18 +416,18 @@ class MoETransformerBlock(Module):
         # MoE layer instead of standard feed-forward
         self.mlp = MoELayer(
             hidden_size=config.hidden_size,
-            num_experts=getattr(config, 'num_experts', 8),
-            top_k=getattr(config, 'top_k', 2),
-            intermediate_size=getattr(config, 'moe_intermediate_size', config.intermediate_size),
-            num_shared_experts=getattr(config, 'num_shared_experts', None),
-            aux_loss_alpha=getattr(config, 'aux_loss_alpha', 0.01),
-            seq_aux=getattr(config, 'seq_aux', True),
-            norm_topk_prob=getattr(config, 'norm_topk_prob', True),
-            expert_bias=getattr(config, 'expert_bias', False)
+            num_experts=getattr(config, "num_experts", 8),
+            top_k=getattr(config, "top_k", 2),
+            intermediate_size=getattr(config, "moe_intermediate_size", config.intermediate_size),
+            num_shared_experts=getattr(config, "num_shared_experts", None),
+            aux_loss_alpha=getattr(config, "aux_loss_alpha", 0.01),
+            seq_aux=getattr(config, "seq_aux", True),
+            norm_topk_prob=getattr(config, "norm_topk_prob", True),
+            expert_bias=getattr(config, "expert_bias", False)
         )
 
-        self.input_layernorm = RMSNorm(config.hidden_size, getattr(config, 'norm_eps', 1e-6))
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, getattr(config, 'norm_eps', 1e-6))
+        self.input_layernorm = RMSNorm(config.hidden_size, getattr(config, "norm_eps", 1e-6))
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, getattr(config, "norm_eps", 1e-6))
 
     def forward(
         self,
@@ -443,8 +436,7 @@ class MoETransformerBlock(Module):
         position_ids: Tensor,
         mask: Optional[Tensor] = None
     ) -> Tensor:
-        """
-        Forward pass through MoE transformer block.
+        """Forward pass through MoE transformer block.
 
         Args:
             x: Input tensor of shape (batch_size, seq_len, hidden_size)
@@ -470,8 +462,7 @@ class MoETransformerBlock(Module):
 
 
 class MoEAttention(nn.Module):
-    """
-    Multi-head attention module with grouped-query attention (GQA) for MoE Transformer.
+    """Multi-head attention module with grouped-query attention (GQA) for MoE Transformer.
 
     Implements scaled dot-product attention with:
     - Rotary position embeddings (RoPE)
@@ -549,8 +540,7 @@ class MoEAttention(nn.Module):
         past_key_value: Optional[Tuple[Tensor, Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]:
-        """
-        Forward pass of the attention module.
+        """Forward pass of the attention module.
 
         Args:
             hidden_states: Input tensor of shape (batch_size, seq_len, hidden_size).
@@ -622,8 +612,7 @@ class MoEAttention(nn.Module):
         return attn_output, past_key_value
 
     def _repeat_kv(self, hidden_states: Tensor, n_rep: int) -> Tensor:
-        """
-        Repeat key/value heads for grouped-query attention.
+        """Repeat key/value heads for grouped-query attention.
 
         Args:
             hidden_states: Tensor of shape (batch, num_kv_heads, slen, head_dim).
@@ -644,8 +633,7 @@ class MoEAttention(nn.Module):
 
 
 class MoEDecoderLayer(nn.Module):
-    """
-    Transformer decoder layer with MoE feed-forward network.
+    """Transformer decoder layer with MoE feed-forward network.
 
     This layer implements a standard transformer decoder block with:
     - Multi-head self-attention
@@ -698,8 +686,7 @@ class MoEDecoderLayer(nn.Module):
         self.post_attention_layernorm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
 
     def _is_moe_layer(self, layer_idx: int, config: MoEConfig) -> bool:
-        """
-        Determine whether this layer should use MoE.
+        """Determine whether this layer should use MoE.
 
         Args:
             layer_idx: Index of this layer.
@@ -718,8 +705,7 @@ class MoEDecoderLayer(nn.Module):
         return (layer_idx - config.first_moe_layer) % config.moe_layer_interval == 0
 
     def _build_dense_mlp(self, config: MoEConfig) -> nn.Module:
-        """
-        Build a dense (non-MoE) feed-forward network.
+        """Build a dense (non-MoE) feed-forward network.
 
         Args:
             config: Model configuration.
@@ -742,8 +728,7 @@ class MoEDecoderLayer(nn.Module):
         past_key_value: Optional[Tuple[Tensor, Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]:
-        """
-        Forward pass through the decoder layer.
+        """Forward pass through the decoder layer.
 
         Args:
             hidden_states: Input tensor of shape (batch_size, seq_len, hidden_size).
@@ -777,8 +762,7 @@ class MoEDecoderLayer(nn.Module):
 
 
 class DenseFFN(nn.Module):
-    """
-    Dense feed-forward network (standard Transformer FFN).
+    """Dense feed-forward network (standard Transformer FFN).
 
     Implements the position-wise feed-forward network with:
     - Gated linear unit (GLU) variant with configurable activation
@@ -814,8 +798,7 @@ class DenseFFN(nn.Module):
             raise ValueError(f"Unsupported activation function: {hidden_act}")
 
     def forward(self, x: Tensor) -> Tensor:
-        """
-        Apply feed-forward transformation.
+        """Apply feed-forward transformation.
 
         Args:
             x: Input tensor of shape (batch_size, seq_len, hidden_size).
@@ -830,8 +813,7 @@ class DenseFFN(nn.Module):
 
 
 class MoEPreTrainedModel(nn.Module):
-    """
-    Base class for MoE models, providing weight initialization.
+    """Base class for MoE models, providing weight initialization.
 
     This class provides common functionality for MoE models, including:
     - Weight initialization following the specified initialization range
@@ -849,8 +831,7 @@ class MoEPreTrainedModel(nn.Module):
         self.config = config
 
     def apply(self, fn):
-        """
-        Apply a function recursively to every submodule (including self).
+        """Apply a function recursively to every submodule (including self).
 
         This method mimics PyTorch's Module.apply() behavior, allowing
         recursive application of initialization or other operations.
@@ -875,8 +856,7 @@ class MoEPreTrainedModel(nn.Module):
         return self
 
     def _init_weights(self, module: nn.Module):
-        """
-        Initialize weights for different module types.
+        """Initialize weights for different module types.
 
         This method is called by apply() during model initialization.
         It handles initialization for:
@@ -897,7 +877,7 @@ class MoEPreTrainedModel(nn.Module):
         if isinstance(module, nn.Linear):
             # Initialize linear layer weights with normal distribution
             # Check if weight has 'data' attribute or is a Parameter
-            if hasattr(module, 'weight') and module.weight is not None:
+            if hasattr(module, "weight") and module.weight is not None:
                 # Reinitialize weight
                 new_weight = genesis.randn(*module.weight.shape, std=std, device=module.weight.device)
                 # Preserve the Parameter wrapper
@@ -906,7 +886,7 @@ class MoEPreTrainedModel(nn.Module):
                 module.weight._stride = new_weight.stride
                 module.weight._offset = new_weight.offset
 
-            if hasattr(module, 'bias') and module.bias is not None:
+            if hasattr(module, "bias") and module.bias is not None:
                 # Reinitialize bias to zeros
                 new_bias = genesis.zeros(*module.bias.shape, device=module.bias.device)
                 module.bias.storage = new_bias.storage
@@ -916,7 +896,7 @@ class MoEPreTrainedModel(nn.Module):
 
         elif isinstance(module, nn.Embedding):
             # Initialize embedding weights with normal distribution
-            if hasattr(module, 'weight') and module.weight is not None:
+            if hasattr(module, "weight") and module.weight is not None:
                 new_weight = genesis.randn(*module.weight.shape, std=std, device=module.weight.device)
                 module.weight.storage = new_weight.storage
                 module.weight._shape = new_weight.shape
@@ -925,8 +905,7 @@ class MoEPreTrainedModel(nn.Module):
 
 
 class MoEModel(MoEPreTrainedModel):
-    """
-    Core MoE Transformer model.
+    """Core MoE Transformer model.
 
     This is the main transformer model with MoE layers. It consists of:
     - Token embeddings
@@ -971,8 +950,7 @@ class MoEModel(MoEPreTrainedModel):
         past_key_values: Optional[List[Tuple[Tensor, Tensor]]] = None,
         use_cache: Optional[bool] = None,
     ) -> Tuple[Tensor, Optional[List[Tuple[Tensor, Tensor]]]]:
-        """
-        Forward pass through the MoE model.
+        """Forward pass through the MoE model.
 
         Args:
             input_ids: Input token IDs of shape (batch_size, seq_len).
@@ -1028,8 +1006,7 @@ class MoEModel(MoEPreTrainedModel):
 
 
 class MoEForCausalLM(MoEPreTrainedModel):
-    """
-    MoE Transformer model for causal language modeling.
+    """MoE Transformer model for causal language modeling.
 
     This model extends MoEModel with a language modeling head for next-token prediction.
     It's suitable for tasks like text generation and language modeling.
@@ -1066,8 +1043,7 @@ class MoEForCausalLM(MoEPreTrainedModel):
         use_cache: Optional[bool] = None,
         labels: Optional[Tensor] = None,
     ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
-        """
-        Forward pass for causal language modeling.
+        """Forward pass for causal language modeling.
 
         Args:
             input_ids: Input token IDs of shape (batch_size, seq_len).
@@ -1111,8 +1087,7 @@ class MoEForCausalLM(MoEPreTrainedModel):
 
     @classmethod
     def from_pretrained(cls, config_or_path: Union[str, MoEConfig]) -> "MoEForCausalLM":
-        """
-        Load a pretrained MoE model.
+        """Load a pretrained MoE model.
 
         Args:
             config_or_path: Either a MoEConfig instance or a string path/name.
@@ -1125,7 +1100,6 @@ class MoEForCausalLM(MoEPreTrainedModel):
             would need to be implemented separately.
         """
         if isinstance(config_or_path, str):
-            from .config import get_moe_config
             config = get_moe_config(config_or_path)
         else:
             config = config_or_path
@@ -1140,8 +1114,7 @@ class MoEForCausalLM(MoEPreTrainedModel):
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
     ) -> Tensor:
-        """
-        Generate text autoregressively.
+        """Generate text autoregressively.
 
         Args:
             input_ids: Input token IDs of shape (batch_size, seq_len).

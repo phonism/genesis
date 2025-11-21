@@ -8,11 +8,11 @@ each forward pass (when exiting autocast context).
 
 from typing import Dict, Any
 import weakref
+from genesis.dtypes import float16, float32
 
 
 class AMPCache:
-    """
-    Global cache for automatic mixed precision dtype conversions.
+    """Global cache for automatic mixed precision dtype conversions.
 
     This cache stores FP16 versions of FP32 parameters to avoid repeated
     conversions during forward passes. The cache is automatically cleared
@@ -51,22 +51,19 @@ class AMPCache:
 
         Args:
             tensor: Input tensor to convert
-            target_dtype: Target dtype (e.g., genesis.float16)
+            target_dtype: Target dtype (e.g., float16)
 
         Returns:
             Converted tensor (may be cached)
         """
-        # Import here to avoid circular dependency
-        import genesis
-
         # Determine if this conversion should be cached
         should_cache = (
             self._enabled and
             hasattr(tensor, 'dtype') and
             hasattr(tensor, 'requires_grad') and
             hasattr(tensor, 'is_leaf') and
-            target_dtype == genesis.float16 and
-            tensor.dtype == genesis.float32 and
+            target_dtype == float16 and
+            tensor.dtype == float32 and
             tensor.requires_grad and
             tensor.is_leaf
         )
@@ -93,8 +90,7 @@ class AMPCache:
                 return tensor
 
     def clear(self):
-        """
-        Clear the cache.
+        """Clear the cache.
 
         This should be called at the end of each forward pass (when exiting
         autocast context) to ensure fresh conversions in the next iteration.
@@ -102,8 +98,7 @@ class AMPCache:
         self._cache.clear()
 
     def set_enabled(self, enabled: bool):
-        """
-        Enable or disable caching.
+        """Enable or disable caching.
 
         Args:
             enabled: If True, caching is enabled. If False, all conversions
@@ -114,8 +109,7 @@ class AMPCache:
             self.clear()
 
     def get_stats(self) -> Dict[str, int]:
-        """
-        Get cache statistics.
+        """Get cache statistics.
 
         Returns:
             Dictionary with cache hits, misses, and hit rate

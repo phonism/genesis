@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class DistributedDataParallel(genesis.nn.Module):
-    """
-    Genesis Distributed Data Parallel wrapper.
+    """Genesis Distributed Data Parallel wrapper.
     
     Wraps a model to enable distributed training across multiple GPUs/nodes.
     Gradients are automatically synchronized across all processes after backward pass.

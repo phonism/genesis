@@ -1,5 +1,4 @@
-"""
-Process group management for distributed training.
+"""Process group management for distributed training.
 
 This module handles initialization, management, and cleanup of
 distributed process groups across multiple devices and nodes.
@@ -28,8 +27,7 @@ def init_process_group(backend: str = "nccl",
                       init_method: Optional[str] = None,
                       world_size: Optional[int] = None,
                       rank: Optional[int] = None):
-    """
-    Initialize the distributed process group.
+    """Initialize the distributed process group.
     
     Args:
         backend: Backend to use ("nccl", "mpi", "gloo")
@@ -44,12 +42,12 @@ def init_process_group(backend: str = "nccl",
     
     # Auto-detect parameters from environment if not provided
     if world_size is None:
-        world_size = int(os.environ.get('WORLD_SIZE', 1))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
     if rank is None:
-        rank = int(os.environ.get('RANK', 0))
+        rank = int(os.environ.get("RANK", 0))
     
     # Set local rank for GPU device selection
-    _local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    _local_rank = int(os.environ.get("LOCAL_RANK", 0))
     
     _world_size = world_size
     _rank = rank

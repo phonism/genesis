@@ -18,7 +18,8 @@ import triton.language as tl
 
 
 class AMPPolicy(Enum):
-    """AMP casting policy for operations.
+    """
+    AMP casting policy for operations.
 
     This enum defines how operations should handle dtype casting in autocast mode.
     Each Function class declares its policy via the `amp_policy` attribute.
@@ -55,7 +56,7 @@ def get_amp_dtype(policy: AMPPolicy, *args, **kwargs):
     """
     if policy == AMPPolicy.FP16:
         # Use the configured AMP dtype (float16 or bfloat16)
-        return getattr(genesis, 'amp_dtype', genesis.float16)
+        return getattr(genesis, "amp_dtype", genesis.float16)
 
     elif policy == AMPPolicy.FP32:
         return genesis.float32
@@ -79,7 +80,7 @@ def get_amp_dtype(policy: AMPPolicy, *args, **kwargs):
 
 def _check_dtype(value, dtype):
     """Check if value contains tensors of specified dtype."""
-    if hasattr(value, 'dtype') and value.dtype == dtype:
+    if hasattr(value, "dtype") and value.dtype == dtype:
         return True
     elif isinstance(value, dict):
         return any(_check_dtype(k, dtype) or _check_dtype(v, dtype) for k, v in value.items())
@@ -108,7 +109,7 @@ class autocast:
             loss = criterion(output, target)
     """
 
-    def __init__(self, device_type='cuda', enabled=True, dtype=None):
+    def __init__(self, device_type="cuda", enabled=True, dtype=None):
         """Initialize autocast context manager.
 
         Args:

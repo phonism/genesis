@@ -22,8 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class NCCLBackend:
-    """
-    NCCL backend using direct ctypes bindings.
+    """NCCL backend using direct ctypes bindings.
     
     Provides high-performance distributed communication using
     NVIDIA NCCL library through native ctypes interface.
@@ -54,7 +53,7 @@ class NCCLBackend:
         if device_count == 0:
             raise RuntimeError("No CUDA devices available for distributed training.")
             
-        self.local_rank = int(os.environ.get('LOCAL_RANK', rank % device_count))
+        self.local_rank = int(os.environ.get("LOCAL_RANK", rank % device_count))
         
         # Note: Genesis handles CUDA device context automatically
         # No need to explicitly set device in single-process mode
@@ -104,7 +103,7 @@ class NCCLBackend:
 
         # Use all_reduce on dummy data as barrier
         # Use current rank's GPU device
-        device = genesis.device(f'cuda:{self.local_rank}')
+        device = genesis.device(f"cuda:{self.local_rank}")
         dummy = genesis.ones([1], dtype=genesis.float32, device=device)
         self.all_reduce(dummy, ReduceOp.SUM)
         
@@ -212,13 +211,13 @@ class NCCLBackend:
             
     def _broadcast_unique_id(self, unique_id: ncclUniqueId, init_method: str):
         """Broadcast NCCL unique ID to other processes."""
-        if not init_method.startswith('tcp://'):
+        if not init_method.startswith("tcp://"):
             raise ValueError("Only TCP init_method supported currently")
             
         # Extract host and port
         url = init_method[6:]  # Remove 'tcp://'
-        if ':' in url:
-            host, port = url.split(':')
+        if ":" in url:
+            host, port = url.split(":")
             port = int(port)
         else:
             host, port = url, 23456
@@ -238,7 +237,7 @@ class NCCLBackend:
                     conn, addr = server.accept()
                     try:
                         # Send unique ID length first, then the data
-                        conn.send(len(uid_bytes).to_bytes(4, 'little'))
+                        conn.send(len(uid_bytes).to_bytes(4, "little"))
                         conn.send(uid_bytes)
                     finally:
                         conn.close()
@@ -255,12 +254,12 @@ class NCCLBackend:
         
     def _receive_unique_id(self, init_method: str) -> ncclUniqueId:
         """Receive NCCL unique ID from master process."""
-        if not init_method.startswith('tcp://'):
+        if not init_method.startswith("tcp://"):
             raise ValueError("Only TCP init_method supported currently")
             
         url = init_method[6:]
-        if ':' in url:
-            host, port = url.split(':')
+        if ":" in url:
+            host, port = url.split(":")
             port = int(port)
         else:
             host, port = url, 23456
@@ -277,7 +276,7 @@ class NCCLBackend:
                 if len(length_bytes) != 4:
                     raise RuntimeError("Failed to receive unique ID length")
                     
-                length = int.from_bytes(length_bytes, 'little')
+                length = int.from_bytes(length_bytes, "little")
                 
                 # Read the unique ID data
                 uid_bytes = b''

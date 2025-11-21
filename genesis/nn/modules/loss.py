@@ -29,8 +29,7 @@ class SoftmaxLoss(Module):
 
 
 class CrossEntropyLoss(Module):
-    """
-    Cross-entropy loss for classification tasks.
+    """Cross-entropy loss for classification tasks.
     
     Combines LogSoftmax and NLLLoss in a single class for numerical stability.
     
@@ -54,8 +53,7 @@ class CrossEntropyLoss(Module):
         self.reduction = reduction
     
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
-        """
-        Forward pass of cross-entropy loss.
+        """Forward pass of cross-entropy loss.
 
         Args:
             input: Predicted logits of shape (N, C) where N is batch size, C is num classes
@@ -108,11 +106,10 @@ class CrossEntropyLoss(Module):
 
 
 class MSELoss(Module):
-    """
-    Mean Squared Error loss for regression tasks.
+    """Mean Squared Error loss for regression tasks.
     
     Args:
-        reduction: Reduction method ('mean', 'sum', 'none')
+        reduction: Reduction method ("mean", "sum", "none")
     """
     
     def __init__(self, reduction="mean"):
@@ -149,7 +146,7 @@ class L1Loss(Module):
     L1 (Mean Absolute Error) loss for regression tasks.
     
     Args:
-        reduction: Reduction method ('mean', 'sum', 'none')
+        reduction: Reduction method ("mean", "sum", "none")
     """
     
     def __init__(self, reduction="mean"):
@@ -187,7 +184,7 @@ class BCELoss(Module):
     
     Args:
         weight: Manual rescaling weight
-        reduction: Reduction method ('mean', 'sum', 'none')
+        reduction: Reduction method ("mean", "sum", "none")
     """
     
     def __init__(self, weight=None, reduction="mean"):
@@ -236,7 +233,7 @@ class BCEWithLogitsLoss(Module):
     
     Args:
         weight: Manual rescaling weight
-        reduction: Reduction method ('mean', 'sum', 'none')
+        reduction: Reduction method ("mean", "sum", "none")
         pos_weight: Weight for positive examples
     """
     

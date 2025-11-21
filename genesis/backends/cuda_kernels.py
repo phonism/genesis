@@ -29,8 +29,8 @@ class IndexKind(Enum):
     VIEW = "view"           # Pure view operation
     GATHER = "gather"       # Gather operation
     SCATTER = "scatter"     # Scatter operation  
-    COPY = "copy"          # strided copy
-    FILL = "fill"          # Fill operation
+    COPY = "copy"           # strided copy
+    FILL = "fill"           # Fill operation
     MIXED_LIST_SLICE = "mixed_list_slice"  # Mixed list + slice indexing
 
 
@@ -84,7 +84,7 @@ class CUDAIndexingOps:
         
         # Handle tuple containing advanced indexing
         if isinstance(key, tuple):
-            has_advanced = any(isinstance(idx, list) or (hasattr(idx, 'shape') and hasattr(idx, 'dtype')) 
+            has_advanced = any(isinstance(idx, list) or (hasattr(idx, "shape") and hasattr(idx, "dtype")) 
                               for idx in key if idx is not None)
             
             if has_advanced:
@@ -117,7 +117,7 @@ class CUDAIndexingOps:
         
         # Mixed list/tensor + slice indexing like A[indices, :2]
         if (len(key) == 2 and 
-            hasattr(key[0], 'shape') and hasattr(key[0], 'dtype') and
+            hasattr(key[0], "shape") and hasattr(key[0], "dtype") and
             isinstance(key[1], slice)):
             
             index_tensor, slice_idx = key
@@ -151,7 +151,6 @@ class CUDAIndexingOps:
                 result_strides=result_strides,
                 ptr_offset_bytes=ptr_offset_bytes
             )
-        
         elif isinstance(key, slice):
             # Slice indexing
             start, stop, step = key.indices(storage.shape[0])
@@ -171,11 +170,9 @@ class CUDAIndexingOps:
                 result_strides=result_strides,
                 ptr_offset_bytes=ptr_offset_bytes
             )
-        
         elif isinstance(key, tuple):
             # Multi-dimensional indexing - detailed implementation follows original logic
             return CUDAIndexingOps._parse_multidim_basic(storage, key)
-        
         elif key is None:
             # None (newaxis) - add dimension of size 1 at the beginning
             result_shape = (1,) + storage.shape
@@ -186,7 +183,6 @@ class CUDAIndexingOps:
                 result_strides=result_strides,
                 ptr_offset_bytes=0
             )
-        
         # Other cases return copy for now
         return IndexPlan(kind=IndexKind.COPY)
     
@@ -328,7 +324,7 @@ class CUDAIndexingOps:
     def _getitem_mixed_2d(storage, row_idx, col_idx):
         """Handle mixed 2D indexing: tensor[row_indices, col_indices] with a single kernel."""
         # Ensure indices compatible
-        if hasattr(row_idx, 'shape') and hasattr(col_idx, 'shape'):
+        if hasattr(row_idx, "shape") and hasattr(col_idx, "shape"):
             if tuple(row_idx.shape) != tuple(col_idx.shape):
                 raise ValueError("row and column indices must have the same shape")
         
@@ -353,7 +349,7 @@ class CUDAIndexingOps:
 
         # Reshape to match row_idx shape
         result = out_1d
-        if hasattr(row_idx, 'shape'):
+        if hasattr(row_idx, "shape"):
             result = result.reshape(row_idx.shape)
         return result
     
@@ -361,11 +357,11 @@ class CUDAIndexingOps:
     def _compute_linear_indices_2d(storage, row_idx, col_idx, n_cols):
         """Compute linear indices for 2D mixed indexing using Triton"""
         # Ensure indices are compatible
-        if hasattr(row_idx, 'shape') and hasattr(col_idx, 'shape'):
+        if hasattr(row_idx, "shape") and hasattr(col_idx, "shape"):
             if row_idx.shape != col_idx.shape:
                 raise ValueError("row and column indices must have the same shape")
         
-        n_elements = row_idx.size if hasattr(row_idx, 'size') else len(row_idx)
+        n_elements = row_idx.size if hasattr(row_idx, "size") else len(row_idx)
         
         # Create output tensor
         linear_indices = storage.__class__(shape=(n_elements,), dtype="int64")
@@ -456,11 +452,11 @@ class CUDAIndexingOps:
         n_cols = int(storage.shape[1])
         
         # Flatten indices to 1D
-        if hasattr(row_idx, 'reshape'):
+        if hasattr(row_idx, "reshape"):
             row_flat = row_idx.reshape((-1,))
         else:
             raise TypeError("row indices must be CUDAStorage tensor")
-        if hasattr(col_idx, 'reshape'):
+        if hasattr(col_idx, "reshape"):
             col_flat = col_idx.reshape((-1,))
         else:
             raise TypeError("col indices must be CUDAStorage tensor")
@@ -482,7 +478,7 @@ class CUDAIndexingOps:
             )
             return storage
         
-        if not hasattr(value, 'shape') or not hasattr(value, 'ptr'):
+        if not hasattr(value, "shape") or not hasattr(value, "ptr"):
             raise TypeError("Unsupported value type for mixed 2D scatter: expected CUDAStorage or scalar")
         val_flat = value.reshape((-1,))
         if int(val_flat.size) != K:
@@ -534,7 +530,7 @@ class CUDAIndexingOps:
             )
             return storage
 
-        if not hasattr(value, 'shape') or not hasattr(value, 'ptr'):
+        if not hasattr(value, "shape") or not hasattr(value, "ptr"):
             raise TypeError("Unsupported value type for integer scatter: expected CUDAStorage or scalar")
 
         # Array assignment: values shape must be idx.shape + storage.shape[1:]
@@ -557,7 +553,7 @@ class CUDAIndexingOps:
         """Copy data to target view - pixel-level copy from old architecture"""
 
         # Pixel-level copy of old architecture logic (line 688-706 from cuda_storage.py)
-        if hasattr(value, 'shape') and hasattr(value, 'ptr'):  # CUDAStorage check
+        if hasattr(value, "shape") and hasattr(value, "ptr"):  # CUDAStorage check
             # Tensor to Tensor copy
             if target_view.shape != value.shape:
                 raise ValueError(f"Shape mismatch: {target_view.shape} vs {value.shape}")
@@ -601,7 +597,7 @@ class CUDAIndexingOps:
             raise ValueError("Target tensor must be contiguous for scatter operation")
         
         BLOCK_SIZE = 1024
-        grid = lambda meta: (triton.cdiv(n_indices, meta['BLOCK_SIZE']),)
+        grid = lambda meta: (triton.cdiv(n_indices, meta["BLOCK_SIZE"]),)
         
         CUDAIndexingOps._scatter_scalar_kernel[grid](
             storage, indices, value,
@@ -623,7 +619,7 @@ class CUDAIndexingOps:
             raise ValueError("Target tensor must be contiguous for scatter operation")
         
         BLOCK_SIZE = 1024
-        grid = lambda meta: (triton.cdiv(n_indices, meta['BLOCK_SIZE']),)
+        grid = lambda meta: (triton.cdiv(n_indices, meta["BLOCK_SIZE"]),)
         
         CUDAIndexingOps._scatter_array_kernel[grid](
             storage, indices, values,
@@ -708,7 +704,7 @@ class CUDAIndexingOps:
             return
 
         # Array assignment: need to map values sequentially to True positions
-        if not hasattr(value, 'shape') or not hasattr(value, 'ptr'):
+        if not hasattr(value, "shape") or not hasattr(value, "ptr"):
             raise TypeError("Unsupported value type for boolean scatter: expected CUDAStorage or scalar")
         val_flat = value.reshape((-1,))
 
@@ -1051,7 +1047,7 @@ class CUDAIndexingOps:
         # Atomic add returns the OLD value before increment
         # We need one atomic operation per True element
         output_indices = tl.zeros([BLOCK], dtype=tl.int32)
-        output_indices = tl.where(true_mask, tl.atomic_add(counter_ptr, 1, sem='relaxed'), -1)
+        output_indices = tl.where(true_mask, tl.atomic_add(counter_ptr, 1, sem="relaxed"), -1)
 
         # Store positions for True values
         valid_output = output_indices >= 0

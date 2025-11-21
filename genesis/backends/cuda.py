@@ -115,7 +115,6 @@ def _fill_kernel(
     
     tl.store(output_ptr + offsets, fill_value, mask=mask)
 
-# Strided fill kernels for non-contiguous tensors
 @triton.jit
 def _fill_strided_kernel(
     dst_ptr,
@@ -128,6 +127,7 @@ def _fill_strided_kernel(
     ndim: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
+    """Strided fill kernel for non-contiguous tensors"""
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     m = offs < total_numel
@@ -168,6 +168,7 @@ def _fill_strided_kernel_general(
     ndim: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
+    """Strided fill kernel for non-contiguous tensors"""
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     m = offs < total_numel
@@ -182,6 +183,7 @@ def _fill_strided_kernel_general(
         dst_off += coord * st
 
     tl.store(dst_ptr + dst_off, value, mask=m)
+
 
 class CUDAStorage(Storage):
     """Pure CUDA implementation of Tensor class"""
@@ -246,8 +248,6 @@ class CUDAStorage(Storage):
             self.ptr = ptr
             self.owns_memory = False
         
-    
-    
     def __del__(self):
         """Release GPU memory with reference counting"""
         if hasattr(self, "owns_memory") and self.owns_memory and hasattr(self, "ptr") and self.ptr:
@@ -369,7 +369,6 @@ class CUDAStorage(Storage):
         return self
     
     # ============= Index Parsing Layer (MVP Architecture) =============
-    
     
     def is_contiguous(self) -> bool:
         """Check if tensor has contiguous memory - optimized with caching"""
@@ -665,7 +664,6 @@ class CUDAStorage(Storage):
                 if old_idx >= 0:
                     old_remaining = old_shape[old_idx]
                     current_stride = old_strides[old_idx]
-
             elif old_remaining % new_remaining == 0:
                 # Can split: old dimension is a multiple of new dimension
                 # Example: old=1216, new=76 -> can split as 16*76
@@ -680,7 +678,6 @@ class CUDAStorage(Storage):
                 # Set up for next new dimension
                 if new_idx >= 0:
                     new_remaining = new_shape[new_idx]
-
             elif new_remaining % old_remaining == 0:
                 # Need to merge: new dimension spans multiple old dimensions
                 # Check if old dimensions are contiguous
@@ -792,7 +789,11 @@ class CUDAStorage(Storage):
             return CUDAStorage(tuple(new_shape), self.dtype, self.ptr, tuple(new_strides), base=self)
     
     def broadcast_to(self, shape: Tuple[int, ...]) -> "CUDAStorage":
-        """Broadcast to specified shape"""
+        """Broadcast to specified shape
+        
+        Args:
+            shape: Target shape
+        """
         # First expand dimensions
         if len(shape) > len(self.shape):
             # Add dimensions at the front
@@ -1040,7 +1041,6 @@ class CUDAStorage(Storage):
         # For all other cases, use the optimized fill_ method
         return self.fill_(value)
     
-    
     def _preprocess_index_key(self, key):
         """Convert lists in index keys to tensors before passing to indexing operations"""
         if isinstance(key, CUDAStorage):
@@ -1085,8 +1085,6 @@ class CUDAStorage(Storage):
         key = self._preprocess_index_key(key)
         plan = CUDAIndexingOps.parse_index(self, key)
         return CUDAIndexingOps.execute_getitem(self, plan)
-    
-    
     
     def _copy_data_to_view(self, target_view, value):
         """Copy data to target view"""
@@ -1318,8 +1316,7 @@ class CUDAStorage(Storage):
                 BLOCK=BLOCK,
                 num_warps=num_warps,
             )
-    
-    
+     
     def _copy_to_view(self, target_view, value):
         """Copy value to target view efficiently on GPU"""
         if isinstance(value, CUDAStorage):
@@ -1403,8 +1400,6 @@ class CUDAStorage(Storage):
         else:
             return self.strides[dim]
     
-    
-
     def to(self, target_dtype):
         """Convert tensor to specified dtype"""
         # Handle different input types and convert to our string format
@@ -1439,7 +1434,6 @@ class CUDAStorage(Storage):
         
         # Convert dtype using GPU-native method
         return _convert_dtype_gpu(self, target_dtype_str)
-    
     
     def split(self, split_size_or_sections, dim=None):
         """Split tensor along specified dimension
@@ -1651,7 +1645,6 @@ class CUDAStorage(Storage):
             current_offset += concat_size
         
         return result
-    
     
     def __repr__(self):
         try:
