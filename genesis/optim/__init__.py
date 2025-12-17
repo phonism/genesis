@@ -4,6 +4,6 @@ This package provides optimizers and learning rate schedulers
 for training neural networks with automatic differentiation.
 """
 
-from .optimizer import SGD, Adam
+from .optimizer import Optimizer, SGD, Adam
 from .adamw import AdamW
 from . import lr_scheduler

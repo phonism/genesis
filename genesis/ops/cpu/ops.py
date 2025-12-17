@@ -102,9 +102,19 @@ def ones(shape, device=None, dtype="float32"):
 
 @register_cpu("maximum")
 def maximum(x, y):
+    """Element-wise maximum of tensor and tensor/scalar."""
     if isinstance(y, torch.Tensor):
         return torch.maximum(x, y)
     return torch.clamp(x, min=y)
+
+
+@register_cpu("minimum")
+def minimum(x, y):
+    """Element-wise minimum of tensor and tensor/scalar."""
+    if isinstance(y, torch.Tensor):
+        return torch.minimum(x, y)
+    return torch.clamp(x, max=y)
+
 
 @register_cpu("sum")
 def reduce_sum(x, axis=None, keepdims=False):
@@ -638,6 +648,14 @@ def argsort(x, dim=-1, descending=False):
 def bincount(x, weights=None, minlength=0):
     """Count occurrences of each value in integer tensor."""
     return torch.bincount(x, weights=weights, minlength=minlength)
+
+
+@register_cpu("unique")
+def unique(x, sorted=True, return_inverse=False, return_counts=False, dim=None):
+    """Return unique elements of input tensor."""
+    return torch.unique(x, sorted=sorted, return_inverse=return_inverse,
+                        return_counts=return_counts, dim=dim)
+
 
 @register_cpu("getitem")
 def getitem(x, index):

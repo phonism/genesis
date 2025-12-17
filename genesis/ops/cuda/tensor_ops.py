@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 from genesis.backends.cuda import CUDAStorage
 from .reduction_ops import reduce_max
+from .basic_ops import nonzero as cuda_nonzero
 from ..dispatcher import register_cuda
 
 
@@ -619,5 +620,288 @@ def bincount(x, weights=None, minlength=0):
         N, num_classes, has_weights,
         BLOCK_SIZE=BLOCK_SIZE
     )
-    
+
     return output
+
+
+@triton.jit
+def mark_unique_kernel(
+    sorted_ptr, mask_ptr, N,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    Mark positions where element differs from previous.
+
+    For sorted array [1,1,2,2,3], produces mask [1,0,1,0,1].
+    First element is always marked as unique.
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+
+    # Load current elements
+    curr = tl.load(sorted_ptr + offsets, mask=mask, other=0)
+
+    # Load previous elements (with offset -1)
+    prev_offsets = offsets - 1
+    prev_mask = (prev_offsets >= 0) & (offsets < N)
+    prev = tl.load(sorted_ptr + prev_offsets, mask=prev_mask, other=0)
+
+    # Mark as unique if: first element OR different from previous
+    is_first = (offsets == 0)
+    is_different = (curr != prev)
+    is_unique = is_first | (is_different & (offsets > 0))
+
+    # Store mask (1 for unique, 0 otherwise)
+    tl.store(mask_ptr + offsets, is_unique.to(tl.int32), mask=mask)
+
+
+@triton.jit
+def gather_by_indices_kernel(
+    src_ptr, indices_ptr, dst_ptr, num_indices,
+    BLOCK_SIZE: tl.constexpr
+):
+    """Gather elements from src at positions specified by indices."""
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_indices
+
+    # Load index and gather value
+    idx = tl.load(indices_ptr + offsets, mask=mask, other=0)
+    vals = tl.load(src_ptr + idx, mask=mask, other=0)
+    tl.store(dst_ptr + offsets, vals, mask=mask)
+
+
+@register_cuda("unique")
+def unique(x, sorted=True, return_inverse=False, return_counts=False, dim=None):
+    """
+    Return unique elements of input tensor using Triton kernels.
+
+    Algorithm:
+    1. Sort input tensor
+    2. Mark positions where element differs from previous
+    3. Use nonzero to find unique positions
+    4. Gather unique elements
+
+    Args:
+        x: Input tensor (1D).
+        sorted: Whether output should be sorted (always True for this impl).
+        return_inverse: Whether to return inverse indices.
+        return_counts: Whether to return counts of each unique element.
+        dim: Dimension (only None supported for now).
+
+    Returns:
+        Unique elements tensor, and optionally inverse/counts.
+    """
+    if dim is not None:
+        raise NotImplementedError("unique with dim is not yet supported")
+
+    if len(x.shape) != 1:
+        # Flatten for multi-dimensional input
+        x_flat = x.reshape((-1,)).contiguous()
+    else:
+        x_flat = x.contiguous() if not x.is_contiguous() else x
+
+    N = x_flat.shape[0]
+
+    if N == 0:
+        # Empty input
+        empty_output = CUDAStorage((0,), dtype=x.dtype)
+        if return_inverse and return_counts:
+            return empty_output, CUDAStorage((0,), dtype="int64"), CUDAStorage((0,), dtype="int64")
+        elif return_inverse:
+            return empty_output, CUDAStorage((0,), dtype="int64")
+        elif return_counts:
+            return empty_output, CUDAStorage((0,), dtype="int64")
+        return empty_output
+
+    if N == 1:
+        # Single element is always unique - use gather kernel with index 0
+        output = CUDAStorage((1,), dtype=x.dtype)
+        indices = CUDAStorage((1,), dtype="int64")
+        indices.fill_(0)
+        BLOCK_SIZE = 1024
+        gather_by_indices_kernel[(1,)](x_flat, indices, output, 1, BLOCK_SIZE=BLOCK_SIZE)
+        if return_inverse and return_counts:
+            inv = CUDAStorage((1,), dtype="int64")
+            inv.fill_(0)
+            cnt = CUDAStorage((1,), dtype="int64")
+            cnt.fill_(1)
+            return output, inv, cnt
+        elif return_inverse:
+            inv = CUDAStorage((1,), dtype="int64")
+            inv.fill_(0)
+            return output, inv
+        elif return_counts:
+            cnt = CUDAStorage((1,), dtype="int64")
+            cnt.fill_(1)
+            return output, cnt
+        return output
+
+    # Step 1: Sort the input
+    sorted_vals, sorted_indices = _sort_for_unique(x_flat)
+
+    # Step 2: Mark unique positions (where value differs from previous)
+    unique_mask = CUDAStorage((N,), dtype="int32")
+    BLOCK_SIZE = 1024
+    grid = ((N + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+
+    mark_unique_kernel[grid](
+        sorted_vals, unique_mask, N,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+
+    # Step 3: Use nonzero to find indices where mask == 1
+    # Use as_tuple=True to avoid reshape issues
+    unique_positions_tuple = cuda_nonzero(unique_mask, as_tuple=True)
+    unique_positions = unique_positions_tuple[0]  # For 1D input, first element is the indices
+
+    num_unique = unique_positions.shape[0]
+
+    # Step 4: Gather unique elements from sorted array
+    output = CUDAStorage((num_unique,), dtype=x.dtype)
+    gather_grid = ((num_unique + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+
+    gather_by_indices_kernel[gather_grid](
+        sorted_vals, unique_positions, output, num_unique,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+
+    # Handle optional returns
+    if return_inverse or return_counts:
+        result = [output]
+
+        if return_inverse:
+            inverse = _compute_inverse_simple(sorted_indices, unique_positions, N)
+            result.append(inverse)
+
+        if return_counts:
+            counts = _compute_counts_simple(unique_positions, N, num_unique)
+            result.append(counts)
+
+        return tuple(result)
+
+    return output
+
+
+@triton.jit
+def gather_kernel(src_ptr, idx_ptr, dst_ptr, N, BLOCK_SIZE: tl.constexpr):
+    """Gather values from src using indices."""
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+    idx = tl.load(idx_ptr + offsets, mask=mask, other=0)
+    vals = tl.load(src_ptr + idx, mask=mask, other=0)
+    tl.store(dst_ptr + offsets, vals, mask=mask)
+
+
+def _sort_for_unique(x):
+    """Sort tensor and return both values and indices."""
+    # Use argsort to get indices
+    indices = argsort(x, dim=0, descending=False)
+
+    # Gather sorted values
+    sorted_vals = CUDAStorage(x.shape, dtype=x.dtype)
+
+    N = x.shape[0]
+    BLOCK_SIZE = 1024
+    grid = ((N + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+
+    gather_kernel[grid](x, indices, sorted_vals, N, BLOCK_SIZE=BLOCK_SIZE)
+
+    return sorted_vals, indices
+
+
+@triton.jit
+def compute_inverse_kernel(
+    sorted_idx_ptr, unique_pos_ptr, inverse_ptr,
+    N, num_unique,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    Compute inverse mapping: for each original index, find its unique index.
+
+    For sorted order, elements between unique_pos[i] and unique_pos[i+1]-1
+    all map to unique index i.
+    """
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+
+    # Get original index for this sorted position
+    orig_idx = tl.load(sorted_idx_ptr + offsets, mask=mask, other=0)
+
+    # Binary search to find which unique segment this position belongs to
+    # For simplicity, we use linear search (OK for small num_unique)
+    # Each sorted position j gets unique_idx = max{i : unique_pos[i] <= j}
+    unique_idx = tl.zeros([BLOCK_SIZE], dtype=tl.int64)
+
+    for i in range(num_unique):
+        pos_i = tl.load(unique_pos_ptr + i)
+        # If offsets >= pos_i, then unique_idx >= i
+        update_mask = offsets >= pos_i
+        unique_idx = tl.where(update_mask, i, unique_idx)
+
+    tl.store(inverse_ptr + orig_idx, unique_idx, mask=mask)
+
+
+def _compute_inverse_simple(sorted_indices, unique_positions, N):
+    """Compute inverse mapping from original indices to unique indices."""
+    inverse = CUDAStorage((N,), dtype="int64")
+    num_unique = unique_positions.shape[0]
+
+    BLOCK_SIZE = 1024
+    grid = ((N + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+
+    compute_inverse_kernel[grid](
+        sorted_indices, unique_positions, inverse,
+        N, num_unique,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+
+    return inverse
+
+
+@triton.jit
+def compute_counts_kernel(
+    unique_pos_ptr, counts_ptr, N, num_unique,
+    BLOCK_SIZE: tl.constexpr
+):
+    """
+    Compute count of each unique element.
+
+    count[i] = unique_pos[i+1] - unique_pos[i], where unique_pos[num_unique] = N
+    """
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_unique
+
+    # Load current position
+    pos_curr = tl.load(unique_pos_ptr + offsets, mask=mask, other=0)
+
+    # Load next position (or N if at the end)
+    next_offsets = offsets + 1
+    is_last = next_offsets >= num_unique
+    pos_next = tl.load(unique_pos_ptr + next_offsets, mask=mask & ~is_last, other=0)
+    pos_next = tl.where(is_last, N, pos_next)
+
+    # Count = next_pos - curr_pos
+    counts = pos_next - pos_curr
+
+    tl.store(counts_ptr + offsets, counts, mask=mask)
+
+
+def _compute_counts_simple(unique_positions, N, num_unique):
+    """Compute count of each unique element using Triton kernel."""
+    counts = CUDAStorage((num_unique,), dtype="int64")
+
+    BLOCK_SIZE = 1024
+    grid = ((num_unique + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+
+    compute_counts_kernel[grid](
+        unique_positions, counts, N, num_unique,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+
+    return counts

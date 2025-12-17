@@ -418,6 +418,34 @@ def maximum_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.
 
 
 @triton.jit
+def minimum_kernel(x_ptr, y_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
+    """
+    Element-wise minimum kernel.
+    """
+    pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = tl.minimum(x, y)
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+@triton.jit
+def minimum_scalar_kernel(x_ptr, scalar, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    """
+    Minimum scalar kernel.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    output = tl.minimum(x, scalar)
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+@triton.jit
 def arange_kernel(output_ptr, start, step, n_elements, BLOCK_SIZE: tl.constexpr):
     """
     Arange kernel - GPU implementation of range generation.
@@ -1652,6 +1680,48 @@ def maximum(x, y):
             grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
             maximum_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     
+    return output
+
+
+@register_cuda("minimum")
+def minimum(x, y):
+    """
+    Element-wise minimum with broadcasting support.
+    """
+    if isinstance(y, CUDAStorage):
+        # Compute broadcasted shape
+        broadcast_shape = broadcast_shapes(x.shape, y.shape)
+
+        # Broadcast both tensors to the same shape
+        if x.shape != broadcast_shape:
+            x = x.broadcast_to(broadcast_shape)
+        if y.shape != broadcast_shape:
+            y = y.broadcast_to(broadcast_shape)
+
+        output = CUDAStorage(broadcast_shape, dtype=x.dtype)
+
+        if not x.is_contiguous():
+            x = x.contiguous()
+        if not y.is_contiguous():
+            y = y.contiguous()
+
+        n_elements = output.size
+
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        minimum_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+
+        return output
+    else:
+        # Scalar minimum
+        output = CUDAStorage(x.shape, dtype=x.dtype)
+        n_elements = output.size
+
+        if not x.is_contiguous():
+            x = x.contiguous()
+
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+        minimum_scalar_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+
     return output
 
 

@@ -188,6 +188,44 @@ def nonzero(input: Tensor, as_tuple: bool = False):
     return Dispatcher.dispatch('nonzero', input, as_tuple)
 
 
+def unique(
+    input: Tensor,
+    sorted: bool = True,
+    return_inverse: bool = False,
+    return_counts: bool = False,
+    dim: Optional[int] = None,
+):
+    """
+    Return the unique elements of the input tensor.
+
+    Args:
+        input: Input tensor.
+        sorted: Whether to sort the unique elements in ascending order.
+        return_inverse: Whether to return the indices mapping each element
+            to its position in the unique output.
+        return_counts: Whether to return the count of each unique element.
+        dim: Dimension along which to find unique values. If None, operates
+            on the flattened tensor.
+
+    Returns:
+        output: Tensor of unique values.
+        inverse_indices (optional): If return_inverse=True, indices such that
+            output[inverse_indices] == input.
+        counts (optional): If return_counts=True, count of each unique value.
+
+    Example:
+        >>> x = genesis.tensor([1, 2, 1, 3, 2, 1])
+        >>> genesis.unique(x)
+        tensor([1, 2, 3])
+        >>> genesis.unique(x, return_counts=True)
+        (tensor([1, 2, 3]), tensor([3, 2, 1]))
+    """
+    # Use dispatch_tuple when returning multiple values
+    if return_inverse or return_counts:
+        return Dispatcher.dispatch_tuple('unique', input, sorted, return_inverse, return_counts, dim)
+    return Dispatcher.dispatch('unique', input, sorted, return_inverse, return_counts, dim)
+
+
 def allclose(input: Tensor, other: Tensor, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False):
     """
     Test if all elements of input and other are close.

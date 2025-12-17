@@ -1,7 +1,12 @@
 """
-Pytest configuration and fixtures
-Optimize CUDA initialization performance and add hang detection
+Pytest configuration and fixtures.
+
+Optimize CUDA initialization performance and add hang detection.
 """
+import os
+
+# Enable fast test mode BEFORE importing genesis to reduce autotune overhead
+os.environ["GENESIS_FAST_TEST"] = "1"
 
 import pytest
 import genesis
@@ -10,8 +15,6 @@ import threading
 import traceback
 import signal
 import sys
-import os
-# Test logger functionality removed - not needed
 
 @pytest.fixture(scope="session", autouse=True)
 def cuda_warmup(pytestconfig):

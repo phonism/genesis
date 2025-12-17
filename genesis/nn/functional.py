@@ -2386,17 +2386,17 @@ def softmax(input, dim=-1):
 def maximum(input, other):
     """
     Element-wise maximum of tensors.
-    
+
     Args:
         input: First tensor
         other: Second tensor or scalar
-        
+
     Returns:
         Element-wise maximum
     """
     if isinstance(other, (int, float)):
         # Create a tensor filled with the scalar value
-        other = genesis.tensor([other]).broadcast_to(input.shape)
+        other = genesis.full(input.shape, other, device=input.device, dtype=input.dtype)
     return Maximum.apply(input, other)
 
 
@@ -2407,21 +2407,68 @@ class Maximum(Function):
         result_data = OperationDispatcher.dispatch("maximum", a, b)
         result_data.requires_grad = a.requires_grad or b.requires_grad
         return result_data
-    
+
     @staticmethod
     def backward(ctx, out_grad):
         a, b = ctx.saved_tensors
-        # Gradient flows to the larger input
-        a_mask = (a.data >= b.data).astype(out_grad.dtype)
-        b_mask = (b.data >= a.data).astype(out_grad.dtype)
-        
-        grad_a = out_grad.data * a_mask
-        grad_b = out_grad.data * b_mask
-        
-        return (
-            Tensor(grad_a, requires_grad=False, dtype=out_grad.dtype),
-            Tensor(grad_b, requires_grad=False, dtype=out_grad.dtype)
-        )
+        # Handle ties correctly: split gradient 50-50 when equal
+        equal_mask = (a == b).float() * 0.5
+        a_greater = (a > b).float()
+        b_greater = (b > a).float()
+
+        a_mask = a_greater + equal_mask
+        b_mask = b_greater + equal_mask
+
+        grad_a = out_grad * a_mask
+        grad_b = out_grad * b_mask
+
+        return (grad_a, grad_b)
+
+
+def minimum(input, other):
+    """
+    Element-wise minimum of tensors.
+
+    Args:
+        input: First tensor
+        other: Second tensor or scalar
+
+    Returns:
+        Element-wise minimum
+    """
+    if isinstance(other, (int, float)):
+        # Create a tensor filled with the scalar value
+        other = genesis.full(input.shape, other, device=input.device, dtype=input.dtype)
+    return Minimum.apply(input, other)
+
+
+class Minimum(Function):
+    """Autograd function for element-wise minimum."""
+
+    @staticmethod
+    def forward(ctx, a, b):
+        """Compute element-wise minimum."""
+        ctx.save_for_backward(a, b)
+        result_data = OperationDispatcher.dispatch("minimum", a, b)
+        result_data.requires_grad = a.requires_grad or b.requires_grad
+        return result_data
+
+    @staticmethod
+    def backward(ctx, out_grad):
+        """Gradient flows to the smaller input."""
+        a, b = ctx.saved_tensors
+        # Handle ties correctly: split gradient 50-50 when equal
+        equal_mask = (a == b).float() * 0.5
+        a_less = (a < b).float()
+        b_less = (b < a).float()
+
+        a_mask = a_less + equal_mask
+        b_mask = b_less + equal_mask
+
+        grad_a = out_grad * a_mask
+        grad_b = out_grad * b_mask
+
+        return (grad_a, grad_b)
 
 
 def cross_entropy(input, target, weight=None, ignore_index=-100, reduction='mean'):

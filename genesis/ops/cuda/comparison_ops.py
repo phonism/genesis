@@ -51,15 +51,15 @@ def compare_scalar_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """
-    Element-wise comparison with scalar kernel.
+    Element-wise comparison with Python scalar kernel.
     """
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
-    
+
     x = tl.load(x_ptr + offsets, mask=mask)
-    
+
     if op_type == 0:  # eq
         result = x == scalar_val
     elif op_type == 1:  # lt
@@ -72,7 +72,40 @@ def compare_scalar_kernel(
         result = x >= scalar_val
     else:  # ne
         result = x != scalar_val
-    
+
+    tl.store(output_ptr + offsets, result, mask=mask)
+
+
+@triton.jit
+def compare_broadcast_kernel(
+    x_ptr, y_ptr, output_ptr, n_elements,
+    op_type: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Element-wise comparison with 0-D tensor (broadcast scalar from GPU memory).
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr)  # Load single scalar element from GPU
+
+    if op_type == 0:  # eq
+        result = x == y
+    elif op_type == 1:  # lt
+        result = x < y
+    elif op_type == 2:  # le
+        result = x <= y
+    elif op_type == 3:  # gt
+        result = x > y
+    elif op_type == 4:  # ge
+        result = x >= y
+    else:  # ne
+        result = x != y
+
     tl.store(output_ptr + offsets, result, mask=mask)
 
 
@@ -81,199 +114,76 @@ def compare_scalar_kernel(
 # =============================================================================
 
 
-@register_cuda("eq")
-def eq(x, y):
+def _compare_op(x, y, op_type: int):
     """
-    Element-wise equality comparison.
+    Generic comparison operation supporting tensor, 0-D tensor, and scalar.
+
+    Args:
+        x: Input CUDAStorage tensor.
+        y: CUDAStorage tensor, 0-D tensor, or Python scalar.
+        op_type: Comparison type (0=eq, 1=lt, 2=le, 3=gt, 4=ge, 5=ne).
+
+    Returns:
+        CUDAStorage with boolean result.
     """
+    if not x.is_contiguous():
+        x = x.contiguous()
+
+    output = CUDAStorage(x.shape, dtype="bool")
+    n_elements = output.size
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+
     if isinstance(y, CUDAStorage):
-        # Tensor comparison
-        if x.shape != y.shape:
-            raise ValueError(f"Shape mismatch: {x.shape} vs {y.shape}")
-        
-        output = CUDAStorage(x.shape, dtype="bool")
-        
-        if not x.is_contiguous():
-            x = x.contiguous()
         if not y.is_contiguous():
             y = y.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_kernel[grid](x, y, output, n_elements, 0, BLOCK_SIZE=1024)  # 0 = eq
+
+        # Check if y is a 0-D tensor or size-1 tensor (broadcast as scalar)
+        if y.shape == () or y.size == 1:
+            # Use broadcast kernel - reads scalar from GPU memory
+            compare_broadcast_kernel[grid](x, y, output, n_elements, op_type, BLOCK_SIZE=1024)
+        elif x.shape != y.shape:
+            raise ValueError(f"Shape mismatch: {x.shape} vs {y.shape}")
+        else:
+            # Same-shape tensor comparison
+            compare_kernel[grid](x, y, output, n_elements, op_type, BLOCK_SIZE=1024)
     else:
-        # Scalar comparison
-        output = CUDAStorage(x.shape, dtype="bool")
-        if not x.is_contiguous():
-            x = x.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_scalar_kernel[grid](x, output, n_elements, float(y), 0, BLOCK_SIZE=1024)  # 0 = eq
-    
+        # Python scalar comparison
+        compare_scalar_kernel[grid](x, output, n_elements, float(y), op_type, BLOCK_SIZE=1024)
+
     return output
+
+
+@register_cuda("eq")
+def eq(x, y):
+    """Element-wise equality comparison."""
+    return _compare_op(x, y, 0)
 
 
 @register_cuda("ge")
 def ge(x, y):
-    """
-    Element-wise greater-than-or-equal comparison.
-    """
-    if isinstance(y, CUDAStorage):
-        # Tensor comparison
-        if x.shape != y.shape:
-            raise ValueError(f"Shape mismatch: {x.shape} vs {y.shape}")
-        
-        output = CUDAStorage(x.shape, dtype="bool")
-        
-        if not x.is_contiguous():
-            x = x.contiguous()
-        if not y.is_contiguous():
-            y = y.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_kernel[grid](x, y, output, n_elements, 4, BLOCK_SIZE=1024)  # 4 = ge
-    else:
-        # Scalar comparison
-        output = CUDAStorage(x.shape, dtype="bool")
-        if not x.is_contiguous():
-            x = x.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_scalar_kernel[grid](x, output, n_elements, float(y), 4, BLOCK_SIZE=1024)  # 4 = ge
-    
-    return output
+    """Element-wise greater-than-or-equal comparison."""
+    return _compare_op(x, y, 4)
 
 
 @register_cuda("gt")
 def gt(x, y):
-    """
-    Element-wise greater-than comparison.
-    """
-    if isinstance(y, CUDAStorage):
-        # Tensor comparison
-        if x.shape != y.shape:
-            raise ValueError(f"Shape mismatch: {x.shape} vs {y.shape}")
-        
-        output = CUDAStorage(x.shape, dtype="bool")
-        
-        if not x.is_contiguous():
-            x = x.contiguous()
-        if not y.is_contiguous():
-            y = y.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_kernel[grid](x, y, output, n_elements, 3, BLOCK_SIZE=1024)  # 3 = gt
-    else:
-        # Scalar comparison
-        output = CUDAStorage(x.shape, dtype="bool")
-        if not x.is_contiguous():
-            x = x.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_scalar_kernel[grid](x, output, n_elements, float(y), 3, BLOCK_SIZE=1024)  # 3 = gt
-    
-    return output
+    """Element-wise greater-than comparison."""
+    return _compare_op(x, y, 3)
 
 
 @register_cuda("le")
 def le(x, y):
-    """
-    Element-wise less-than-or-equal comparison.
-    """
-    if isinstance(y, CUDAStorage):
-        # Tensor comparison
-        if x.shape != y.shape:
-            raise ValueError(f"Shape mismatch: {x.shape} vs {y.shape}")
-        
-        output = CUDAStorage(x.shape, dtype="bool")
-        
-        if not x.is_contiguous():
-            x = x.contiguous()
-        if not y.is_contiguous():
-            y = y.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_kernel[grid](x, y, output, n_elements, 2, BLOCK_SIZE=1024)  # 2 = le
-    else:
-        # Scalar comparison
-        output = CUDAStorage(x.shape, dtype="bool")
-        if not x.is_contiguous():
-            x = x.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_scalar_kernel[grid](x, output, n_elements, float(y), 2, BLOCK_SIZE=1024)  # 2 = le
-    
-    return output
+    """Element-wise less-than-or-equal comparison."""
+    return _compare_op(x, y, 2)
 
 
 @register_cuda("lt")
 def lt(x, y):
-    """
-    Element-wise less-than comparison.
-    """
-    if isinstance(y, CUDAStorage):
-        # Tensor comparison
-        if x.shape != y.shape:
-            raise ValueError(f"Shape mismatch: {x.shape} vs {y.shape}")
-        
-        output = CUDAStorage(x.shape, dtype="bool")
-        
-        if not x.is_contiguous():
-            x = x.contiguous()
-        if not y.is_contiguous():
-            y = y.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_kernel[grid](x, y, output, n_elements, 1, BLOCK_SIZE=1024)  # 1 = lt
-    else:
-        # Scalar comparison
-        output = CUDAStorage(x.shape, dtype="bool")
-        if not x.is_contiguous():
-            x = x.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_scalar_kernel[grid](x, output, n_elements, float(y), 1, BLOCK_SIZE=1024)  # 1 = lt
-    
-    return output
+    """Element-wise less-than comparison."""
+    return _compare_op(x, y, 1)
 
 
 @register_cuda("ne")
 def ne(x, y):
-    """
-    Element-wise not-equal comparison.
-    """
-    if isinstance(y, CUDAStorage):
-        # Tensor comparison
-        if x.shape != y.shape:
-            raise ValueError(f"Shape mismatch: {x.shape} vs {y.shape}")
-        
-        output = CUDAStorage(x.shape, dtype="bool")
-        
-        if not x.is_contiguous():
-            x = x.contiguous()
-        if not y.is_contiguous():
-            y = y.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_kernel[grid](x, y, output, n_elements, 5, BLOCK_SIZE=1024)  # 5 = ne
-    else:
-        # Scalar comparison
-        output = CUDAStorage(x.shape, dtype="bool")
-        if not x.is_contiguous():
-            x = x.contiguous()
-        
-        n_elements = output.size
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
-        compare_scalar_kernel[grid](x, output, n_elements, float(y), 5, BLOCK_SIZE=1024)  # 5 = ne
-    
-    return output
+    """Element-wise not-equal comparison."""
+    return _compare_op(x, y, 5)

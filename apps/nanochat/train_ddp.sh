@@ -25,8 +25,8 @@ else
         --block-size 2048 \
         --learning-rate 3e-4 \
         --accumulation-steps 8 \
-        --eval-interval 500 \
+        --eval-interval 5000 \
         --amp \
         --dtype bf16 \
-        --save-interval 100
+        --save-interval 10000
 fi

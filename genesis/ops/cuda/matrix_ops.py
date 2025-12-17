@@ -1,6 +1,7 @@
 """
 Matrix operations for GPU backend with optimized kernels.
 """
+import os
 import torch
 import triton
 import triton.language as tl
@@ -9,14 +10,62 @@ from ..dispatcher import register_cuda
 
 
 # =============================================================================
-# OPTIMIZED TRITON KERNELS (flag_gems style)
+# AUTOTUNE CONFIGURATION
+# =============================================================================
+# Set GENESIS_FAST_TEST=1 to use minimal autotune configs for faster testing
+_FAST_TEST_MODE = os.environ.get("GENESIS_FAST_TEST", "0") == "1"
+
+if _FAST_TEST_MODE:
+    # Minimal config for fast testing - single balanced configuration
+    _MATMUL_CONFIGS = [
+        triton.Config(
+            {"TILE_M": 64, "TILE_N": 64, "TILE_K": 32, "GROUP_M": 8},
+            num_stages=4, num_warps=4
+        ),
+    ]
+else:
+    # Full autotune configs for production performance
+    _MATMUL_CONFIGS = [
+        triton.Config(
+            {"TILE_M": 128, "TILE_N": 256, "TILE_K": 64, "GROUP_M": 8},
+            num_stages=3, num_warps=8
+        ),
+        triton.Config(
+            {"TILE_M": 64, "TILE_N": 256, "TILE_K": 32, "GROUP_M": 8},
+            num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"TILE_M": 128, "TILE_N": 128, "TILE_K": 32, "GROUP_M": 8},
+            num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"TILE_M": 128, "TILE_N": 64, "TILE_K": 32, "GROUP_M": 8},
+            num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"TILE_M": 64, "TILE_N": 128, "TILE_K": 32, "GROUP_M": 8},
+            num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"TILE_M": 128, "TILE_N": 32, "TILE_K": 32, "GROUP_M": 8},
+            num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"TILE_M": 64, "TILE_N": 32, "TILE_K": 32, "GROUP_M": 8},
+            num_stages=5, num_warps=2
+        ),
+        triton.Config(
+            {"TILE_M": 32, "TILE_N": 64, "TILE_K": 32, "GROUP_M": 8},
+            num_stages=5, num_warps=2
+        ),
+    ]
+
+
+# =============================================================================
+# OPTIMIZED TRITON KERNELS WITH AUTOTUNE
 # =============================================================================
 
-@triton.heuristics({
-    'DIVISIBLE_M': lambda args: args['M'] % args['TILE_M'] == 0,
-    'DIVISIBLE_N': lambda args: args['N'] % args['TILE_N'] == 0,
-    'DIVISIBLE_K': lambda args: args['K'] % args['TILE_K'] == 0,
-})
+@triton.autotune(configs=_MATMUL_CONFIGS, key=["M", "N", "K"])
 @triton.jit
 def matmul_kernel(
     A,
@@ -35,113 +84,49 @@ def matmul_kernel(
     TILE_N: tl.constexpr,
     TILE_K: tl.constexpr,
     GROUP_M: tl.constexpr,
-    DIVISIBLE_M: tl.constexpr,
-    DIVISIBLE_N: tl.constexpr,
-    DIVISIBLE_K: tl.constexpr,
 ):
-    """Optimized matrix multiplication kernel with better tiling strategy."""
-    pidx = tl.program_id(0)
-    pidy = tl.program_id(1)
+    """
+    Optimized matrix multiplication kernel with autotune.
 
-    # Reorder CTAs for better L2 cache hit rate
-    if GROUP_M == 1:
-        pid_m, pid_n = pidx, pidy
-    else:
-        gridx = tl.num_programs(0)
-        gridy = tl.num_programs(1)
-        pid = pidx + pidy * gridx
+    Uses 1D grid with tile grouping for better L2 cache utilization.
+    """
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, TILE_M)
+    num_pid_n = tl.cdiv(N, TILE_N)
+    num_pid_in_group = GROUP_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
 
-        num_CTA_per_group = gridy * GROUP_M
-        group_id = pid // num_CTA_per_group
-        inner_group_id = pid % num_CTA_per_group
-        GROUP_SIZE = tl.where(
-            (group_id * GROUP_M + GROUP_M) > gridx, gridx % GROUP_M, GROUP_M
-        )
-        pid_m = group_id * GROUP_M + inner_group_id % GROUP_SIZE
-        pid_n = inner_group_id // GROUP_SIZE
-
-    # Compute offsets
-    offs_m = pid_m * TILE_M + tl.arange(0, TILE_M)
-    offs_n = pid_n * TILE_N + tl.arange(0, TILE_N)
+    # Use modulo for out-of-bounds safety (tiles at boundary)
+    offs_am = (pid_m * TILE_M + tl.arange(0, TILE_M)) % M
+    offs_bn = (pid_n * TILE_N + tl.arange(0, TILE_N)) % N
     offs_k = tl.arange(0, TILE_K)
 
-    # Create masks for boundary conditions
-    if not DIVISIBLE_M:
-        mask_m = offs_m < M
-    if not DIVISIBLE_N:
-        mask_n = offs_n < N
+    a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = B + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-    # Compute pointers
-    a_ptrs = A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
-    b_ptrs = B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
-    c_ptrs = C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
-
-    # Main computation loop
-    num_iters = tl.cdiv(K, TILE_K)
     accumulator = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
-
-    for _ in range(num_iters):
-        # Create masks for loading
-        if DIVISIBLE_K:
-            if DIVISIBLE_M:
-                mask_a = None
-            else:
-                mask_a = mask_m[:, None]
-            if DIVISIBLE_N:
-                mask_b = None
-            else:
-                mask_b = mask_n[None, :]
-        else:
-            mask_k = offs_k < K
-            if DIVISIBLE_M:
-                mask_a = mask_k[None, :]
-            else:
-                mask_a = mask_m[:, None] & mask_k[None, :]
-            if DIVISIBLE_N:
-                mask_b = mask_k[:, None]
-            else:
-                mask_b = mask_k[:, None] & mask_n[None, :]
-
-        # Load and compute
-        if mask_a is None:
-            a = tl.load(a_ptrs)
-        else:
-            a = tl.load(a_ptrs, mask=mask_a, other=0.0)
-
-        if mask_b is None:
-            b = tl.load(b_ptrs)
-        else:
-            b = tl.load(b_ptrs, mask=mask_b, other=0.0)
-
-        # Update offsets and pointers
-        offs_k += TILE_K
+    for k in range(0, tl.cdiv(K, TILE_K)):
+        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * TILE_K, other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * TILE_K, other=0.0)
+        accumulator = tl.dot(a, b, accumulator)
         a_ptrs += TILE_K * stride_ak
         b_ptrs += TILE_K * stride_bk
 
-        # Accumulate
-        accumulator += tl.dot(a, b, allow_tf32=False)
+    # Cast accumulator to output dtype
+    c = accumulator.to(C.dtype.element_ty)
 
-    # Store result
-    if DIVISIBLE_M and DIVISIBLE_N:
-        mask_c = None
-    elif DIVISIBLE_M and not DIVISIBLE_N:
-        mask_c = mask_n[None, :]
-    elif not DIVISIBLE_M and DIVISIBLE_N:
-        mask_c = mask_m[:, None]
-    else:
-        mask_c = mask_m[:, None] & mask_n[None, :]
-
-    if mask_c is None:
-        tl.store(c_ptrs, accumulator)
-    else:
-        tl.store(c_ptrs, accumulator, mask=mask_c)
+    offs_cm = pid_m * TILE_M + tl.arange(0, TILE_M)
+    offs_cn = pid_n * TILE_N + tl.arange(0, TILE_N)
+    c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(c_ptrs, c, mask=c_mask)
 
 
-@triton.heuristics({
-    'DIVISIBLE_M': lambda args: args['M'] % args['TILE_M'] == 0,
-    'DIVISIBLE_N': lambda args: args['N'] % args['TILE_N'] == 0,
-    'DIVISIBLE_K': lambda args: args['K'] % args['TILE_K'] == 0,
-})
+@triton.autotune(configs=_MATMUL_CONFIGS, key=["M", "N", "K"])
 @triton.jit
 def bmm_kernel(
     A,
@@ -163,141 +148,63 @@ def bmm_kernel(
     TILE_N: tl.constexpr,
     TILE_K: tl.constexpr,
     GROUP_M: tl.constexpr,
-    DIVISIBLE_M: tl.constexpr,
-    DIVISIBLE_N: tl.constexpr,
-    DIVISIBLE_K: tl.constexpr,
 ):
-    """Batch matrix multiplication kernel with strided tensor support."""
+    """
+    Batch matrix multiplication kernel with autotune.
+
+    Uses 1D grid per batch for better L2 cache utilization.
+    """
     # Get batch index
-    pid_b = tl.program_id(2)
+    pid_b = tl.program_id(1)
     A += pid_b * stride_ab
     B += pid_b * stride_bb
     O += pid_b * stride_ob
 
-    pidx = tl.program_id(0)
-    pidy = tl.program_id(1)
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, TILE_M)
+    num_pid_n = tl.cdiv(N, TILE_N)
+    num_pid_in_group = GROUP_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
 
-    # Reorder CTAs
-    if GROUP_M == 1:
-        pid_m, pid_n = pidx, pidy
-    else:
-        gridx = tl.num_programs(0)
-        gridy = tl.num_programs(1)
-        pid = pidx + pidy * gridx
-
-        num_CTA_per_group = gridy * GROUP_M
-        group_id = pid // num_CTA_per_group
-        inner_group_id = pid % num_CTA_per_group
-        GROUP_SIZE = tl.where(
-            (group_id * GROUP_M + GROUP_M) > gridx, gridx % GROUP_M, GROUP_M
-        )
-        pid_m = group_id * GROUP_M + inner_group_id % GROUP_SIZE
-        pid_n = inner_group_id // GROUP_SIZE
-
-    offs_m = pid_m * TILE_M + tl.arange(0, TILE_M)
-    offs_n = pid_n * TILE_N + tl.arange(0, TILE_N)
+    offs_am = (pid_m * TILE_M + tl.arange(0, TILE_M)) % M
+    offs_bn = (pid_n * TILE_N + tl.arange(0, TILE_N)) % N
     offs_k = tl.arange(0, TILE_K)
 
-    if not DIVISIBLE_M:
-        mask_m = offs_m < M
-    if not DIVISIBLE_N:
-        mask_n = offs_n < N
+    a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = B + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-    a_ptrs = A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
-    b_ptrs = B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
-    o_ptrs = O + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
-
-    num_iters = tl.cdiv(K, TILE_K)
-    o = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
-
-    for _ in range(num_iters):
-        if DIVISIBLE_K:
-            if DIVISIBLE_M:
-                mask_a = None
-            else:
-                mask_a = mask_m[:, None]
-            if DIVISIBLE_N:
-                mask_b = None
-            else:
-                mask_b = mask_n[None, :]
-        else:
-            mask_k = offs_k < K
-            if DIVISIBLE_M:
-                mask_a = mask_k[None, :]
-            else:
-                mask_a = mask_m[:, None] & mask_k[None, :]
-            if DIVISIBLE_N:
-                mask_b = mask_k[:, None]
-            else:
-                mask_b = mask_k[:, None] & mask_n[None, :]
-
-        if mask_a is None:
-            a = tl.load(a_ptrs)
-        else:
-            a = tl.load(a_ptrs, mask=mask_a, other=0.0)
-
-        if mask_b is None:
-            b = tl.load(b_ptrs)
-        else:
-            b = tl.load(b_ptrs, mask=mask_b, other=0.0)
-
-        offs_k += TILE_K
+    accumulator = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
+    for k in range(0, tl.cdiv(K, TILE_K)):
+        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * TILE_K, other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * TILE_K, other=0.0)
+        accumulator = tl.dot(a, b, accumulator)
         a_ptrs += TILE_K * stride_ak
         b_ptrs += TILE_K * stride_bk
 
-        o += tl.dot(a, b, allow_tf32=False)
+    # Cast accumulator to output dtype
+    o = accumulator.to(O.dtype.element_ty)
 
-    if DIVISIBLE_M and DIVISIBLE_N:
-        mask_c = None
-    elif DIVISIBLE_M and not DIVISIBLE_N:
-        mask_c = mask_n[None, :]
-    elif not DIVISIBLE_M and DIVISIBLE_N:
-        mask_c = mask_m[:, None]
-    else:
-        mask_c = mask_m[:, None] & mask_n[None, :]
-
-    if mask_c is None:
-        tl.store(o_ptrs, o)
-    else:
-        tl.store(o_ptrs, o, mask=mask_c)
+    offs_om = pid_m * TILE_M + tl.arange(0, TILE_M)
+    offs_on = pid_n * TILE_N + tl.arange(0, TILE_N)
+    o_ptrs = O + stride_om * offs_om[:, None] + stride_on * offs_on[None, :]
+    o_mask = (offs_om[:, None] < M) & (offs_on[None, :] < N)
+    tl.store(o_ptrs, o, mask=o_mask)
 
 
 # =============================================================================
 # GPU OPERATIONS
 # =============================================================================
 
-def get_matmul_config(M, N, K):
-    """
-    Select optimal configuration based on matrix dimensions.
-    Based on FlagGems and empirical testing.
-    """
-    # For very large output matrices (like LM Head)
-    if M * N > 100000000:  # >100M elements
-        if N > 100000:  # Vocabulary size (LM Head case)
-            # Special config for LM Head (respecting shared memory limits)
-            # Shared memory = (TILE_M + TILE_N) * TILE_K * 4 bytes * num_stages
-            # Must be < 166KB
-            return {'TILE_M': 128, 'TILE_N': 128, 'TILE_K': 32, 'GROUP_M': 2}, 4, 3
-        else:
-            return {'TILE_M': 128, 'TILE_N': 128, 'TILE_K': 32, 'GROUP_M': 2}, 4, 3
-
-    # For large matrices
-    elif M * N > 10000000:  # >10M elements
-        return {'TILE_M': 128, 'TILE_N': 64, 'TILE_K': 32, 'GROUP_M': 2}, 4, 2
-
-    # For medium matrices
-    elif M * N > 1000000:  # >1M elements
-        return {'TILE_M': 64, 'TILE_N': 64, 'TILE_K': 32, 'GROUP_M': 2}, 4, 2
-
-    # For small matrices
-    else:
-        return {'TILE_M': 32, 'TILE_N': 32, 'TILE_K': 32, 'GROUP_M': 1}, 4, 2
-
 @register_cuda("matmul")
 def matmul(a, b, activation=""):
     """
     Optimized matrix multiplication operation with strided tensor support.
 
+    Uses autotuned Triton kernels with 1D grid for better L2 cache utilization.
     Supports non-contiguous (strided) tensors to avoid unnecessary copies.
     """
     assert a.shape[-1] == b.shape[-2], "Incompatible dimensions"
@@ -307,17 +214,12 @@ def matmul(a, b, activation=""):
         K2, N = b.shape
         assert K == K2, f"Incompatible dimensions: {K} != {K2}"
 
-        # Get optimal configuration
-        config, num_warps, num_stages = get_matmul_config(M, N, K)
-
         # Allocate output
         c = CUDAStorage((M, N), dtype=a.dtype)
 
-        # Launch kernel with selected configuration
-        grid = (
-            triton.cdiv(M, config['TILE_M']),
-            triton.cdiv(N, config['TILE_N']),
-        )
+        # Use 1D grid with autotune - grid size computed by autotune lambda
+        def grid(META):
+            return (triton.cdiv(M, META["TILE_M"]) * triton.cdiv(N, META["TILE_N"]),)
 
         matmul_kernel[grid](
             a, b, c,
@@ -325,12 +227,6 @@ def matmul(a, b, activation=""):
             a.stride(0), a.stride(1),
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
-            TILE_M=config['TILE_M'],
-            TILE_N=config['TILE_N'],
-            TILE_K=config['TILE_K'],
-            GROUP_M=config['GROUP_M'],
-            num_warps=num_warps,
-            num_stages=num_stages,
         )
 
         return c
@@ -391,18 +287,15 @@ def matmul(a, b, activation=""):
         K = a_shape[-1]
         N = b_shape[-1]
 
-        # Get optimal configuration for batch matmul
-        config, num_warps, num_stages = get_matmul_config(M, N, K)
-
         # Allocate output
         c = CUDAStorage((batch_size, M, N), dtype=a.dtype)
 
-        # Launch batch kernel with selected configuration
-        grid = (
-            triton.cdiv(M, config['TILE_M']),
-            triton.cdiv(N, config['TILE_N']),
-            batch_size,
-        )
+        # Use 2D grid: (tiles, batch) with autotune
+        def grid(META):
+            return (
+                triton.cdiv(M, META["TILE_M"]) * triton.cdiv(N, META["TILE_N"]),
+                batch_size,
+            )
 
         # Now supports strided tensors! No need for contiguous copies
         bmm_kernel[grid](
@@ -411,12 +304,6 @@ def matmul(a, b, activation=""):
             aa.stride(0), aa.stride(1), aa.stride(2),
             bb.stride(0), bb.stride(1), bb.stride(2),
             c.stride(0), c.stride(1), c.stride(2),
-            TILE_M=config['TILE_M'],
-            TILE_N=config['TILE_N'],
-            TILE_K=config['TILE_K'],
-            GROUP_M=config['GROUP_M'],
-            num_warps=num_warps,
-            num_stages=num_stages,
         )
 
         # Reshape output
